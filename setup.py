@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+from glob import glob
+import os
 
 package_name = 'rosetta'
 
@@ -10,6 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'contracts'), glob('contracts/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -20,6 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'policy_bridge = rosetta.policy_bridge_node:main',
+            'recorder_server = rosetta.episode_recorder:main',
         ],
     },
 )
