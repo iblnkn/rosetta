@@ -1,0 +1,22 @@
+name: example
+version: 1
+
+# Bag recording defaults
+storage: mcap
+bag_base_dir: /tmp/episodes
+seconds: 10
+
+# Topics to record (absolute names)
+record_topics:
+  - /tf
+  - /joint_states
+
+# (Optional) Bridge node config
+policy:
+  obs_topics:
+    - name: /joint_states
+      type: sensor_msgs/msg/JointState
+  action_topic:
+    name: /cmd_vel
+    type: geometry_msgs/msg/Twist
+  rate_hz: 20.0
