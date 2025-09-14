@@ -1,0 +1,10 @@
+# Goal
+string prompt
+---
+# Result
+bool success
+string message
+---
+# Feedback
+int32 seconds_remaining
+string feedback_message
