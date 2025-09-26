@@ -13,6 +13,9 @@ def generate_launch_description():
             name='recorder_server',
             output='screen',
             emulate_tty=True,
-            parameters=[{'contract_path': contract}],
+            parameters=[
+                {'contract_path': contract},
+                {'bag_base_dir': '/tmp/episodes'},
+                {'episode_seconds': 10},],
         ),
     ])

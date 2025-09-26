@@ -1,22 +1,54 @@
 name: example
 version: 1
 
-# Bag recording defaults
-storage: mcap
-bag_base_dir: /tmp/episodes
-seconds: 10
+rate_hz: 20.0
+max_duration_s: 30.0
 
-# Topics to record (absolute names)
-record_topics:
-  - /tf
-  - /joint_states
+observations:
+  - key: observation.images.cam_high
+    topic: /cam_high/image_raw
+    type: sensor_msgs/msg/Image
+    image:
+      encoding: bgr8
+      to_rgb: true
+      resize: [224, 224]
+    resample: drop
+    align: {strategy: asof, tol_ms: 50, stamp: header}   # write at tick only if image ≤50ms old
+    qos: {reliability: best_effort, history: keep_last, depth: 5}
 
-# (Optional) Bridge node config
-policy:
-  obs_topics:
-    - name: /joint_states
-      type: sensor_msgs/msg/JointState
-  action_topic:
-    name: /cmd_vel
-    type: geometry_msgs/msg/Twist
-  rate_hz: 20.0
+  - key: observation.state.joints
+    topic: /joint_states
+    type: sensor_msgs/msg/JointState
+    selector:
+      names: [joint1, joint2, joint3, joint4, joint5, joint6, joint7]
+      field: position
+    resample: hold
+    align: {strategy: hold, stamp: header}               # always write last seen at tick
+    qos: {reliability: reliable, history: keep_last, depth: 50}
+
+tasks:
+  - key: policy
+    topic: /task/policy
+    type: std_msgs/msg/String
+    align: {strategy: hold}
+    qos: {reliability: reliable, history: keep_last, depth: 10}
+
+  - key: instructions
+    topic: /task/instructions
+    type: std_msgs/msg/String
+    align: {strategy: hold}
+    qos: {reliability: reliable, history: keep_last, depth: 10}
+
+actions:
+  - key: action
+    publish:
+      topic: /arm/command
+      type: std_msgs/msg/Float64MultiArray
+      layout: flat
+      qos: {reliability: reliable, history: keep_last, depth: 10}
+    from_tensor:
+      clamp: [1, 1]
+
+recording:
+  storage: mcap
+  sample_to_rate: true    # enable small, uniform, inference-like logging
