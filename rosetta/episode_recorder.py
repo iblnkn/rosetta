@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-import asyncio
+import time
 import threading
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
@@ -10,7 +10,7 @@ import yaml  # only for writing the prompt into metadata.yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.executors import ExternalShutdownException
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.serialization import serialize_message
 from rosidl_runtime_py.utilities import get_message
 
@@ -22,22 +22,17 @@ from .contract_utils import load_contract, qos_profile_from_dict
 
 class EpisodeRecorderServer(Node):
     """
-    Minimal ROS 2 episode recorder (Option A: tasks are topics)
+    ROS 2 episode recorder
 
-    - Reads contract (observations / tasks / actions / recording).
+    - Reads contract (observations / actions / tasks / recording).
     - Subscribes to observations + tasks + action publish topics.
-    - Two write modes:
-        * pass-through (default): write on every receive, stamp = msg.header.stamp if present else node time
-        * sample-to-rate (recording.sample_to_rate = true):
-            - Cache latest per topic.
-            - At rate_hz ticks, write with tick timestamp.
-            - Per-topic optional align:
-                - strategy: 'hold' (default) | 'asof' | 'drop'
-                - tol_ms: int (for 'asof')
-                - stamp: 'header' (default if present) | 'receive'
-              * 'hold': always write cached sample if any
-              * 'asof': write only if cached sample staleness <= tol_ms
-              * 'drop': write only if a new sample arrived since last tick
+      sample-to-rate:
+        - Cache latest per topic.
+        - At rate_hz ticks, write with tick timestamp.
+        - Per-topic optional align:
+            strategy: 'hold' | 'asof' | 'drop'
+            tol_ms: int (for 'asof')
+            stamp: 'header' | 'receive'
     - Stores action goal prompt into metadata.yaml under custom_data.lerobot.operator_prompt
     """
 
@@ -47,6 +42,9 @@ class EpisodeRecorderServer(Node):
         # Parameters
         self.declare_parameter("contract_path", "")
         self.declare_parameter("bag_base_dir", "/tmp/episodes")
+
+        # Recording state
+        self._is_recording = False
 
         cp = self.get_parameter("contract_path").get_parameter_value().string_value
         if not cp:
@@ -61,8 +59,7 @@ class EpisodeRecorderServer(Node):
         self._subs = []
         self._messages_written = 0
 
-        # Sampling-to-rate state (used only if enabled)
-        self._sample_to_rate: bool = bool(self._contract.recording.get("sample_to_rate", False))
+        # Sampling-to-rate state
         self._cache: Dict[str, Dict] = {}          # topic -> {data, header_ns, recv_ns, fresh, align}
         self._tick_timer = None
         self._last_tick_ns = 0
@@ -78,7 +75,7 @@ class EpisodeRecorderServer(Node):
         )
         self.get_logger().info(
             f"Recorder ready with contract '{self._contract.name}', "
-            f"sample_to_rate={self._sample_to_rate}, rate_hz={self._contract.rate_hz:.3f}."
+            f"rate_hz={self._contract.rate_hz:.3f}."
         )
 
     def cancel_callback(self, _goal_handle):
@@ -89,7 +86,10 @@ class EpisodeRecorderServer(Node):
 
     def _open_writer(self, bag_uri: str, storage_id: str):
         storage_options = rosbag2_py.StorageOptions(uri=bag_uri, storage_id=storage_id)
-        converter_options = rosbag2_py.ConverterOptions("", "")
+        converter_options = rosbag2_py.ConverterOptions(
+            input_serialization_format="cdr",
+            output_serialization_format="cdr"
+        )
         w = rosbag2_py.SequentialWriter()
         w.open(storage_options, converter_options)
         return w
@@ -103,14 +103,13 @@ class EpisodeRecorderServer(Node):
         qos = qos_profile_from_dict(qos_dict) or 10  # default queue depth
 
         # Cache align settings for tick-based writer
-        if self._sample_to_rate:
-            self._cache[topic] = {
-                "data": None,
-                "header_ns": None,
-                "recv_ns": None,
-                "fresh": False,
-                "align": align or {},  # {strategy, tol_ms, stamp}
-            }
+        self._cache[topic] = {
+            "data": None,
+            "header_ns": None,
+            "recv_ns": None,
+            "fresh": False,
+            "align": align or {},  # {strategy, tol_ms, stamp}
+        }
 
         def cb(msg, _topic=topic):
             # Time sources
@@ -125,23 +124,14 @@ class EpisodeRecorderServer(Node):
 
             data = serialize_message(msg)
 
-            if self._sample_to_rate:
-                # Only cache; timer will decide if/when to write
-                with self._writer_lock:
-                    ent = self._cache.get(_topic)
-                    if ent is not None:
-                        ent["data"] = data
-                        ent["header_ns"] = header_ns
-                        ent["recv_ns"] = recv_ns
-                        ent["fresh"] = True
-                return
-
-            # Pass-through mode: write immediately (use header if present)
-            ts_ns = header_ns if header_ns is not None else recv_ns
+            # Only cache; timer will decide if/when to write
             with self._writer_lock:
-                if self._writer is not None:
-                    self._writer.write(_topic, data, ts_ns)
-                    self._messages_written += 1
+                ent = self._cache.get(_topic)
+                if ent is not None:
+                    ent["data"] = data
+                    ent["header_ns"] = header_ns
+                    ent["recv_ns"] = recv_ns
+                    ent["fresh"] = True
 
         return self.create_subscription(msg_cls, topic, cb, qos)
 
@@ -189,7 +179,14 @@ class EpisodeRecorderServer(Node):
 
     # -------- main action loop --------
 
-    async def execute_callback(self, goal_handle):
+    def execute_callback(self, goal_handle):
+        # Check if already recording
+        if self._is_recording:
+            self.get_logger().warning("Already recording, rejecting new goal")
+            goal_handle.abort()
+            return RecordEpisode.Result(success=False, message="Already recording")
+
+        self._is_recording = True
         self._messages_written = 0
         prompt = getattr(goal_handle.request, "prompt", "")
 
@@ -220,6 +217,7 @@ class EpisodeRecorderServer(Node):
         try:
             self._writer = self._open_writer(bag_dir, storage)
         except Exception as exc:
+            self._is_recording = False
             goal_handle.abort()
             return RecordEpisode.Result(success=False, message=f"Failed to open writer: {exc}")
 
@@ -230,18 +228,14 @@ class EpisodeRecorderServer(Node):
                     self._register_topic(t, typ)
             self._subs = [self._make_sub(t, typ, qos, align) for (t, typ, qos, align) in topics]
         except Exception as exc:
+            self._is_recording = False
             goal_handle.abort()
             self._teardown()
             return RecordEpisode.Result(success=False, message=f"Failed to set up topics/subs: {exc}")
 
-        # Start rate sampler if enabled
-        if self._sample_to_rate:
-            period = 1.0 / float(self._contract.rate_hz or 20.0)
-            self._tick_timer = self.create_timer(period, self._on_tick)
-
-        self.get_logger().info(
-            f"Recording -> {bag_dir} (storage={storage}, sample_to_rate={self._sample_to_rate})"
-        )
+        # Start rate sampler
+        period = 1.0 / float(self._contract.rate_hz or 20.0)
+        self._tick_timer = self.create_timer(period, self._on_tick)
 
         end_ns = self.get_clock().now().nanoseconds + int(seconds * 1_000_000_000)
         fb = RecordEpisode.Feedback()
@@ -249,6 +243,7 @@ class EpisodeRecorderServer(Node):
         try:
             while rclpy.ok():
                 if goal_handle.is_cancel_requested:
+                    self._is_recording = False
                     goal_handle.canceled()
                     self._teardown()
                     return RecordEpisode.Result(success=False, message="Cancelled")
@@ -262,12 +257,15 @@ class EpisodeRecorderServer(Node):
                 if now_ns >= end_ns:
                     break
 
-                await asyncio.sleep(0.5)
+                time.sleep(0.5)
         finally:
             self._teardown()
 
         # Persist the operator prompt alongside rosbag metadata (tasks are topics)
         self._write_episode_prompt(bag_dir, prompt)
+
+        # Reset recording state
+        self._is_recording = False
 
         goal_handle.succeed()
         msg = f"Wrote {self._messages_written} messages to {bag_dir}"
@@ -298,35 +296,42 @@ class EpisodeRecorderServer(Node):
 
         # Close writer
         with self._writer_lock:
-            self._writer = None  # writer closes via destructor
+            self._writer = None
+
+        # Reset recording state
+        self._is_recording = False
 
     def _write_episode_prompt(self, bag_dir: str, prompt: str):
-        """
-        Append the operator prompt to metadata.yaml under:
-          custom_data:
-            lerobot.operator_prompt: "<prompt>"
-        Ignore errors silently to keep the recording valid.
-        """
-        if not prompt:
-            return
-        meta_path = os.path.join(bag_dir, "metadata.yaml")
-        try:
-            with open(meta_path, "r") as f:
-                meta = yaml.safe_load(f) or {}
-            custom = (meta.get("custom_data") or {})
-            custom["lerobot.operator_prompt"] = str(prompt)
-            meta["custom_data"] = custom
-            with open(meta_path, "w") as f:
-                yaml.safe_dump(meta, f, sort_keys=False)
-        except Exception as exc:
-            self.get_logger().warn(f"Could not write operator_prompt into metadata.yaml: {exc}")
-
+                """
+                Store the operator prompt in a schema-compliant place:
+                rosbag2_bagfile_information:
+                        custom_data:
+                        lerobot.operator_prompt: "<prompt>"
+                """
+                if not prompt:
+                        return
+                meta_path = os.path.join(bag_dir, "metadata.yaml")
+                try:
+                        with open(meta_path, "r") as f:
+                                 meta = yaml.safe_load(f) or {}
+                        info = meta.get("rosbag2_bagfile_information") or {}
+                        custom = info.get("custom_data") or {}
+                        custom["lerobot.operator_prompt"] = str(prompt)
+                        info["custom_data"] = custom
+                        meta["rosbag2_bagfile_information"] = info
+                        with open(meta_path, "w") as f:
+                                yaml.safe_dump(meta, f, sort_keys=False)
+                except Exception as exc:
+                        self.get_logger().warn(f"Could not write operator_prompt into metadata.yaml: {exc}")
 
 def main():
     try:
         rclpy.init()
         node = EpisodeRecorderServer()
-        rclpy.spin(node)
+        # Use multithreaded executor so timers/subscriptions run while execute_callback blocks
+        executor = MultiThreadedExecutor(num_threads=4)
+        executor.add_node(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

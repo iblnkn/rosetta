@@ -1,0 +1,47 @@
+name: my_first_robot
+version: 1
+
+# helpful so info.json isn't null
+robot_type: diff_drive
+
+rate_hz: 20.0
+max_duration_s: 15.0
+
+observations:
+  - key: observation.images.cam
+    topic: /camera/image_raw
+    type: sensor_msgs/msg/Image
+    image:
+      # bag_to_lerobot decodes to RGB and resizes here
+      resize: [224, 224]
+    resample: drop
+    align: {strategy: asof, tol_ms: 50, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 5}
+
+  - key: observation.state
+    topic: /joint_states
+    type: sensor_msgs/msg/JointState
+    selector:
+      # match what the robot actually publishes
+      names: [wheel_left_joint, wheel_right_joint]
+      field: position
+    resample: hold
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: reliable, history: keep_last, depth: 50}
+
+# no tasks section; bag_to_lerobot uses metadata.yaml custom_data.lerobot.operator_prompt
+
+actions:
+  - key: action
+    publish:
+      topic: /cmd_vel
+      type: geometry_msgs/msg/Twist
+      layout: flat
+      qos: {reliability: reliable, history: keep_last, depth: 10}
+    from_tensor:
+      # linear.x and angular.z clamp range
+      clamp: [-1.0, 1.0]
+
+recording:
+  storage: mcap
+  sample_to_rate: true

@@ -9,14 +9,12 @@ observations:
     topic: /cam_high/image_raw
     type: sensor_msgs/msg/Image
     image:
-      encoding: bgr8
-      to_rgb: true
       resize: [224, 224]
     resample: drop
     align: {strategy: asof, tol_ms: 50, stamp: header}   # write at tick only if image ≤50ms old
     qos: {reliability: best_effort, history: keep_last, depth: 5}
 
-  - key: observation.state.joints
+  - key: observation.state
     topic: /joint_states
     type: sensor_msgs/msg/JointState
     selector:
@@ -27,13 +25,13 @@ observations:
     qos: {reliability: reliable, history: keep_last, depth: 50}
 
 tasks:
-  - key: policy
+  - key: task.policy
     topic: /task/policy
     type: std_msgs/msg/String
     align: {strategy: hold}
     qos: {reliability: reliable, history: keep_last, depth: 10}
 
-  - key: instructions
+  - key: task.instructions
     topic: /task/instructions
     type: std_msgs/msg/String
     align: {strategy: hold}
