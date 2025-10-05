@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-ROS2 bag -> LeRobot v3.0 dataset exporter (robust 'names' handling)
+ROS 2 bag → LeRobot v3.0 exporter (tiny, unified, contract-true)
 
-- Ensures every float32 vector feature has a 'names' list in meta/info.json.
-- Infers vector shapes from contract selector names or first message encountered.
-- Works with image or video storage.
+This version depends ONLY on two shared modules:
+  - rosetta.common.contract_utils: Contract + SpecView + features + zero_pad
+  - rosetta.common.signal_utils:   decode_value + (hold/asof/drop) + stamps
+
+Result: the exact same preparation code-paths will be used offline (conversion)
+and online (live inference).
 """
 
 from __future__ import annotations
+
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import yaml
@@ -19,378 +24,291 @@ import rosbag2_py
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
-# contract loader + converters
-from rosetta.contract_utils import (
+# ---- LeRobot
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+# ---- Shared core (ONLY these two)
+from rosetta.common.contract_utils import (
     load_contract,
-    decode_observation_msg,
-    float32_multiarray_to_np,
-    int32_multiarray_to_np,
+    iter_specs,
+    feature_from_spec,
+    zero_pad as make_zero_pad,   # alias to avoid name clash with dict var
+)
+from rosetta.common.signal_utils import (
+    decode_value,
+    resample,
+    stamp_from_header_ns,
 )
 
-# LeRobot v3 writer
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import write_info  # to patch meta/info.json on the fly
+# ---------------------------------------------------------------------------
 
+@dataclass
+class _Stream:
+    spec: Any          # SpecView
+    ros_type: str
+    ts: List[int]
+    val: List[Any]
 
-# -------------------- Tiny helpers --------------------
+# ---------------------------------------------------------------------------
 
 def _read_yaml(p: Path) -> Dict[str, Any]:
-    with p.open("r") as f:
+    if not p.exists():
+        return {}
+    with p.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 def _topic_type_map(reader: rosbag2_py.SequentialReader) -> Dict[str, str]:
     return {t.name: t.type for t in reader.get_all_topics_and_types()}
 
-def _build_uniform_timeline(start_ns: int, end_ns: int, fps: float) -> np.ndarray:
-    if end_ns <= start_ns:
-        return np.array([start_ns], dtype=np.int64)
-    step = int(round(1e9 / fps))
-    n = 1 + (end_ns - start_ns) // step
-    return start_ns + np.arange(n, dtype=np.int64) * step
+def _nearest_resize_rgb(arr: np.ndarray, rh: int, rw: int) -> np.ndarray:
+    if arr.shape[0] == rh and arr.shape[1] == rw:
+        return arr
+    y = np.clip(np.linspace(0, arr.shape[0] - 1, rh), 0, arr.shape[0] - 1).astype(np.int64)
+    x = np.clip(np.linspace(0, arr.shape[1] - 1, rw), 0, arr.shape[1] - 1).astype(np.int64)
+    return arr[y][:, x]
 
-def _resample_hold(ts_ns: np.ndarray, vals: List[Any], timeline_ns: np.ndarray) -> List[Any]:
-    out, j, last = [], 0, None
-    for t in timeline_ns:
-        while j + 1 < len(ts_ns) and ts_ns[j + 1] <= t:
-            j += 1
-        if j < len(vals) and ts_ns[j] <= t:
-            last = vals[j]
-        out.append(last)
-    return out
-
-def _gen_default_names(prefix: str, dim: int) -> List[str]:
-    return [f"{prefix}.{i}" for i in range(dim)]
-
-def _infer_vec_from_contract(obj) -> Tuple[int, Optional[List[str]]]:
-    """
-    For an observation/action spec, try to infer dimension and optional names from:
-      - selector.names (if present)
-      - shape[0] (if present)
-    Returns (dim, names_or_None)
-    """
-    sel = getattr(obj, "selector", None) or {}
-    names = sel.get("names")
-    if names:
-        return len(names), names
-    shp = getattr(obj, "shape", None)
-    if isinstance(shp, (list, tuple)) and len(shp) >= 1 and int(shp[0]) > 0:
-        return int(shp[0]), None
-    return 1, None  # fallback
-
-
-# -------------------- Contract → features --------------------
-
-def build_features_from_contract(contract, use_videos: bool) -> Dict[str, Dict]:
-    feats: Dict[str, Dict] = {}
-
-    # Observations
-    for o in contract.observations:
-        key = o.key
-        if o.image:
-            resize = tuple(o.image.get("resize", ())) if o.image else ()
-            H, W = (int(resize[0]), int(resize[1])) if (resize and len(resize)==2) else (None, None)
-            shape = (H, W, 3) if (H and W) else (224, 224, 3)  # or drop the fallback if you prefer
-            feats[key] = {
-                "dtype": "video" if use_videos else "image",
-                "shape": shape,
-                "names": ["height","width","channel"]
-            }
+def _coerce_image(val: Any, hwc: Tuple[int, int, int]) -> np.ndarray:
+    """Ensure HWC uint8 RGB and requested size."""
+    arr = np.asarray(val)
+    # CHW -> HWC
+    if arr.ndim == 3 and arr.shape[0] in (1, 3) and (arr.shape[2] not in (1, 3)):
+        arr = np.transpose(arr, (1, 2, 0))
+    # gray -> RGB
+    if arr.ndim == 2:
+        arr = np.repeat(arr[..., None], 3, axis=2)
+    if arr.ndim == 3 and arr.shape[2] == 1:
+        arr = np.repeat(arr, 3, axis=2)
+    # dtype → uint8
+    if arr.dtype != np.uint8:
+        if arr.dtype.kind == "f":
+            arr = np.clip(arr, 0.0, 1.0)
+            arr = (arr * 255.0 + 0.5).astype(np.uint8)
         else:
-            dim, names = _infer_vec_from_contract(o)
-            if names is None:
-                names = _gen_default_names(key, dim)
-            feats[key] = {"dtype": "float32", "shape": (dim,), "names": names}
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+    # size
+    h, w, _ = hwc
+    if arr.shape[:2] != (h, w):
+        arr = _nearest_resize_rgb(arr, h, w)
+    return arr
 
-    # Actions — try to honor contract selector/shape; special-case /cmd_vel
-    for a in contract.actions:
-        if getattr(a, "publish", None) and a.publish.topic == "/cmd_vel":
-            names = ["linear_x", "angular_z"]
-            feats[a.key] = {"dtype": "float32", "shape": (2,), "names": names}
+def _plan_streams(specs: Iterable[Any], tmap: Dict[str, str]) -> Tuple[Dict[str, _Stream], Dict[str, List[str]]]:
+    """
+    Plan streams once and build a topic -> [keys] index for fast dispatch.
+    """
+    streams: Dict[str, _Stream] = {}
+    by_topic: Dict[str, List[str]] = {}
+    for sv in specs:
+        if sv.topic not in tmap:
+            kind = "action" if sv.is_action else "observation"
+            print(f"[WARN] Missing {kind} '{sv.key}' topic: {sv.topic}")
             continue
+        rt = sv.ros_type or tmap[sv.topic]
+        streams[sv.key] = _Stream(spec=sv, ros_type=rt, ts=[], val=[])
+        by_topic.setdefault(sv.topic, []).append(sv.key)
+    if not streams:
+        raise RuntimeError("No contract topics found in bag.")
+    return streams, by_topic
 
-        dim, names = _infer_vec_from_contract(a)
-        if names is None:
-            names = _gen_default_names(a.key, dim)
-        feats[a.key] = {"dtype": "float32", "shape": (dim,), "names": names}
+# ---------------------------------------------------------------------------
 
-    # (We keep tasks out of features; tasks are added per-frame via 'task' string.)
-
-    return feats
-
-
-# -------------------- Core export --------------------
-
-def export_bags_to_v30(
+def export_bags_to_lerobot(
     bag_dirs: List[Path],
     contract_path: Path,
     out_root: Path,
-    repo_id: str,
+    repo_id: str = "rosbag_v30",
     use_videos: bool = True,
-    image_threads: int = 4,
+    image_writer_threads: int = 4,
     chunk_size: int = 1000,
     data_mb: int = 100,
     video_mb: int = 500,
-):
-    # Contract + dataset init
-    contract = load_contract(str(contract_path))
+) -> None:
+    # Contract + specs
+    contract = load_contract(contract_path)
     fps = float(contract.rate_hz)
-    features = build_features_from_contract(contract, use_videos=use_videos)
-    print(f"Generated features (pre-create): {features}")
-    robot_type = getattr(contract, "robot_type", None)
+    step_ns = int(round(1e9 / fps))
+    specs = list(iter_specs(contract))
 
+    # Features (also detect first image key as anchor)
+    features: Dict[str, Dict[str, Any]] = {}
+    primary_image_key: Optional[str] = None
+    for sv in specs:
+        k, ft, is_img = feature_from_spec(sv, use_videos)
+        features[k] = ft
+        if is_img and primary_image_key is None:
+            primary_image_key = sv.key
+
+    # Dataset
     ds = LeRobotDataset.create(
         repo_id=repo_id,
         fps=int(round(fps)),
         features=features,
-        root=out_root,      # NOTE: dataset root == out_root (no extra subdir)
-        robot_type=robot_type,
+        root=out_root,
+        robot_type=contract.robot_type,
         use_videos=use_videos,
         image_writer_processes=0,
-        image_writer_threads=image_threads,
+        image_writer_threads=image_writer_threads,
         batch_encoding_size=1,
     )
-
-    # Apply chunk/file size preferences to meta/info.json
     ds.meta.update_chunk_settings(
         chunks_size=chunk_size,
         data_files_size_in_mb=data_mb,
         video_files_size_in_mb=video_mb,
     )
 
-    # ---- Pass 0 note: we will auto-patch any float32 features that lack 'names' (defensive) ----
-    patched = False
-    for k, ft in ds.meta.info["features"].items():
-        if ft.get("dtype") == "float32" and "names" not in ft:
-            dim = int(ft["shape"][0]) if "shape" in ft and ft["shape"] else 1
-            ds.meta.info["features"][k]["names"] = _gen_default_names(k, dim)
-            patched = True
-    if patched:
-        write_info(ds.meta.info, ds.meta.root)
+    # Precompute zero pads + shapes for fast frame assembly
+    zero_pad_map = {k: make_zero_pad(ft) for k, ft in features.items()}
+    write_keys = [k for k, ft in features.items() if ft["dtype"] in ("video", "image", "float32", "float64", "string")]
+    shapes = {k: tuple(features[k]["shape"]) for k in write_keys}
 
-    # Process every bag as one episode
+    # Episodes
     for epi_idx, bag_dir in enumerate(bag_dirs):
-        print(f"[INFO] Episode {epi_idx}: {bag_dir}")
+        print(f"[Episode {epi_idx}] {bag_dir}")
 
-        # Read rosbag2 metadata.yaml
-        meta_yaml = _read_yaml(bag_dir / "metadata.yaml")
-        info = meta_yaml.get("rosbag2_bagfile_information", {}) or {}
+        meta = _read_yaml(bag_dir / "metadata.yaml")
+        info = meta.get("rosbag2_bagfile_information") or {}
         storage = info.get("storage_identifier") or "mcap"
+        meta_dur_ns = int((info.get("duration") or {}).get("nanoseconds") or 0)
 
-        # Prompt can be top-level or nested under rosbag2_bagfile_information
+        # operator prompt (if present)
         prompt = ""
-        cd_top = meta_yaml.get("custom_data") or {}
-        if isinstance(cd_top, dict):
-            prompt = cd_top.get("lerobot.operator_prompt", "") or prompt
-        cd_info = info.get("custom_data") or {}
-        if isinstance(cd_info, dict):
-            prompt = cd_info.get("lerobot.operator_prompt", "") or prompt
+        for node in (meta, info):
+            if isinstance(node, dict):
+                cd = node.get("custom_data")
+                if isinstance(cd, dict) and "lerobot.operator_prompt" in cd:
+                    prompt = cd["lerobot.operator_prompt"] or prompt
 
-        # Open bag
+        # Reader
         reader = rosbag2_py.SequentialReader()
-        storage_opts = rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage)
-        converter = rosbag2_py.ConverterOptions("", "")
-        reader.open(storage_opts, converter)
+        reader.open(
+            rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage),
+            rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
+        )
         tmap = _topic_type_map(reader)
 
-        # Plan streams from contract
-        streams: Dict[str, Dict[str, Any]] = {}
+        # Plan once
+        streams, by_topic = _plan_streams(specs, tmap)
 
-        # Observations
-        for o in contract.observations:
-            topic = o.topic
-            if topic not in tmap:
-                print(f"[WARN] Missing observation '{o.key}' topic: {topic}")
-                continue
-            streams[o.key] = dict(
-                topic=topic,
-                spec=o,  # used by decode_observation_msg
-                ros_type=o.type or tmap[topic],
-                ts=[],
-                val=[],
-                _is_action=False,
-            )
-
-        # Use first image observation present as timeline anchor
-        primary_observation_key = None
-        for o in contract.observations:
-            if o.image and (o.key in streams):
-                primary_observation_key = o.key
-                break
-
-        # Actions
-        for a in contract.actions:
-            topic = a.publish.topic
-            if topic not in tmap:
-                print(f"[WARN] Missing action '{a.key}' topic: {topic}")
-                continue
-            streams[a.key] = dict(
-                topic=topic,
-                ros_type=a.publish.type or tmap[topic],
-                ts=[],
-                val=[],
-                _is_action=True,
-            )
-
-        # Decode pass
+        # Decode single pass
         while reader.has_next():
-            topic, data, t_ns = reader.read_next()
-            for key, st in streams.items():
-                if st["topic"] != topic:
-                    continue
-                msg_type = get_message(st.get("ros_type"))
-                msg = deserialize_message(data, msg_type)
-                rtype = st["ros_type"]
-
-                # Observations via helper
-                if not st["_is_action"]:
-                    val = decode_observation_msg(st.get("spec"), msg)
-                    if val is not None:
-                        st["ts"].append(int(t_ns)); st["val"].append(val)
-                    continue
-
-                # Actions
-                if rtype.endswith("/Float32MultiArray"):
-                    st["ts"].append(int(t_ns)); st["val"].append(float32_multiarray_to_np(msg))
-                elif rtype.endswith("/Int32MultiArray"):
-                    st["ts"].append(int(t_ns)); st["val"].append(int32_multiarray_to_np(msg))
-                elif rtype.endswith("/Twist"):
-                    st["ts"].append(int(t_ns))
-                    st["val"].append(np.asarray([msg.linear.x, msg.angular.z], dtype=np.float32))
-                elif rtype.endswith("/String"):
-                    st["ts"].append(int(t_ns)); st["val"].append(str(getattr(msg, "data", "")))
-                else:
-                    # Minimal script: ignore other types
-                    pass
-
-        # If we can infer action dims from the first decoded message, patch feature shapes/names accordingly
-        feature_patch_needed = False
-        for key, st in streams.items():
-            if not st.get("_is_action"):
+            topic, data, bag_ns = reader.read_next()
+            if topic not in by_topic:
                 continue
-            vals = st["val"]
-            if not vals:
-                continue
-            sample = vals[0]
-            if isinstance(sample, (list, tuple)):
-                dim = len(sample)
-            elif isinstance(sample, np.ndarray):
-                dim = int(sample.shape[-1]) if sample.ndim > 0 else 1
-            else:
-                dim = 1
-            ft = ds.meta.info["features"].get(key, None)
-            if ft and ft.get("dtype") == "float32":
-                cur_shape = tuple(ft.get("shape", ()) or ())
-                if not cur_shape or (len(cur_shape) == 1 and int(cur_shape[0]) != dim):
-                    ds.meta.info["features"][key]["shape"] = (dim,)
-                    ds.meta.info["features"][key]["names"] = _gen_default_names(key, dim)
-                    feature_patch_needed = True
+            for key in by_topic[topic]:
+                st = streams[key]
+                msg = deserialize_message(data, get_message(st.ros_type))
+                sv = st.spec
+                ts_sel = int(bag_ns)
+                if sv.stamp_src == "header":
+                    hdr = stamp_from_header_ns(msg)
+                    if hdr is not None:
+                        ts_sel = int(hdr)
+                val = decode_value(st.ros_type, msg, sv)
+                if val is not None:
+                    st.ts.append(ts_sel)
+                    st.val.append(val)
 
-        if feature_patch_needed:
-            write_info(ds.meta.info, ds.meta.root)
-            # Recreate empty HF dataset with the updated schema (no frames added yet)
-            ds.hf_dataset = ds.create_hf_dataset()
-            print(f"[INFO] Patched action shapes/names from data. New features: {ds.meta.info['features']}")
-
-        # Build timeline (prefer image timestamps)
-        if primary_observation_key and len(streams[primary_observation_key]["ts"]) > 0:
-            tl_ns = np.asarray(streams[primary_observation_key]["ts"], dtype=np.int64)
+        # Choose anchor + duration
+        valid_ts = [np.asarray(st.ts, dtype=np.int64) for st in streams.values() if st.ts]
+        if not valid_ts:
+            raise RuntimeError(f"No usable messages in {bag_dir}")
+        if primary_image_key and streams.get(primary_image_key) and streams[primary_image_key].ts:
+            start_ns = int(np.asarray(streams[primary_image_key].ts, dtype=np.int64).min())
         else:
-            series_ts = [np.asarray(v["ts"], dtype=np.int64) for v in streams.values() if len(v["ts"]) > 0]
-            if not series_ts:
-                raise RuntimeError(f"No usable messages found in {bag_dir} for the given contract.")
-            start_ns = min(ts.min() for ts in series_ts)
-            end_ns = max(ts.max() for ts in series_ts)
-            tl_ns = _build_uniform_timeline(start_ns, end_ns, fps)
+            start_ns = int(min(ts.min() for ts in valid_ts))
+        ts_max = int(max(ts.max() for ts in valid_ts))
+        observed_dur_ns = max(0, ts_max - start_ns)
+        dur_ns = observed_dur_ns if (meta_dur_ns <= 0 or abs(meta_dur_ns - observed_dur_ns) > 2 * step_ns) else meta_dur_ns
 
-        # We only require actual data features (ignore library default meta features)
-        data_keys = [k for k, ft in ds.meta.info["features"].items()
-                     if ft["dtype"] in ("video", "image", "float32", "string")
-                     and k in streams]  # must be present in this episode
+        # Ticks
+        n_ticks = int(dur_ns // step_ns) + 1
+        ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
 
-        # Trim timeline so all required features have at least one sample
-        first_seen = []
-        for name in data_keys:
-            st = streams.get(name)
-            if st and len(st["ts"]) > 0:
-                first_seen.append(int(np.asarray(st["ts"], dtype=np.int64)[0]))
-        if first_seen:
-            min_valid_ns = max(first_seen)
-            tl_ns = tl_ns[tl_ns >= min_valid_ns]
-
-        T = len(tl_ns)
-        if T == 0:
-            raise RuntimeError(f"No overlapping time range across required streams in {bag_dir}.")
-
-        # Resample (HOLD)
+        # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
         for key, st in streams.items():
-            ts = np.asarray(st["ts"], dtype=np.int64)
-            if len(ts) == 0:
-                resampled[key] = [None] * T
-            else:
-                resampled[key] = _resample_hold(ts, st["val"], tl_ns)
+            if not st.ts:
+                resampled[key] = [None] * n_ticks
+                continue
+            ts = np.asarray(st.ts, dtype=np.int64)
+            pol = st.spec.resample_policy
+            resampled[key] = resample(pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms)
 
         # Write frames
-        written = 0
-        for i in range(T):
-            # Skip frame if any required feature missing
-            if any(resampled.get(name, [None] * T)[i] is None for name in data_keys):
-                continue
-
+        for i in range(n_ticks):
             frame: Dict[str, Any] = {}
-            for name in data_keys:
-                frame[name] = resampled[name][i]
-            frame["task"] = prompt  # LeRobotDataset.add_frame() expects this
+            for name in write_keys:
+                ft = features[name]
+                dtype = ft["dtype"]
+                val = resampled.get(name, [None] * n_ticks)[i]
 
+                if val is None:
+                    frame[name] = zero_pad_map[name]
+                    continue
+
+                if dtype in ("video", "image"):
+                    frame[name] = _coerce_image(val, shapes[name])
+
+                elif dtype in ("float32", "float64"):
+                    tgt_dt = np.float32 if dtype == "float32" else np.float64
+                    arr = np.asarray(val, dtype=tgt_dt).reshape(-1)
+                    exp = int(ft["shape"][0])
+                    if arr.shape[0] != exp:
+                        fixed = np.zeros((exp,), dtype=tgt_dt)
+                        fixed[: min(exp, arr.shape[0])] = arr[: min(exp, arr.shape[0])]
+                        arr = fixed
+                    frame[name] = arr
+
+                elif dtype == "string":
+                    frame[name] = str(val)
+
+                else:
+                    frame[name] = val  # fallback – should not happen with current features
+
+            frame["task"] = prompt
             ds.add_frame(frame)
-            written += 1
 
         ds.save_episode()
-        print(f"[OK] Wrote episode {epi_idx} (frames={written}/{T})")
+        print(f"  → saved {n_ticks} frames @ {int(round(fps))} FPS")
 
-    ds.stop_image_writer()
-
-    print(f"\n[COMPLETE] v3.0 dataset at: {ds.root.resolve()}")
-    print("  - data/chunk-*/file-*.parquet")
+    print(f"\n[OK] Dataset root: {ds.root.resolve()}")
     if use_videos:
-        print("  - videos/<camera_key>/chunk-*/file-*.mp4")
-    print("  - meta/info.json, meta/tasks.parquet, meta/stats.json, meta/episodes/chunk-*/file-*.parquet")
+        print("  - videos/<image_key>/chunk-*/file-*.mp4")
+    else:
+        print("  - images/*/*.png")
+    print("  - data/chunk-*/file-*.parquet")
+    print("  - meta/info.json, meta/tasks.parquet, meta/stats.json, meta/episodes/*/*.parquet")
 
+# ---------------------------------------------------------------------------
 
-# -------------------- CLI --------------------
-
-def parse_args():
-    ap = argparse.ArgumentParser(description="ROS2 bag -> LeRobot v3.0 dataset exporter (robust)")
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser("ROS2 bag → LeRobot v3 (using rosetta.common.*)")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--bag", help="Path to a single episode bag directory")
-    g.add_argument("--bags", nargs="+", help="Paths to multiple episode bag directories")
-
-    ap.add_argument("--contract", required=True, help="Path to the YAML contract used for recording")
-    ap.add_argument("--out", required=True, help="Output root directory for the dataset")
-    ap.add_argument("--repo-id", default="rosbag_v30", help="Dataset repo_id (metadata only)")
-    ap.add_argument("--no-videos", action="store_true", help="Store images instead of encoding videos")
-    ap.add_argument("--image-threads", type=int, default=4, help="Async image writer threads")
-    ap.add_argument("--chunk-size", type=int, default=1000, help="Max files per chunk directory")
-    ap.add_argument("--data-mb", type=int, default=100, help="Target max size for data parquet files (MB)")
-    ap.add_argument("--video-mb", type=int, default=500, help="Target max size for video files (MB)")
+    g.add_argument("--bag", help="Path to a single bag directory (episode)")
+    g.add_argument("--bags", nargs="+", help="Paths to multiple bag directories")
+    ap.add_argument("--contract", required=True, help="Path to YAML contract")
+    ap.add_argument("--out", required=True, help="Output dataset root")
+    ap.add_argument("--repo-id", default="rosbag_v30", help="repo_id metadata")
+    ap.add_argument("--no-videos", action="store_true", help="Store images instead of videos")
+    ap.add_argument("--image-threads", type=int, default=4, help="Image writer threads")
+    ap.add_argument("--chunk-size", type=int, default=1000)
+    ap.add_argument("--data-mb", type=int, default=100)
+    ap.add_argument("--video-mb", type=int, default=500)
     return ap.parse_args()
 
-def main():
+def main() -> None:
     args = parse_args()
     bag_dirs = [Path(args.bag)] if args.bag else [Path(p) for p in args.bags]
-    out_root = Path(args.out)
-
-    export_bags_to_v30(
+    export_bags_to_lerobot(
         bag_dirs=bag_dirs,
         contract_path=Path(args.contract),
-        out_root=out_root,
+        out_root=Path(args.out),
         repo_id=args.repo_id,
         use_videos=not args.no_videos,
-        image_threads=args.image_threads,
+        image_writer_threads=args.image_threads,
         chunk_size=args.chunk_size,
         data_mb=args.data_mb,
         video_mb=args.video_mb,
-)
+    )
 
 if __name__ == "__main__":
     main()

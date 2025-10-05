@@ -1,6 +1,10 @@
-name: example
+name: 7dof_manipulator_example
 version: 1
 
+# Robot type for LeRobot dataset metadata
+robot_type: manipulator
+
+# Recording parameters
 rate_hz: 20.0
 max_duration_s: 30.0
 
@@ -18,6 +22,7 @@ observations:
     topic: /joint_states
     type: sensor_msgs/msg/JointState
     selector:
+      # 7-DOF manipulator joint positions
       names: [joint1, joint2, joint3, joint4, joint5, joint6, joint7]
       field: position
     resample: hold
@@ -44,8 +49,13 @@ actions:
       type: std_msgs/msg/Float64MultiArray
       layout: flat
       qos: {reliability: reliable, history: keep_last, depth: 10}
+    selector:
+      # 7-DOF manipulator joint commands (must match observation joints)
+      names: [joint1, joint2, joint3, joint4, joint5, joint6, joint7]
+      field: data
     from_tensor:
-      clamp: [1, 1]
+      # Clamp joint commands to safe range
+      clamp: [-1.0, 1.0]
 
 recording:
   storage: mcap
