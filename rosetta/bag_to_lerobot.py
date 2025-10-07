@@ -6,8 +6,8 @@ This version depends ONLY on two shared modules:
   - rosetta.common.contract_utils: Contract + SpecView + features + zero_pad
   - rosetta.common.signal_utils:   decode_value + (hold/asof/drop) + stamps
 
-Result: the exact same preparation code-paths will be used offline (conversion)
-and online (live inference).
+Result: the exact same preparation code-paths are used offline (conversion)
+and online (live inference), minimizing train/serve skew.
 """
 
 from __future__ import annotations
@@ -68,7 +68,10 @@ def _nearest_resize_rgb(arr: np.ndarray, rh: int, rw: int) -> np.ndarray:
     return arr[y][:, x]
 
 def _coerce_image(val: Any, hwc: Tuple[int, int, int]) -> np.ndarray:
-    """Ensure HWC uint8 RGB and requested size."""
+    """
+    Ensure HWC uint8 RGB and requested size. We expect decode_value() to already
+    return HxWx3 uint8 RGB when the spec is an image; this is a defensive check.
+    """
     arr = np.asarray(val)
     # CHW -> HWC
     if arr.ndim == 3 and arr.shape[0] in (1, 3) and (arr.shape[2] not in (1, 3)):
@@ -100,7 +103,7 @@ def _plan_streams(specs: Iterable[Any], tmap: Dict[str, str]) -> Tuple[Dict[str,
     for sv in specs:
         if sv.topic not in tmap:
             kind = "action" if sv.is_action else "observation"
-            print(f"[WARN] Missing {kind} '{sv.key}' topic: {sv.topic}")
+            print(f"[WARN] Missing {kind} '{sv.key}' topic in bag: {sv.topic}")
             continue
         rt = sv.ros_type or tmap[sv.topic]
         streams[sv.key] = _Stream(spec=sv, ros_type=rt, ts=[], val=[])
@@ -121,10 +124,13 @@ def export_bags_to_lerobot(
     chunk_size: int = 1000,
     data_mb: int = 100,
     video_mb: int = 500,
+    timestamp_source: str = "contract",   # 'contract' | 'bag' | 'header'
 ) -> None:
     # Contract + specs
     contract = load_contract(contract_path)
     fps = float(contract.rate_hz)
+    if fps <= 0:
+        raise ValueError("Contract rate_hz must be > 0")
     step_ns = int(round(1e9 / fps))
     specs = list(iter_specs(contract))
 
@@ -145,7 +151,7 @@ def export_bags_to_lerobot(
         root=out_root,
         robot_type=contract.robot_type,
         use_videos=use_videos,
-        image_writer_processes=0,
+        image_writer_processes=0,          # keep simple & predictable
         image_writer_threads=image_writer_threads,
         batch_encoding_size=1,
     )
@@ -188,6 +194,9 @@ def export_bags_to_lerobot(
         # Plan once
         streams, by_topic = _plan_streams(specs, tmap)
 
+        # Counters for light diagnostics
+        decoded_msgs = 0
+
         # Decode single pass
         while reader.has_next():
             topic, data, bag_ns = reader.read_next()
@@ -197,26 +206,40 @@ def export_bags_to_lerobot(
                 st = streams[key]
                 msg = deserialize_message(data, get_message(st.ros_type))
                 sv = st.spec
-                ts_sel = int(bag_ns)
-                if sv.stamp_src == "header":
-                    hdr = stamp_from_header_ns(msg)
-                    if hdr is not None:
-                        ts_sel = int(hdr)
+
+                # Timestamp selection policy
+                if timestamp_source == "bag":
+                    ts_sel = int(bag_ns)
+                elif timestamp_source == "header":
+                    ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                else:  # 'contract' (per-spec stamp_src)
+                    ts_sel = int(bag_ns)
+                    if sv.stamp_src == "header":
+                        hdr = stamp_from_header_ns(msg)
+                        if hdr is not None:
+                            ts_sel = int(hdr)
+
                 val = decode_value(st.ros_type, msg, sv)
                 if val is not None:
                     st.ts.append(ts_sel)
                     st.val.append(val)
+                    decoded_msgs += 1
+
+        if decoded_msgs == 0:
+            raise RuntimeError(f"No usable messages in {bag_dir} (none decoded).")
 
         # Choose anchor + duration
         valid_ts = [np.asarray(st.ts, dtype=np.int64) for st in streams.values() if st.ts]
         if not valid_ts:
-            raise RuntimeError(f"No usable messages in {bag_dir}")
+            raise RuntimeError(f"No usable messages in {bag_dir} (no timestamps).")
+
         if primary_image_key and streams.get(primary_image_key) and streams[primary_image_key].ts:
             start_ns = int(np.asarray(streams[primary_image_key].ts, dtype=np.int64).min())
         else:
             start_ns = int(min(ts.min() for ts in valid_ts))
         ts_max = int(max(ts.max() for ts in valid_ts))
         observed_dur_ns = max(0, ts_max - start_ns)
+        # Prefer observed duration unless bag metadata matches within ~2 ticks
         dur_ns = observed_dur_ns if (meta_dur_ns <= 0 or abs(meta_dur_ns - observed_dur_ns) > 2 * step_ns) else meta_dur_ns
 
         # Ticks
@@ -262,13 +285,15 @@ def export_bags_to_lerobot(
                     frame[name] = str(val)
 
                 else:
-                    frame[name] = val  # fallback – should not happen with current features
+                    # Fallback – should not happen with current features
+                    frame[name] = val
 
+            # Text task prompt (if any) is a first-class feature in LeRobot
             frame["task"] = prompt
             ds.add_frame(frame)
 
         ds.save_episode()
-        print(f"  → saved {n_ticks} frames @ {int(round(fps))} FPS")
+        print(f"  → saved {n_ticks} frames @ {int(round(fps))} FPS  | decoded_msgs={decoded_msgs}")
 
     print(f"\n[OK] Dataset root: {ds.root.resolve()}")
     if use_videos:
@@ -293,6 +318,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--chunk-size", type=int, default=1000)
     ap.add_argument("--data-mb", type=int, default=100)
     ap.add_argument("--video-mb", type=int, default=500)
+    ap.add_argument(
+        "--timestamp",
+        choices=("contract", "bag", "header"),
+        default="contract",
+        help="Which time base to use when resampling: "
+             "'contract' (per-spec), 'bag' (receive), or 'header' (message header).",
+    )
     return ap.parse_args()
 
 def main() -> None:
@@ -308,6 +340,7 @@ def main() -> None:
         chunk_size=args.chunk_size,
         data_mb=args.data_mb,
         video_mb=args.video_mb,
+        timestamp_source=args.timestamp,
     )
 
 if __name__ == "__main__":

@@ -3,8 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-import yaml
+
 import numpy as np
+import yaml
+
+# ROS 2 QoS helpers (used by recorder & any nodes that want contract-driven QoS)
+from rclpy.qos import (
+    QoSProfile,
+    ReliabilityPolicy,
+    HistoryPolicy,
+    DurabilityPolicy,
+)
 
 # ---------- Contract datamodel ----------
 
@@ -20,16 +29,26 @@ class ObservationSpec:
     topic: str
     type: str
     selector: Optional[Dict[str, Any]] = None   # {names: [...]}
-    image: Optional[Dict[str, Any]] = None      # {resize:[H,W], encoding:'rgb8'|'bgr8'}
+    image: Optional[Dict[str, Any]] = None      # {resize:[H,W], encoding:'rgb8'|'bgr8'|'mono8'}
     align: Optional[AlignSpec] = None
+    resample: Optional[str] = None              # optional legacy/alternate spelling
+    qos: Optional[Dict[str, Any]] = None        # QoS dict (reliability/history/depth/... )
 
 @dataclass(frozen=True, slots=True)
 class ActionSpec:
     key: str
     publish_topic: str
     type: str
-    selector: Optional[Dict[str, Any]] = None   # {names: [...]}
-    from_tensor: Optional[Dict[str, Any]] = None  # {clamp:[min,max]}
+    selector: Optional[Dict[str, Any]] = None       # {names: [...]}
+    from_tensor: Optional[Dict[str, Any]] = None    # {clamp:[min,max]}
+    publish_qos: Optional[Dict[str, Any]] = None    # QoS for publisher
+
+@dataclass(frozen=True, slots=True)
+class TaskSpec:
+    key: str
+    topic: str
+    type: str
+    qos: Optional[Dict[str, Any]] = None
 
 @dataclass(frozen=True, slots=True)
 class Contract:
@@ -39,6 +58,9 @@ class Contract:
     max_duration_s: float
     observations: List[ObservationSpec]
     actions: List[ActionSpec]
+    # Optional sections / metadata
+    tasks: List[TaskSpec]
+    recording: Dict[str, Any]
     robot_type: Optional[str] = None
     timestamp_source: str = "receive"
 
@@ -62,6 +84,8 @@ def load_contract(path: Path | str) -> Contract:
             selector=it.get("selector"),
             image=it.get("image"),
             align=_as_align(it.get("align")),
+            resample=(str(it.get("resample")).lower() if it.get("resample") else None),
+            qos=it.get("qos"),
         )
 
     def _act(it) -> ActionSpec:
@@ -72,10 +96,22 @@ def load_contract(path: Path | str) -> Contract:
             type=pub["type"],
             selector=it.get("selector"),
             from_tensor=it.get("from_tensor"),
+            publish_qos=pub.get("qos"),
+        )
+
+    def _task(it) -> TaskSpec:
+        # Optional block. If present, we record it verbatim just like obs.
+        return TaskSpec(
+            key=it.get("key", it["topic"]),
+            topic=it["topic"],
+            type=it["type"],
+            qos=it.get("qos"),
         )
 
     obs = [_obs(it) for it in (d.get("observations") or [])]
     acts = [_act(it) for it in (d.get("actions") or [])]
+    tks  = [_task(it) for it in (d.get("tasks") or [])]
+    rec  = d.get("recording") or {}
 
     return Contract(
         name=d.get("name", "contract"),
@@ -84,11 +120,41 @@ def load_contract(path: Path | str) -> Contract:
         max_duration_s=float(d.get("max_duration_s", 30.0)),
         observations=obs,
         actions=acts,
+        tasks=tks,
+        recording=rec,
         robot_type=d.get("robot_type"),
         timestamp_source=str(d.get("timestamp_source", "receive")).lower(),
     )
 
-# ---------- Unified SpecView ----------
+# ---------- QoS mapping (shared) ----------
+
+def qos_profile_from_dict(d: Optional[Dict[str, Any]]) -> Optional[QoSProfile]:
+    """
+    Translate a simple dict into a QoSProfile. Supported keys:
+      reliability: reliable|best_effort
+      history: keep_last|keep_all
+      depth: int
+      durability: volatile|transient_local
+    Unknown/missing -> sensible defaults.
+    """
+    if not d:
+        return None
+    rel = str(d.get("reliability", "reliable")).lower()
+    hist = str(d.get("history", "keep_last")).lower()
+    dur = str(d.get("durability", "volatile")).lower()
+    depth = int(d.get("depth", 10))
+
+    return QoSProfile(
+        reliability=(
+            ReliabilityPolicy.BEST_EFFORT
+            if rel == "best_effort" else ReliabilityPolicy.RELIABLE
+        ),
+        history=(HistoryPolicy.KEEP_ALL if hist == "keep_all" else HistoryPolicy.KEEP_LAST),
+        depth=depth,
+        durability=(DurabilityPolicy.TRANSIENT_LOCAL if dur == "transient_local" else DurabilityPolicy.VOLATILE),
+    )
+
+# ---------- Unified SpecView (for runtime/offline processing) ----------
 
 @dataclass(frozen=True, slots=True)
 class SpecView:
@@ -115,7 +181,8 @@ def iter_specs(contract: Contract) -> Iterable[SpecView]:
                 resize = (int(r[0]), int(r[1]))
             enc = str(o.image.get("encoding", "bgr8")).lower()
         names = list((o.selector or {}).get("names", []))
-        al = o.align or AlignSpec()
+        # Prefer explicit align; else fall back to legacy "resample"
+        al = o.align or AlignSpec(strategy=(o.resample or "hold"))
         yield SpecView(
             key=o.key,
             topic=o.topic,

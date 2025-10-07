@@ -15,7 +15,7 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[
                 {'contract_path': contract},
-                {'policy_path': '/workspaces/reo_ws/models/smolvla/training_run_20251005_193802/checkpoints/last/pretrained_model'}  # TODO: Set the actual policy path
+                {'policy_path': '/workspaces/reo_ws/models/smolvla/training_run_20251006_183942/checkpoints/last/pretrained_model'}  # TODO: Set the actual policy path
             ],
         ),
     ])

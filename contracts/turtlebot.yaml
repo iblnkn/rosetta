@@ -14,7 +14,7 @@ observations:
     type: sensor_msgs/msg/Image
     image:
       # bag_to_lerobot decodes to RGB and resizes here
-      resize: [224, 224]
+      resize: [512, 512]
     resample: drop
     align: {strategy: asof, tol_ms: 50, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 5}
@@ -44,7 +44,8 @@ actions:
       field: data
     from_tensor:
       # Clamp linear.x and angular.z to reasonable diff_drive range
-      clamp: [-1.0, 1.0]
+      clamp: [-2.0, 2.0]
+    safety_behavior: zeros  # 'zeros' to send all zeros when stopped, 'hold' to maintain last command
 
 recording:
   storage: mcap
