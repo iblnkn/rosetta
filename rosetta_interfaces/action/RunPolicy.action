@@ -1,0 +1,11 @@
+# goal
+string prompt
+---
+# result
+bool success
+string message
+---
+# feedback
+uint32 published_actions
+uint32 queue_depth
+string status
