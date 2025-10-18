@@ -3,10 +3,28 @@
 <package format="3">
   <name>rosetta</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="isaac@dirtrobotics.com">ros</maintainer>
+  <description>ROS 2–LeRobot bridge: contract-driven policy runner, 
+    episode recorder to rosbag2 (MCAP),
+     and bag→LeRobot exporter using shared decoders/resampling.</description>
+  <maintainer email="isaac.blankenau@gmail.com">ros</maintainer>
   <license>Apache-2.0</license>
 
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rosetta_interfaces</exec_depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

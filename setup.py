@@ -1,4 +1,6 @@
 from setuptools import find_packages, setup
+from glob import glob
+import os
 
 package_name = 'rosetta'
 
@@ -10,16 +12,22 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'contracts'), glob('contracts/*.yaml')),
     ],
     install_requires=['setuptools'],
+    extras_require={
+        'ml': ['torch', 'torchvision', 'lerobot>=0.7'],
+    },
     zip_safe=True,
     maintainer='ros',
     maintainer_email='isaac@dirtrobotics.com',
     description='TODO: Package description',
     license='Apache-2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'policy_bridge = rosetta.policy_bridge_node:main',
+            'recorder_server = rosetta.episode_recorder:main',
         ],
     },
 )

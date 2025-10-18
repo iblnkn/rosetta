@@ -1,0 +1,239 @@
+# rosetta — Contract‑driven ROS 2 - LeRobot policy bridge, recorder, and dataset exporter
+
+**rosetta** is a ROS 2 package that standardizes the interface between ROS2 topics and LeRobot policies using a small YAML “contract”. It provides:
+
+- **PolicyBridge** — runs a pretrained policy live, subscribing to topics to use as observations and publishing topics to use as actions, exactly as defined by the contract.
+- **EpisodeRecorderServer** — records raw ROS 2 topics required by contract straight to a rosbag2. Uses ROS 2 actions to start and stop recording and append task prompts to bagfile meta data for later processing. 
+- **bag_to_lerobot.py** — converts recorded bags into a ready‑to‑train **LeRobot v3** dataset using the very same decoding/resampling logic as live inference.
+
+This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
+
+> **Status**: Early public release. Target ROS 2 distros: **Humble**. Python ≥ 3.10.
+
+---
+
+## Contents
+
+- [rosetta — Contract‑driven ROS 2 - LeRobot policy bridge, recorder, and dataset exporter](#rosetta--contractdriven-ros2---lerobot-policy-bridge-recorder-and-dataset-exporter)
+  - [Contents](#contents)
+  - [Why contracts?](#why-contracts)
+  - [Install \& build](#install--build)
+    - [Prerequisites](#prerequisites)
+    - [Resolve ROS dependencies](#resolve-ros-dependencies)
+    - [Build](#build)
+    - [ML dependencies](#ml-dependencies)
+  - [Quick start](#quick-start)
+      - [1) Use the included TurtleBot contract](#1-use-the-included-turtlebot-contract)
+      - [2) Run a policy bridge](#2-run-a-policy-bridge)
+      - [3) Record an episode](#3-record-an-episode)
+      - [4) Export bag(s) to a LeRobot dataset](#4-export-bags-to-a-lerobot-dataset)
+  - [Nodes](#nodes)
+    - [PolicyBridge node](#policybridge-node)
+      - [Key parameters](#key-parameters)
+      - [Safety on stop](#safety-on-stop)
+    - [EpisodeRecorderServer node](#episoderecorderserver-node)
+      - [Key parameters](#key-parameters-1)
+  - [Dataset export (`bag_to_lerobot.py`)](#dataset-export-bag_to_lerobotpy)
+      - [Notable options](#notable-options)
+  - [Contract file](#contract-file)
+  - [Extending (decoders/encoders)](#extending-decodersencoders)
+
+---
+
+## Why contracts?
+
+A **contract** is a small YAML that declares **exactly** which topics, message types, fields, rates, and timing rules a policy consumes and what it publishes. rosetta uses the same contract to:
+
+- subscribe & resample observations in the bridge,
+- encode actions for publishing,
+- and decode & resample bag files for dataset export.
+
+That **single source of truth** eliminates mismatched shapes, or timestamp policies drifting apart between training and serving.
+
+---
+
+## Install & build
+
+### Prerequisites
+
+- ROS 2 (Humble).
+- LeRobot
+- System Python 3.10+.
+- Runtime ROS dependencies are resolved via `rosdep`.
+
+> Policy execution and dataset export additionally require PyTorch and LeRobot; see _Optional ML dependencies_ below.
+
+### Resolve ROS dependencies
+
+```bash
+# From your workspace root (e.g., ~/ws)
+rosdep install --from-paths src --ignore-src -r -y
+```
+### Build
+```bash
+colcon build --packages-select rosetta
+source install/setup.bash
+```
+### ML dependencies
+For live policies and dataset export:
+```bash
+# Install LeRobot (>= 0.7) and common deps
+pip install lerobot>=0.7 numpy pyyaml
+```
+If you don’t need live inference or export, you can skip these Python extras.
+
+## Quick start
+####  1) Use the included TurtleBot contract
+
+This package ships ```contracts/turtlebot.yaml``` describing RGB, depth, state (joints/odom/imu) and a ```cmd_vel``` action.
+
+#### 2) Run a policy bridge
+```bash
+# Edit the policy_path to your pretrained model directory
+ros2 launch rosetta turtlebot_policy_bridge.launch.py \
+  log_level:=info
+```
+Send a goal to start/stop the run (fields may vary with your ```rosetta_interfaces``` version):
+```bash
+# Start a run with an optional prompt/task
+ros2 action send_goal /run_policy rosetta_interfaces/action/RunPolicy \
+  "{prompt: 'explore the room'}"
+
+# Cancel (either action-cancel or the helper service)
+ros2 action send_goal /run_policy/_action/cancel rosetta_interfaces/action/CancelGoal "{}"
+# or
+ros2 service call /run_policy/cancel std_srvs/srv/Trigger "{}"
+```
+#### 3) Record an episode
+```bash
+# Separate node that writes topics to rosbag2 (MCAP) under action control
+ros2 launch rosetta turtlebot_recorder_server.launch.py log_level:=info
+
+# Start a timed recording
+ros2 action send_goal /record_episode rosetta_interfaces/action/RecordEpisode \
+  "{prompt: 'kitchen demo 1'}"
+# Cancel
+ros2 service call /record_episode/cancel std_srvs/srv/Trigger "{}"
+```
+#### 4) Export bag(s) to a LeRobot dataset
+```bash
+# Single bag
+ros2 run rosetta bag_to_lerobot -- \
+  --bag /path/to/bag_dir \
+  --contract $(ros2 pkg prefix rosetta)/share/rosetta/contracts/turtlebot.yaml \
+  --out /tmp/lerobot_ds
+
+# Or multiple bags
+ros2 run rosetta bag_to_lerobot -- \
+  --bags /bags/epi1 /bags/epi2 \
+  --contract .../turtlebot.yaml \
+  --out /tmp/lerobot_ds
+```
+Output (videos + parquet) is written under --out with LeRobot v3 layout.
+
+## Nodes
+### PolicyBridge node
+Runs a pretrained policy at a fixed rate_hz from the contract, sampling observations by header or receive time (also contract‑controlled), and publishing actions with a safety behavior when stopping.
+
+- **Executable**: `policy_bridge`
+
+- **Action server**: `/run_policy` (`rosetta_interfaces/RunPolicy`)
+
+- **Cancel helper**: `/run_policy/cancel` (`std_srvs/Trigger`)
+
+- **Publisher**: as declared in the contract (e.g., `/cmd_vel Twist`)
+
+#### Key parameters
+
+| Param                  | Type   | Default      | Notes                                                                             |
+| ---------------------- | ------ | ------------ | --------------------------------------------------------------------------------- |
+| `contract_path`        | string | **required** | Path to YAML/JSON contract.                                                       |
+| `policy_path`          | string | **required** | Directory with pretrained policy artifacts (e.g., `config.json`, weights, stats). |
+| `policy_device`        | string | `auto`       | `auto`, `cpu`, `cuda[:N]`, or `mps`.                                              |
+| `use_chunks`           | bool   | `True`       | Batch‑generate `actions_per_chunk` actions per policy call.                       |
+| `actions_per_chunk`    | int    | `25`         | Actions per chunk when chunking is enabled.                                       |
+| `chunk_size_threshold` | float  | `0.5`        | Low‑water mark (0..1 of chunk) before refilling the queue.                        |
+| `max_queue_actions`    | int    | `512`        | Max buffered actions.                                                             |
+| `use_header_time`      | bool   | `True`       | Prefer `msg.header.stamp` to sample observations.                                 |
+| `use_autocast`         | bool   | `False`      | Enable `torch.autocast` when supported.                                           |
+#### Safety on stop
+
+The action spec can set `safety_behavior: zeros|hold`. On stop/cancel/timeout, the node sends either a zero action or holds the last action.
+
+### EpisodeRecorderServer node
+Records a predefined set of topics directly to rosbag2 as they arrive. Recording is controlled via an action so you can start/stop programmatically and attach operator prompts for dataset export.
+
+- **Executable**: `recorder_server`
+
+- **Action server**: `/record_episode` (`rosetta_interfaces/RecordEpisode`)
+
+- **Cancel helper**: `/record_episode/cancel` (`std_srvs/Trigger`)
+
+- **Storage**: MCAP by default (from contract `recording.storage`).
+
+#### Key parameters
+| Param                    | Type   | Default         | Notes                                        |
+| ------------------------ | ------ | --------------- | -------------------------------------------- |
+| `contract_path`          | string | **required**    | Same contract used by PolicyBridge.          |
+| `bag_base_dir`           | string | `/tmp/episodes` | Episode directories created under this root. |
+| `storage_preset_profile` | string | `""`            | Optional rosbag2 preset (e.g., `zstd_fast`). |
+| `storage_config_uri`     | string | `""`            | Optional storage config (file URI or path).  |
+
+On stop, the node amends the bag’s `metadata.yaml` to store `custom_data.lerobot.operator_prompt` for later export.
+
+## Dataset export (`bag_to_lerobot.py`)
+
+Converts one or more bag directories into a LeRobot v3 dataset using the same decoders and resamplers as live inference, ensuring shape and dtype parity.
+
+```bash
+ ros2 run rosetta bag_to_lerobot -- --help
+ ```
+
+ #### Notable options
+
+- `--timestamp {contract,bag,header}` — choose the time base before resampling.
+
+- `--no-videos` — write PNG images instead of H.264 MP4.
+
+- `--image-threads / --image-processes` — tune I/O parallelism.
+
+- `--chunk-size --data-mb --video-mb` — size the parquet/video chunks.
+
+Depth images are converted to normalized float in H×W×3 (for LeRobot compatibility) while preserving REP‑117 special values (`NaN`, `±Inf`).
+
+## Contract file
+
+Contract file
+
+See `share/rosetta/contracts/turtlebot.yaml` for a complete, documented example. Highlights:
+
+- **observations**: list of streams (RGB, depth, state). Each specifies topic, type, optional `selector.names` for extracting scalars, `image.resize`, and an `align` policy (`hold`/`asof`/`drop`) with `stamp: header|receive`.
+
+- **actions**: what to publish, e.g. `geometry_msgs/Twist` to `/cmd_vel`, with `selector.names` (e.g. `[linear.x, angular.z]`), `from_tensor.clamp`, QoS, and a publish strategy.
+
+- **rate_hz / max_duration_s**: contract rate and episode timeout used across nodes.
+
+- **recording.storage**: default rosbag2 backend (MCAP recommended).
+
+## Extending (decoders/encoders)
+rosetta exposes tiny registries to convert between ROS messages and numpy/torch tensors:
+```python
+# Add a decoder for a custom message
+from rosetta.common.contract_utils import register_decoder
+
+@register_decoder("my_msgs/msg/Foo")
+def _dec_foo(msg, spec):
+    ...
+    return np.array([...], dtype=np.float32)
+
+# Add an encoder for a custom action type
+from rosetta.common.contract_utils import register_encoder
+
+@register_encoder("my_msgs/msg/Bar")
+def _enc_bar(names, action_vec, clamp):
+    ...
+    return msg_instance
+```
+
+With a corresponding contract entry, the bridge and exporter will automatically use your converters.
+

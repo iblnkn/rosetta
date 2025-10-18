@@ -5,14 +5,19 @@ import os
 
 def generate_launch_description():
     share = get_package_share_directory('rosetta')
-    contract = os.path.join(share, 'contracts', 'example.yaml')
+    contract = os.path.join(share, 'contracts', 'turtlebot.yaml')
     return LaunchDescription([
         Node(
             package='rosetta',
-            executable='policy_bridge',
-            name='policy_bridge',
+            executable='recorder_server',
+            name='recorder_server',
             output='screen',
             emulate_tty=True,
-            parameters=[{'contract_path': contract}],
+            parameters=[
+                {'contract_path': contract},
+                {'bag_base_dir': '/workspaces/reo_ws/datasets/bags'},
+                {'episode_seconds': 10},
+                {'use_sim_time': True},  
+                ],
         ),
     ])
