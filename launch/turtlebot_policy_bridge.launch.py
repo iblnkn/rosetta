@@ -18,7 +18,7 @@ def generate_launch_description():
         log_level_arg,
         Node(
             package='rosetta',
-            executable='policy_bridge',
+            executable='policy_bridge_node',
             name='policy_bridge',
             output='screen',
             emulate_tty=True,
