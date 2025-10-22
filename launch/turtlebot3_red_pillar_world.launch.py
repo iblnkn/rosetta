@@ -28,10 +28,11 @@ def generate_launch_description():
     )
 
     # Path to the parameter file for 100Hz clock rate
-    gazebo_params_file = PathJoinSubstitution([
-        '/workspaces/reo_ws',
-        'gazebo_params.yaml'
-    ])
+    gazebo_params_file = os.path.join(
+        get_package_share_directory('rosetta'),
+        'params',
+        'turtlebot3_red_pillar_world_params.yaml'
+    )
 
     gzserver_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(

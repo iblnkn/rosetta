@@ -18,6 +18,8 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         # Include all contract files
         (os.path.join('share', package_name, 'contracts'), glob('contracts/*.yaml')),
+        # Include all parameter files
+        (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
     ],
     # This is important as well
     install_requires=['setuptools'],
