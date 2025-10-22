@@ -1,4 +1,4 @@
-#!/home/rlab/rosetta_ws/venv/bin/python3
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 """
 Episode Recorder (ROS 2): stream-to-bag writer with action control.
