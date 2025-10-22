@@ -140,17 +140,26 @@ class PolicyBridge(Node):
         if not policy_path:
             raise RuntimeError("policy_bridge: 'policy_path' is required")
 
-        cfg_json = os.path.join(policy_path, "config.json")
+        # Check if policy_path is a Hugging Face repo ID (contains '/')
+        is_hf_repo = '/' in policy_path and not os.path.exists(policy_path)
+    
         cfg_type = ""  # Default value
-        try:
-            if os.path.exists(cfg_json):
-                with open(cfg_json, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-                    cfg_type = str(cfg.get("type", "")).lower()
-        except (OSError, json.JSONDecodeError, KeyError) as e:
-            self.get_logger().warning(
-                f"Could not read policy config.json: {e!r}"
-            )
+        if is_hf_repo:
+            # For Hugging Face repos, we'll let from_pretrained handle the download
+            # and get the config type from the loaded policy
+            self.get_logger().info(f"Detected Hugging Face repo: {policy_path}")
+        else:
+            # For local paths, try to read config.json
+            cfg_json = os.path.join(policy_path, "config.json")
+            try:
+                if os.path.exists(cfg_json):
+                    with open(cfg_json, "r", encoding="utf-8") as f:
+                        cfg = json.load(f)
+                        cfg_type = str(cfg.get("type", "")).lower()
+            except (OSError, json.JSONDecodeError, KeyError) as e:
+                self.get_logger().warning(
+                    f"Could not read policy config.json: {e!r}"
+                )
 
         req = str(self.get_parameter("policy_device").value)
         self.device = _device_from_param(req)
@@ -160,10 +169,37 @@ class PolicyBridge(Node):
             self.get_logger().warning(f"policy_device='{req}' requested; using '{self.device}' instead.")
         self.get_logger().info(f"Using device: {self.device}")
 
-        PolicyCls = get_policy_class(cfg_type)
-        self.policy = PolicyCls.from_pretrained(policy_path)
-        self.policy.to(self.device)
-        self.policy.eval()
+        if is_hf_repo:
+            # For Hugging Face repos, we need to load the policy first to get the config type
+            # We'll use a temporary approach: try common policy types
+            policy_types_to_try = ["act", "diffusion", "pi0", "pi05", "smolvla"]
+            policy_loaded = False
+            
+            for policy_type in policy_types_to_try:
+                try:
+                    self.get_logger().info(f"Trying to load as {policy_type} policy...")
+                    PolicyCls = get_policy_class(policy_type)
+                    self.policy = PolicyCls.from_pretrained(policy_path)
+                    self.policy.to(self.device)
+                    self.policy.eval()
+                    policy_loaded = True
+                    cfg_type = policy_type
+                    self.get_logger().info(f"Successfully loaded {policy_type} policy from {policy_path}")
+                    break
+                except Exception as e:
+                    self.get_logger().debug(f"Failed to load as {policy_type}: {e}")
+                    continue
+            
+            if not policy_loaded:
+                raise RuntimeError(f"Could not load policy from {policy_path} with any known policy type")
+        else:
+            # For local paths, use the config type we read earlier
+            if not cfg_type:
+                raise RuntimeError(f"Could not determine policy type from {policy_path}")
+            PolicyCls = get_policy_class(cfg_type)
+            self.policy = PolicyCls.from_pretrained(policy_path)
+            self.policy.to(self.device)
+            self.policy.eval()
 
         # Load dataset stats from the policy artifact if present
         ds_stats = None
@@ -352,9 +388,9 @@ class PolicyBridge(Node):
     def _read_params(self) -> _RuntimeParams:
         return _RuntimeParams(
             use_chunks=bool(self.get_parameter("use_chunks").value),
-            actions_per_chunk=self.get_parameter("actions_per_chunk").value,
+            actions_per_chunk=self.get_parameter("actions_per_chunk").value, #TODO: this should come from the model/policy config. This nomenclature is confusing and not consistent with LeRobot. 
             chunk_size_threshold=float(
-                self.get_parameter("chunk_size_threshold").value or 0.5
+                self.get_parameter("chunk_size_threshold").value or 0.5 #TODO: also inconsistent with LeRobot naming.
             ),
             use_header_time=bool(self.get_parameter("use_header_time").value),
             use_autocast=bool(self.get_parameter("use_autocast").value),

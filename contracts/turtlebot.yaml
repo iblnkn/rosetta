@@ -2,7 +2,7 @@ name: turtlebot_diff_drive
 version: 1
 
 # Robot type for LeRobot dataset metadata
-robot_type: diff_drive
+robot_type: burger
 
 # Recording parameters
 rate_hz: 20  # This must be an integer
@@ -11,7 +11,7 @@ max_duration_s: 90.0
 # Policy inference parameters # Generate 5 actions per inference (reasonable for 0.5Hz)
 observations:
   - key: observation.images.front
-    topic: /intel_realsense_r200_rgb/image_raw
+    topic: /camera/image_raw
     type: sensor_msgs/msg/Image
     image:
       # bag_to_lerobot decodes to RGB and resizes here

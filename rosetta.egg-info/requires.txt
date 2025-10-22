@@ -1,0 +1,6 @@
+setuptools
+
+[ml]
+torch
+torchvision
+lerobot>=0.7

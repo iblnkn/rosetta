@@ -17,38 +17,31 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
 
 ## Contents
 
-* [rosetta — Contract-driven ROS 2 ⇄ LeRobot policy bridge, recorder, and dataset exporter](#rosetta--contract-driven-ros-2--lerobot-policy-bridge-recorder-and-dataset-exporter)
-
-  * [Contents](#contents)
-  * [Why contracts?](#why-contracts)
-  * [Install & build](#install--build)
-
-    * [Prerequisites](#prerequisites)
-    * [Resolve ROS dependencies](#resolve-ros-dependencies)
-    * [Build](#build)
-    * [ML dependencies](#ml-dependencies)
-  * [Quick start](#quick-start)
-
-    * [0) Install Gazebo and TurtleBot3](#0-install-gazebo-and-turtlebot3)
-    * [1) Use the included TurtleBot contract](#1-use-the-included-turtlebot-contract)
-    * [2) Run a policy bridge](#2-run-a-policy-bridge)
-    * [3) Record an episode](#3-record-an-episode)
-    * [4) Export bag(s) to a LeRobot dataset](#4-export-bags-to-a-lerobot-dataset)
-    * [5) Train a LeRobot model](#5-train-a-lerobot-model)
-  * [Nodes](#nodes)
-
-    * [PolicyBridge node](#policybridge-node)
-
-      * [Key parameters](#key-parameters)
-      * [Safety on stop](#safety-on-stop)
-    * [EpisodeRecorderServer node](#episoderecorderserver-node)
-
-      * [Key parameters](#key-parameters-1)
-  * [Dataset export (`bag_to_lerobot.py`)](#dataset-export-bag_to_lerobotpy)
-
-    * [Notable options](#notable-options)
-  * [Contract file](#contract-file)
-  * [Extending (decoders/encoders)](#extending-decodersencoders)
+- [rosetta — Contract-driven ROS 2 ⇄ LeRobot policy bridge, recorder, and dataset exporter](#rosetta--contract-driven-ros-2--lerobot-policy-bridge-recorder-and-dataset-exporter)
+  - [Contents](#contents)
+  - [Why contracts?](#why-contracts)
+  - [Install \& build](#install--build)
+    - [Prerequisites](#prerequisites)
+    - [Resolve ROS dependencies](#resolve-ros-dependencies)
+    - [Build](#build)
+    - [ML dependencies](#ml-dependencies)
+  - [Quick start](#quick-start)
+      - [0) Install Gazebo and TurtleBot3](#0-install-gazebo-and-turtlebot3)
+      - [1) Use the included TurtleBot contract](#1-use-the-included-turtlebot-contract)
+      - [2) Run a policy bridge](#2-run-a-policy-bridge)
+      - [3) Record an episode](#3-record-an-episode)
+      - [4) Export bag(s) to a LeRobot dataset](#4-export-bags-to-a-lerobot-dataset)
+      - [5) Train a LeRobot model](#5-train-a-lerobot-model)
+  - [Nodes](#nodes)
+    - [PolicyBridge node](#policybridge-node)
+      - [Key parameters](#key-parameters)
+      - [Safety on stop](#safety-on-stop)
+    - [EpisodeRecorderServer node](#episoderecorderserver-node)
+      - [Key parameters](#key-parameters-1)
+  - [Dataset export (`bag_to_lerobot.py`)](#dataset-export-bag_to_lerobotpy)
+      - [Notable options](#notable-options)
+  - [Contract file](#contract-file)
+  - [Extending (decoders/encoders)](#extending-decodersencoders)
 
 ---
 

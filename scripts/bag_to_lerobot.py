@@ -280,7 +280,7 @@ def export_bags_to_lerobot(
     
     for sv in specs:
         k, ft, is_img = feature_from_spec(sv, use_videos)
-        
+
         # Handle multiple observation.state specs
         if k == "observation.state":
             state_specs.append(sv)

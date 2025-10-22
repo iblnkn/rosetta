@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: rosetta
+Version: 0.0.0
+Summary: TODO: Package description
+Maintainer: ros
+Maintainer-email: isaac@dirtrobotics.com
+License: Apache-2.0
+License-File: LICENSE
+Requires-Dist: setuptools
+Provides-Extra: ml
+Requires-Dist: torch; extra == "ml"
+Requires-Dist: torchvision; extra == "ml"
+Requires-Dist: lerobot>=0.7; extra == "ml"
+Dynamic: license
+Dynamic: license-file
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: summary

@@ -24,8 +24,9 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[
                 {'contract_path': contract},
-                {'policy_path': '/workspaces/reo_ws/models/pi05/pretrained_model'},
+                {'policy_path': 'iblnk/act-turtlebot3_demo'},
                 {'use_sim_time': True},
+                #TODO add inference specific parameters here
             ],
             arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
         ),

@@ -620,4 +620,4 @@ def contract_fingerprint(contract) -> str:
     return hashlib.sha256(json_str.encode('utf-8')).hexdigest()[:16]
 
 
-from . import decoders, encoders  # This registers all decoders and encoders
+# Note: decoders and encoders are imported separately when needed to avoid circular imports
