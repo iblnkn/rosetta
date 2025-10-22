@@ -110,6 +110,10 @@ Install Gazebo (Gazebo Classic—deprecated, but the easiest path here for now):
 
 ```bash
 sudo apt install ros-humble-gazebo-*
+sudo apt install ros-humble-turtlebot3-msgs
+sudo apt install ros-humble-turtlebot3
+sudo apt install ros-humble-turtlebot3-simulations
+
 ```
 
 Create a test workspace and install the TurtleBot3 simulation packages:
@@ -117,9 +121,7 @@ Create a test workspace and install the TurtleBot3 simulation packages:
 ```bash
 mkdir -p ~/rosetta_ws/src
 cd ~/rosetta_ws/src
-git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_msgs.git
-git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3.git
-git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_simulations.git
+git@github.com:iblnkn/turtlebot3_simulations.git
 sudo apt install python3-colcon-common-extensions
 cd ~/rosetta_ws
 colcon build --symlink-install
@@ -130,8 +132,8 @@ source ~/.bashrc
 Launch TurtleBot3 in Gazebo:
 
 ```bash
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+export TURTLEBOT3_MODEL=burger
+ros2 launch rosetta turtlebot3_red_pillar_world.launch.py
 ```
 
 #### 1) Use the included TurtleBot contract
