@@ -1,7 +1,7 @@
 
 ---
 
-# rosetta — Contract-driven ROS 2 ⇄ LeRobot policy bridge, recorder, and dataset exporter
+# rosetta — ROS 2 ⇄ LeRobot bridge
 
 **rosetta** is a ROS 2 package that standardizes the interface between ROS 2 topics and LeRobot policies using a small YAML **contract**. It provides:
 
