@@ -19,6 +19,7 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
 
 - [rosetta — Contract-driven ROS 2 ⇄ LeRobot policy bridge, recorder, and dataset exporter](#rosetta--contract-driven-ros-2--lerobot-policy-bridge-recorder-and-dataset-exporter)
   - [Contents](#contents)
+      - [Examples turtlebot trained on ACT.](#examples-turtlebot-trained-on-act)
   - [Why contracts?](#why-contracts)
   - [Install \& build](#install--build)
     - [Prerequisites](#prerequisites)
@@ -42,6 +43,25 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
       - [Notable options](#notable-options)
   - [Contract file](#contract-file)
   - [Extending (decoders/encoders)](#extending-decodersencoders)
+
+---
+
+#### Examples turtlebot trained on ACT. 
+
+<table>
+  <tr>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/media/Drive up to the red pillar_1.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/media/Drive up to the red pillar_2.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/media/Drive up to the red pillar_3.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/media/Drive up to the red pillar_4.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
+  </tr>
+  <tr>
+    <td align="center">ACT policy: "drive up to the red pillar</td>
+    <td align="center">ACT policy: "drive up to the red pillar</td>
+    <td align="center">ACT policy: "drive up to the red pillar</td>
+    <td align="center">ACT policy: "drive up to the red pillar</td>
+  </tr>
+</table>
 
 ---
 
