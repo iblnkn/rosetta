@@ -151,10 +151,10 @@ Send a goal to start/stop the run (fields may vary with your `rosetta_interfaces
 
 ```bash
 # Start a run with an optional prompt/task.
-# (The example ACT model is trained on a single action—drive up to a black wall—
+# (The example ACT model is trained on a single action—drive up to the red pillar—
 # and does not ingest the prompt.)
 ros2 action send_goal /run_policy rosetta_interfaces/action/RunPolicy \
-  "{prompt: 'drive up to a black wall'}"
+  "{prompt: 'drive up to the red pillar}"
 ```
 
 ```bash
