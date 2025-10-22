@@ -1,13 +1,11 @@
 
----
-
 # rosetta — ROS 2 ⇄ LeRobot bridge
 
 **rosetta** is a ROS 2 package that standardizes the interface between ROS 2 topics and LeRobot policies using a small YAML **contract**. It provides:
 
-* **PolicyBridge** — runs a pretrained policy live, subscribing to topics as observations and publishing topics as actions, exactly as defined by the contract.
-* **EpisodeRecorderServer** — records raw ROS 2 topics required by the contract straight to rosbag2. Uses ROS 2 actions to start/stop recording and appends task prompts to bagfile metadata for later processing.
-* **bag_to_lerobot.py** — converts recorded bags into a ready-to-train **LeRobot v3** dataset using the same decoding/resampling logic as live inference.
+- **PolicyBridge** — runs a pretrained policy live, subscribing to topics as observations and publishing topics as actions, exactly as defined by the contract.
+- **EpisodeRecorderServer** — records raw ROS 2 topics required by the contract straight to rosbag2. Uses ROS 2 actions to start/stop recording and appends task prompts to bagfile metadata for later processing.
+- **bag_to_lerobot.py** — converts recorded bags into a ready-to-train **LeRobot v3** dataset using the same decoding/resampling logic as live inference.
 
 This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
 
@@ -17,22 +15,26 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
 
 ## Contents
 
-- [rosetta — Contract-driven ROS 2 ⇄ LeRobot policy bridge, recorder, and dataset exporter](#rosetta--contract-driven-ros-2--lerobot-policy-bridge-recorder-and-dataset-exporter)
+- [rosetta — ROS 2 ⇄ LeRobot bridge](#rosetta--ros-2--lerobot-bridge)
   - [Contents](#contents)
-      - [Examples turtlebot trained on ACT.](#examples-turtlebot-trained-on-act)
+    - [Examples — TurtleBot trained on ACT](#examples--turtlebot-trained-on-act)
   - [Why contracts?](#why-contracts)
-  - [Install \& build](#install--build)
+  - [Install \& Build](#install--build)
     - [Prerequisites](#prerequisites)
-    - [Resolve ROS dependencies](#resolve-ros-dependencies)
-    - [Build](#build)
-    - [ML dependencies](#ml-dependencies)
+      - [ML extras](#ml-extras)
   - [Quick start](#quick-start)
-      - [0) Install Gazebo and TurtleBot3](#0-install-gazebo-and-turtlebot3)
-      - [1) Use the included TurtleBot contract](#1-use-the-included-turtlebot-contract)
-      - [2) Run a policy bridge](#2-run-a-policy-bridge)
-      - [3) Record an episode](#3-record-an-episode)
-      - [4) Export bag(s) to a LeRobot dataset](#4-export-bags-to-a-lerobot-dataset)
-      - [5) Train a LeRobot model](#5-train-a-lerobot-model)
+    - [0) Workspace, venv, Gazebo/TB3](#0-workspace-venv-gazebotb3)
+      - [Create workspace + venv (system Python)](#create-workspace--venv-system-python)
+      - [Install Gazebo Classic + TurtleBot3 packages](#install-gazebo-classic--turtlebot3-packages)
+      - [Install LeRobot (editable) into `libs/`](#install-lerobot-editable-into-libs)
+    - [1) Pull sources and build](#1-pull-sources-and-build)
+    - [2) Launch TurtleBot3 in Gazebo](#2-launch-turtlebot3-in-gazebo)
+    - [Notes \& gotchas](#notes--gotchas)
+  - [Contracts](#contracts)
+    - [Run a policy bridge](#run-a-policy-bridge)
+    - [Record an episode](#record-an-episode)
+    - [Export bag(s) to a LeRobot dataset](#export-bags-to-a-lerobot-dataset)
+    - [Train a LeRobot model](#train-a-lerobot-model)
   - [Nodes](#nodes)
     - [PolicyBridge node](#policybridge-node)
       - [Key parameters](#key-parameters)
@@ -40,26 +42,26 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
     - [EpisodeRecorderServer node](#episoderecorderserver-node)
       - [Key parameters](#key-parameters-1)
   - [Dataset export (`bag_to_lerobot.py`)](#dataset-export-bag_to_lerobotpy)
-      - [Notable options](#notable-options)
+    - [Notable options](#notable-options)
   - [Contract file](#contract-file)
   - [Extending (decoders/encoders)](#extending-decodersencoders)
 
 ---
 
-#### Examples turtlebot trained on ACT. 
+### Examples — TurtleBot trained on ACT
 
 <table>
   <tr>
-    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_1.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
-    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_2.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
-    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_3.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
-    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_4.gif" width="100%" alt=ACT policy: drive up to the red pillar/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_1.gif" width="100%" alt="ACT policy: drive up to the red pillar"/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_2.gif" width="100%" alt="ACT policy: drive up to the red pillar"/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_3.gif" width="100%" alt="ACT policy: drive up to the red pillar"/></td>
+    <td><img src="https://raw.githubusercontent.com/iblnkn/rosetta/main/media/Drive up to the red pillar_4.gif" width="100%" alt="ACT policy: drive up to the red pillar"/></td>
   </tr>
   <tr>
-    <td align="center">ACT policy: "drive up to the red pillar</td>
-    <td align="center">ACT policy: "drive up to the red pillar</td>
-    <td align="center">ACT policy: "drive up to the red pillar</td>
-    <td align="center">ACT policy: "drive up to the red pillar</td>
+    <td align="center">ACT policy: "drive up to the red pillar"</td>
+    <td align="center">ACT policy: "drive up to the red pillar"</td>
+    <td align="center">ACT policy: "drive up to the red pillar"</td>
+    <td align="center">ACT policy: "drive up to the red pillar"</td>
   </tr>
 </table>
 
@@ -69,91 +71,125 @@ This keeps **train ↔ serve ↔ record** aligned and minimizes data/shape skew.
 
 A **contract** is a small YAML that declares **exactly** which topics, message types, fields, rates, and timing rules a policy consumes and what it publishes. rosetta uses the same contract to:
 
-* subscribe & resample observations in the bridge,
-* encode actions for publishing,
-* and decode & resample bag files for dataset export.
+- subscribe & resample observations in the bridge,
+- encode actions for publishing,
+- and decode & resample bag files for dataset export.
 
 That **single source of truth** eliminates mismatched shapes and prevents timestamps/policies from drifting between training and serving.
 
 ---
 
-## Install & build
+## Install & Build
 
 ### Prerequisites
 
-* ROS 2 (**Humble**)
-* LeRobot
-* System Python **3.10+**
-* Runtime ROS dependencies are resolved via `rosdep`
+- **ROS 2 Humble** (desktop install recommended)
+- **System Python 3.10** (match the system interpreter used to build ROS binaries)
+- **rosdep** for runtime ROS deps
 
-> Policy execution and dataset export additionally require PyTorch and LeRobot; see **ML dependencies** below.
+> ROS binaries are compiled against the system Python. If you use a virtualenv, base it on the **system interpreter**, and don’t use conda for ROS 2 binaries. See ROS docs: “Using Python Packages with ROS 2”.
 
-### Resolve ROS dependencies
+#### ML extras
 
-```bash
-# From your workspace root (e.g., ~/ws)
-rosdep install --from-paths src --ignore-src -r -y
-```
+Live policies / dataset export (PyTorch + LeRobot):
 
-### Build
-
-```bash
-colcon build --packages-select rosetta
-source install/setup.bash
-```
-
-### ML dependencies
-
-For live policies and dataset export:
-
-```bash
-# Install LeRobot
-pip install lerobot
-```
-
-If you don’t need live inference or export, you can skip these Python extras.
+LeRobot supports both PyPI and editable-from-source installs, with optional extras (e.g., `[aloha]`, `[pusht]`, `[feetech]`). See the LeRobot docs.
 
 ---
 
 ## Quick start
 
-#### 0) Install Gazebo and TurtleBot3
+### 0) Workspace, venv, Gazebo/TB3
 
-Install Gazebo (Gazebo Classic—deprecated, but the easiest path here for now):
+> **Note**: Gazebo Classic is EOL/deprecated; we use it here because it’s still the shortest path for TB3 sim. Plan to migrate to **new Gazebo**.
+
+#### Create workspace + venv (system Python)
+
+We keep the venv **ignored by colcon** per ROS guidance.
 
 ```bash
-sudo apt install ros-humble-gazebo-*
-sudo apt install ros-humble-turtlebot3-msgs
-sudo apt install ros-humble-turtlebot3
-sudo apt install ros-humble-turtlebot3-simulations
+# Workspace skeleton
+mkdir -p ~/rosetta_ws/src ~/rosetta_ws/libs
+cd ~/rosetta_ws
 
+# venv from the system interpreter (ROS 2 binary-compatible)
+python3.10 -m venv ./venv
+touch ./venv/COLCON_IGNORE
+source ./venv/bin/activate
+
+# Base Python deps used by various ROS tools
+python -m pip install -U pip
+pip install empy catkin_pkg lxml lark
 ```
 
-Create a test workspace and install the TurtleBot3 simulation packages:
+#### Install Gazebo Classic + TurtleBot3 packages
 
 ```bash
-mkdir -p ~/rosetta_ws/src
+sudo apt update
+sudo apt install -y ros-humble-gazebo-* \
+                    ros-humble-turtlebot3-msgs \
+                    ros-humble-turtlebot3 \
+                    ros-humble-turtlebot3-simulations \
+                    ffmpeg
+```
+
+#### Install LeRobot (editable) into `libs/`
+
+```bash
+cd ~/rosetta_ws/libs
+git clone https://github.com/huggingface/lerobot.git
+cd lerobot
+pip install -e .
+# (Optional) For extras, see LeRobot docs, e.g.:
+# pip install -e ".[aloha,pusht]"
+```
+
+### 1) Pull sources and build
+
+```bash
 cd ~/rosetta_ws/src
-git@github.com:iblnkn/turtlebot3_simulations.git
-sudo apt install python3-colcon-common-extensions
+git clone https://github.com/iblnkn/rosetta.git
+git clone https://github.com/iblnkn/rosetta_interfaces.git
+git clone https://github.com/iblnkn/turtlebot3_simulations.git
+
+# Back to workspace root
 cd ~/rosetta_ws
-colcon build --symlink-install
+
+# Resolve ROS dependencies
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+
+# Source ROS and build
+source /opt/ros/humble/setup.bash
+colcon build --packages-ignore turtlebot3_gazebo turtlebot3_fake_node
+
+# Persist overlay
 echo 'source ~/rosetta_ws/install/setup.bash' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-Launch TurtleBot3 in Gazebo:
+### 2) Launch TurtleBot3 in Gazebo
 
 ```bash
 export TURTLEBOT3_MODEL=burger
 ros2 launch rosetta turtlebot3_red_pillar_world.launch.py
 ```
 
-#### 1) Use the included TurtleBot contract
+---
 
-This package ships `contracts/turtlebot.yaml`, describing RGB, depth, state (joints/odom/imu), and a `cmd_vel` action.
+### Notes & gotchas
 
-#### 2) Run a policy bridge
+* **Python 3.10**: Use the system `python3.10` that matches Humble’s binaries for venv creation; avoid conda for ROS binary installs.
+* **LeRobot verification** (optional): after install, `which lerobot-train && lerobot-train --help` to confirm CLI is on `PATH`.
+* **Gazebo migration**: begin tracking new Gazebo migration docs; Classic is deprecating across ROS packages.
+
+---
+
+## Contracts
+
+This repo ships `contracts/turtlebot.yaml` describing RGB, depth, state (joints/odom/imu), and a `cmd_vel` action. Use it as-is for the included TurtleBot contract.
+
+### Run a policy bridge
 
 ```bash
 # Edit policy_path to your pretrained model directory, or keep the default,
@@ -169,7 +205,7 @@ Send a goal to start/stop the run (fields may vary with your `rosetta_interfaces
 # (The example ACT model is trained on a single action—drive up to the red pillar—
 # and does not ingest the prompt.)
 ros2 action send_goal /run_policy rosetta_interfaces/action/RunPolicy \
-  "{prompt: 'drive up to the red pillar}"
+  "{prompt: 'drive up to the red pillar'}"
 ```
 
 ```bash
@@ -177,7 +213,7 @@ ros2 action send_goal /run_policy rosetta_interfaces/action/RunPolicy \
 ros2 service call /run_policy/cancel std_srvs/srv/Trigger "{}"
 ```
 
-#### 3) Record an episode
+### Record an episode
 
 ```bash
 # Separate node that writes topics to rosbag2 (MCAP) under action control
@@ -191,7 +227,7 @@ ros2 action send_goal /record_episode rosetta_interfaces/action/RecordEpisode \
 ros2 service call /record_episode/cancel std_srvs/srv/Trigger "{}"
 ```
 
-#### 4) Export bag(s) to a LeRobot dataset
+### Export bag(s) to a LeRobot dataset
 
 ```bash
 # Single bag
@@ -209,7 +245,7 @@ ros2 run rosetta bag_to_lerobot -- \
 
 Output (videos + parquet) is written under `--out` with the LeRobot v3 layout.
 
-#### 5) Train a LeRobot model
+### Train a LeRobot model
 
 Follow LeRobot guidance for how best to train a model.
 
@@ -288,7 +324,7 @@ Converts one or more bag directories into a LeRobot v3 dataset using the same de
 ros2 run rosetta bag_to_lerobot -- --help
 ```
 
-#### Notable options
+### Notable options
 
 * `--timestamp {contract,bag,header}` — choose the time base before resampling.
 * `--no-videos` — write PNG images instead of H.264 MP4.
