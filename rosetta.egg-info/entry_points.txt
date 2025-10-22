@@ -1,3 +1,0 @@
-[console_scripts]
-policy_bridge = rosetta.policy_bridge_node:main
-recorder_server = rosetta.episode_recorder:main
