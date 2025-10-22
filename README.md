@@ -201,7 +201,7 @@ Follow LeRobot guidance for how best to train a model.
 ```bash
 # Example
 lerobot-train \
-  --dataset.repo_id=$iblnk/turtlebot3_example \
+  --dataset.repo_id=$iblnk/turtlebot3_demo \
   --policy.type=act \
   --output_dir=lerobot_models/act/ \
   --job_name=act_turtlebot3_example \
