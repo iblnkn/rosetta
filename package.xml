@@ -11,6 +11,8 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
+  <build_depend>rosetta_interfaces</build_depend>
+  
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosetta_interfaces</exec_depend>
   <exec_depend>rosbag2_py</exec_depend>
