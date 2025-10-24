@@ -249,13 +249,26 @@ class PolicyBridge(Node):
         self._act_specs = [s for s in self._specs if s.is_action]
         #TODO: process _task_specs
 
-        #TODO: Multiple action specs are not supported yet. We want to support multiple 
-        #possible action topic output at the very least.
-        if len(self._act_specs) != 1:
+        # Handle multiple action specs with the same key (consolidate them)
+        self._action_specs_by_key: Dict[str, List[SpecView]] = {}
+        for spec in self._act_specs:
+            if spec.key not in self._action_specs_by_key:
+                self._action_specs_by_key[spec.key] = []
+            self._action_specs_by_key[spec.key].append(spec)
+        
+        # For now, we only support one action key (but multiple specs with that key)
+        if len(self._action_specs_by_key) != 1:
             raise ValueError(
-                "This bridge expects exactly one action spec in the contract."
+                f"This bridge expects exactly one action key in the contract, got {list(self._action_specs_by_key.keys())}. "
+                f"Multiple action keys (e.g., action.arm, action.gripper) are not yet supported."
             )
-        self._act_spec = self._act_specs[0]
+        
+        # Get the action key and specs
+        self._action_key = list(self._action_specs_by_key.keys())[0]
+        self._action_specs = self._action_specs_by_key[self._action_key]
+        
+        # For backward compatibility, keep the first spec as the "primary" one
+        self._act_spec = self._action_specs[0]
 
         self.fps = int(self._contract.rate_hz)
         if self.fps <= 0:
@@ -297,12 +310,19 @@ class PolicyBridge(Node):
         self.get_logger().info(
             f"Subscribed to {len(self._subs)} observation streams.")
 
-        # ---------------- Publisher ----------------
-        act_qos_dict = self._act_qos_by_key.get(self._act_spec.key)
-        pub_qos = qos_profile_from_dict(act_qos_dict) or QoSProfile(depth=10)
-        self._act_pub = self.create_publisher(
-            get_message(self._act_spec.ros_type), self._act_spec.topic, pub_qos
-        )
+        # ---------------- Publishers ----------------
+        self._act_pubs: Dict[str, Any] = {}
+        for spec in self._action_specs:
+            act_qos_dict = self._act_qos_by_key.get(spec.key)
+            pub_qos = qos_profile_from_dict(act_qos_dict) or QoSProfile(depth=10)
+            pub = self.create_publisher(
+                get_message(spec.ros_type), spec.topic, pub_qos
+            )
+            self._act_pubs[spec.topic] = pub
+            self.get_logger().info(f"Created publisher for {spec.topic} ({spec.ros_type})")
+        
+        # For backward compatibility, keep the primary publisher reference
+        self._act_pub = self._act_pubs[self._act_spec.topic]
 
         self._cancel_srv = self.create_service(
             Trigger, f"{_ACTION_NAME}/cancel", self._cancel_service_cb,
@@ -571,8 +591,11 @@ class PolicyBridge(Node):
         if self._safety_behavior == "hold" and self._last_action is not None:
             return self._last_action.copy()
         else:
-            n = max(len(self._act_spec.names or []), 2)
-            return np.zeros((n,), dtype=np.float32)
+            # Calculate total action vector size for all specs
+            total_size = sum(len(spec.names or []) for spec in self._action_specs)
+            if total_size == 0:
+                total_size = 2  # fallback minimum
+            return np.zeros((total_size,), dtype=np.float32)
 
     def _publish_action_vector(self, action_vec: np.ndarray, increment_count: bool = True, 
                               log_message: str = None, error_context: str = "action") -> None:
@@ -585,18 +608,23 @@ class PolicyBridge(Node):
             error_context: Context string for error messages
         """
         try:
-            msg = encode_value(
-                ros_type=self._act_spec.ros_type,
-                names=self._act_spec.names,
-                action_vec=action_vec,
-                clamp=getattr(self._act_spec, "clamp", None),
-            )
-            self._act_pub.publish(msg)
+            # Handle multiple action specs by splitting the action vector
+            if len(self._action_specs) > 1:
+                self._publish_multiple_actions(action_vec, increment_count, log_message, error_context)
+            else:
+                # Single action spec (original behavior)
+                msg = encode_value(
+                    ros_type=self._act_spec.ros_type,
+                    names=self._act_spec.names,
+                    action_vec=action_vec,
+                    clamp=getattr(self._act_spec, "clamp", None),
+                )
+                self._act_pub.publish(msg)
 
-            if increment_count:
-                self._pub_count += 1
-            if log_message:
-                self.get_logger().info(log_message)
+                if increment_count:
+                    self._pub_count += 1
+                if log_message:
+                    self.get_logger().info(log_message)
 
         except (RuntimeError, ValueError, TypeError) as e:
             action_type = getattr(self._act_spec, "ros_type", "unknown")
@@ -607,6 +635,54 @@ class PolicyBridge(Node):
                 f"{error_context} publish error: {e} "
                 f"(type={action_type}, names_count={names_count}, vec_len={vec_len})"
             )
+
+    def _publish_multiple_actions(self, action_vec: np.ndarray, increment_count: bool = True,
+                                log_message: str = None, error_context: str = "action") -> None:
+        """Publish action vector to multiple action specs by splitting based on names."""
+        start_idx = 0
+        published_count = 0
+        
+        for spec in self._action_specs:
+            try:
+                # Calculate how many values this spec needs
+                spec_len = len(spec.names) if spec.names else 0
+                if spec_len == 0:
+                    continue
+                    
+                # Extract the portion of the action vector for this spec
+                end_idx = start_idx + spec_len
+                if end_idx > len(action_vec):
+                    self.get_logger().error(
+                        f"Action vector too short for spec {spec.topic}: "
+                        f"need {spec_len} values, have {len(action_vec) - start_idx}"
+                    )
+                    break
+                    
+                spec_action_vec = action_vec[start_idx:end_idx]
+                
+                # Encode and publish
+                msg = encode_value(
+                    ros_type=spec.ros_type,
+                    names=spec.names,
+                    action_vec=spec_action_vec,
+                    clamp=getattr(spec, "clamp", None),
+                )
+                
+                pub = self._act_pubs[spec.topic]
+                pub.publish(msg)
+                published_count += 1
+                start_idx = end_idx
+                
+            except (RuntimeError, ValueError, TypeError) as e:
+                self.get_logger().error(
+                    f"{error_context} publish error for {spec.topic}: {e} "
+                    f"(type={spec.ros_type}, names_count={len(spec.names) if spec.names else 0})"
+                )
+        
+        if increment_count and published_count > 0:
+            self._pub_count += 1
+        if log_message and published_count > 0:
+            self.get_logger().info(f"{log_message} (published to {published_count} topics)")
 
     def _publish_safety_command(self, increment_count: bool = True, log_message: str = None) -> None:
         """Publish safety command (zeros or hold last action)."""

@@ -9,8 +9,8 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='rosetta',
-            executable='recorder_server',
-            name='recorder_server',
+            executable='episode_recorder',
+            name='episode_recorder',
             output='screen',
             emulate_tty=True,
             parameters=[

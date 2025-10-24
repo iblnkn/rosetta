@@ -133,3 +133,76 @@ def _enc_i32_array(
         arr = np.clip(arr, clamp[0], clamp[1])
     msg.data = [int(round(float(x))) for x in arr.tolist()]
     return msg
+
+
+@register_encoder("control_msgs/msg/MultiDOFCommand")
+def _enc_multidof_command(
+    names: List[str], action_vec: Sequence[float], clamp: Optional[Tuple[float, float]]
+):
+    """MultiDOFCommand encoder with special handling for values and values_dot fields."""
+    msg_cls = get_message("control_msgs/msg/MultiDOFCommand")
+    msg = msg_cls()
+    
+    # Apply clamping if specified
+    arr = np.asarray(action_vec, dtype=np.float32).reshape(-1)
+    if clamp:
+        arr = np.clip(arr, clamp[0], clamp[1])
+    
+    if not names:
+        # Default behavior: use all values for values field, empty values_dot
+        msg.dof_names = [f"dof_{i}" for i in range(len(arr))]
+        msg.values = [float(x) for x in arr.tolist()]
+        msg.values_dot = []
+        return msg
+    
+    # Parse names to separate values and values_dot
+    values_names = []
+    values_dot_names = []
+    values_indices = []
+    values_dot_indices = []
+    
+    for i, name in enumerate(names):
+        if name.startswith("values_dot."):
+            # Extract DOF name from "values_dot.dof_name"
+            dof_name = name[11:]  # Remove "values_dot." prefix
+            values_dot_names.append(dof_name)
+            values_dot_indices.append(i)
+        elif name.startswith("values."):
+            # Extract DOF name from "values.dof_name"
+            dof_name = name[7:]  # Remove "values." prefix
+            values_names.append(dof_name)
+            values_indices.append(i)
+        else:
+            # Default to values if no prefix
+            values_names.append(name)
+            values_indices.append(i)
+    
+    # Set DOF names (union of all DOF names from both values and values_dot)
+    all_dof_names = list(dict.fromkeys(values_names + values_dot_names))  # Preserve order, remove duplicates
+    msg.dof_names = all_dof_names
+    
+    # Map values to DOF names
+    msg.values = []
+    for dof_name in all_dof_names:
+        if dof_name in values_names:
+            idx = values_names.index(dof_name)
+            if idx < len(values_indices) and values_indices[idx] < len(arr):
+                msg.values.append(float(arr[values_indices[idx]]))
+            else:
+                msg.values.append(0.0)
+        else:
+            msg.values.append(0.0)
+    
+    # Map values_dot to DOF names
+    msg.values_dot = []
+    for dof_name in all_dof_names:
+        if dof_name in values_dot_names:
+            idx = values_dot_names.index(dof_name)
+            if idx < len(values_dot_indices) and values_dot_indices[idx] < len(arr):
+                msg.values_dot.append(float(arr[values_dot_indices[idx]]))
+            else:
+                msg.values_dot.append(0.0)
+        else:
+            msg.values_dot.append(0.0)
+    
+    return msg

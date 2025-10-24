@@ -270,6 +270,18 @@ def _dec_twist(msg, spec):
     ])
 
 
+@register_decoder("control_msgs/msg/MultiDOFCommand")
+def _dec_multidof_command(msg, spec):
+    """MultiDOFCommand decoder: try dotted names first, then use default behavior."""
+    if spec.names:
+        return _decode_via_names(msg, spec.names)
+    
+    # Default: return values and values_dot concatenated
+    values = np.asarray(msg.values, dtype=np.float32) if msg.values else np.array([], dtype=np.float32)
+    values_dot = np.asarray(msg.values_dot, dtype=np.float32) if msg.values_dot else np.array([], dtype=np.float32)
+    return np.concatenate([values, values_dot])
+
+
 # ---------- Generic fallback decoder ----------
 
 
@@ -277,12 +289,61 @@ def _decode_via_names(msg, names: List[str]) -> Optional[np.ndarray]:
     """Fallback: sample scalar fields using dotted selectors into a float32 vector."""
     if not names:
         return None
+    
+    # Special handling for MultiDOFCommand messages
+    if hasattr(msg, 'dof_names') and hasattr(msg, 'values') and hasattr(msg, 'values_dot'):
+        return _decode_multidof_via_names(msg, names)
+    
     out: List[float] = []
     for name in names:
         try:
             out.append(float(dot_get(msg, name)))
         except Exception:
             out.append(float("nan"))
+    return np.asarray(out, dtype=np.float32)
+
+
+def _decode_multidof_via_names(msg, names: List[str]) -> np.ndarray:
+    """Special decoder for MultiDOFCommand messages with values. and values_dot. prefixes."""
+    out: List[float] = []
+    
+    for name in names:
+        try:
+            if name.startswith("values_dot."):
+                # Extract DOF name from "values_dot.dof_name"
+                dof_name = name[11:]  # Remove "values_dot." prefix
+                if dof_name in msg.dof_names:
+                    idx = msg.dof_names.index(dof_name)
+                    if idx < len(msg.values_dot):
+                        out.append(float(msg.values_dot[idx]))
+                    else:
+                        out.append(0.0)
+                else:
+                    out.append(0.0)
+            elif name.startswith("values."):
+                # Extract DOF name from "values.dof_name"
+                dof_name = name[7:]  # Remove "values." prefix
+                if dof_name in msg.dof_names:
+                    idx = msg.dof_names.index(dof_name)
+                    if idx < len(msg.values):
+                        out.append(float(msg.values[idx]))
+                    else:
+                        out.append(0.0)
+                else:
+                    out.append(0.0)
+            else:
+                # Default to values field
+                if name in msg.dof_names:
+                    idx = msg.dof_names.index(name)
+                    if idx < len(msg.values):
+                        out.append(float(msg.values[idx]))
+                    else:
+                        out.append(0.0)
+                else:
+                    out.append(0.0)
+        except Exception:
+            out.append(float("nan"))
+    
     return np.asarray(out, dtype=np.float32)
 
 

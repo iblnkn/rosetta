@@ -190,8 +190,12 @@ def _plan_streams(
             continue
         rt = sv.ros_type or tmap[sv.topic]
         
-        # Create unique key for multiple observation.state specs
+        # Create unique key for multiple observation.state specs and action specs
         if sv.key == "observation.state":
+            unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+        elif sv.is_action:
+            # For action specs, we need to check if there are multiple specs with the same key
+            # This will be handled later in the consolidation logic
             unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
         else:
             unique_key = sv.key
@@ -277,20 +281,25 @@ def export_bags_to_lerobot(
     features: Dict[str, Dict[str, Any]] = {}
     primary_image_key: Optional[str] = None
     state_specs = []  # Track multiple observation.state specs
+    action_specs_by_key: Dict[str, List[Any]] = {}  # Track multiple action specs by key
     
     for sv in specs:
-        k, ft, is_img = feature_from_spec(sv, use_videos)
-
         # Handle multiple observation.state specs
-        if k == "observation.state":
+        if sv.key == "observation.state":
             state_specs.append(sv)
             # Don't add to features yet - we'll consolidate them
             continue
             
         # Handle action specs
         if sv.is_action:
-            features[k] = ft
+            if sv.key not in action_specs_by_key:
+                action_specs_by_key[sv.key] = []
+            action_specs_by_key[sv.key].append(sv)
+            # Don't add to features yet - we'll consolidate them
             continue
+            
+        # Process other specs normally
+        k, ft, is_img = feature_from_spec(sv, use_videos)
             
         # Ensure task.* specs are treated as per-frame strings even if the
         # underlying helper doesn't special-case them yet.
@@ -322,6 +331,27 @@ def export_bags_to_lerobot(
             "shape": (total_shape,),
             "names": all_names
         }
+    
+    # Consolidate multiple action specs with the same key into a single feature
+    for action_key, action_specs in action_specs_by_key.items():
+        if len(action_specs) > 1:
+            # Multiple specs with same key - consolidate them
+            all_names = []
+            total_shape = 0
+            for sv in action_specs:
+                all_names.extend(sv.names)
+                total_shape += len(sv.names)
+            
+            features[action_key] = {
+                "dtype": "float32",
+                "shape": (total_shape,),
+                "names": all_names
+            }
+        else:
+            # Single spec - use it as-is
+            sv = action_specs[0]
+            k, ft, _ = feature_from_spec(sv, use_videos)
+            features[k] = ft
     
     # Mark depth videos in features metadata before dataset creation
     for key, feature in features.items():
@@ -397,7 +427,7 @@ def export_bags_to_lerobot(
         tmap = _topic_type_map(reader)
         print(f"tmap: {tmap}")
 
-        # Plan once - handle multiple observation.state specs
+        # Plan once - handle multiple observation.state specs and action specs
         streams, by_topic = _plan_streams(specs, tmap)
         
         # Create consolidated observation.state stream if we have multiple state specs
@@ -514,6 +544,26 @@ def export_bags_to_lerobot(
                 else:
                     # Use zero padding if no state values available
                     frame["observation.state"] = zero_pad_map["observation.state"]
+            
+            # Handle consolidated action specs by concatenating multiple action streams
+            for action_key, action_specs in action_specs_by_key.items():
+                if len(action_specs) > 1 and action_key in features:
+                    # Concatenate all action values from different topics
+                    action_values = []
+                    for sv in action_specs:
+                        unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+                        stream_val = resampled.get(unique_key, [None] * n_ticks)[i]
+                        if stream_val is not None:
+                            val_array = np.asarray(stream_val, dtype=np.float32).reshape(-1)
+                            action_values.append(val_array)
+                    
+                    if action_values:
+                        # Concatenate all action values
+                        concatenated_action = np.concatenate(action_values)
+                        frame[action_key] = concatenated_action
+                    else:
+                        # Use zero padding if no action values available
+                        frame[action_key] = zero_pad_map[action_key]
             
             # Process all other features
             for name in write_keys:
