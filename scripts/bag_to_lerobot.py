@@ -570,6 +570,10 @@ def export_bags_to_lerobot(
                 # Skip observation.state as it's handled above
                 if name == "observation.state":
                     continue
+                
+                # Skip consolidated actions as they're handled above
+                if name in action_specs_by_key and len(action_specs_by_key[name]) > 1: #TODO: I think this can just be if name == "action"
+                    continue
                     
                 ft = features[name]
                 dtype = ft["dtype"]
