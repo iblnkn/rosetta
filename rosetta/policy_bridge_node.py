@@ -74,6 +74,9 @@ class ActionRouter:
         for k, specs in specs_by_key.items():
             group: List[_ActionSpecView] = []
             for s in specs:
+                n = len(s.names or [])
+                if n <= 0:
+                    raise ValueError(f"Action spec {s.topic} has no names (len=0) – unsupported.")
                 group.append(
                     _ActionSpecView(
                         key=k,
@@ -85,26 +88,19 @@ class ActionRouter:
                 )
             self._groups[k] = group
 
-    def _concat_layout_len(self, key: str) -> int:
-        return sum(len(sv.names) for sv in self._groups.get(key, []))
-
-    def _split_and_publish(self, key: str, vec: np.ndarray, increment_cb=None, context="action") -> int:
+    def _split_and_publish(self, key: str, vec: np.ndarray, context="action") -> int:
         """Split vec across specs of 'key' in contract order and publish."""
         if key not in self._groups:
-            self._logger.error(f"{context}: unknown action key '{key}'")
-            return 0
+            raise KeyError(f"{context}: unknown action key '{key}'")
         idx = 0
         published = 0
         for sv in self._groups[key]:
             n = len(sv.names)
-            if n == 0:
-                continue
             j = idx + n
             if j > len(vec):
-                self._logger.error(
+                raise ValueError(
                     f"{context}: vec too short for {sv.topic} (need {n}, have {len(vec) - idx})"
                 )
-                break
             slice_vec = vec[idx:j]
             idx = j
             msg = encode_value(
@@ -115,24 +111,20 @@ class ActionRouter:
             )
             pub = self._pubs.get(sv.topic)
             if pub is None:
-                self._logger.error(f"{context}: no publisher for {sv.topic}")
-                continue
-            try:
-                pub.publish(msg)
-                published += 1
-            except Exception as e:
-                self._logger.error(f"{context}: publish failed for {sv.topic}: {e}")
-        if published and increment_cb:
-            increment_cb()
+                raise RuntimeError(f"{context}: no publisher for {sv.topic}")
+            pub.publish(msg)
+            published += 1
+        if idx != len(vec):
+            raise ValueError(
+                f"{context}: extra values in vector for key='{key}' (used {idx} of {len(vec)})"
+            )
         return published
 
-    def publish_packet(self, packet: Dict[str, np.ndarray], increment_cb=None, context="action") -> int:
+    def publish_packet(self, packet: Dict[str, np.ndarray], context="action") -> int:
         """Publish a packet of {action_key -> vec}."""
         total = 0
         for key, vec in packet.items():
-            total += self._split_and_publish(key, vec, increment_cb=None, context=context)
-        if total and increment_cb:
-            increment_cb()
+            total += self._split_and_publish(key, vec, context=context)
         return total
 
 
@@ -152,6 +144,8 @@ class _RuntimeParams:
     use_header_time: bool
     use_autocast: bool
     max_queue_actions: int = 512
+    header_skew_ms: float = 500.0
+    publish_tolerance_ms: Optional[float] = None
 
 
 def _device_from_param(requested: Optional[str] = None) -> torch.device:
@@ -204,8 +198,30 @@ class PolicyBridge(Node):
         self.declare_parameter("max_queue_actions", 512)
         self.declare_parameter("use_header_time", True)
         self.declare_parameter("use_autocast", False)
+        self.declare_parameter("aggregate_fn_name", "weighted_average")  # LeRobot parity
+        self.declare_parameter("header_skew_ms", 500.0)
+        self.declare_parameter("publish_tolerance_ms", None)  # if None, defaults to one frame
 
         self._params = self._read_params()
+        
+        # Aggregation registry (same semantics as LeRobot)
+        self._AGG_FNS = {
+            "weighted_average": lambda old, new: 0.3 * old + 0.7 * new,
+            "latest_only": lambda old, new: new,
+            "average": lambda old, new: 0.5 * old + 0.5 * new,
+            "conservative": lambda old, new: 0.7 * old + 0.3 * new,
+        }
+        agg_name = str(self.get_parameter("aggregate_fn_name").value or "weighted_average")
+        if agg_name not in self._AGG_FNS:
+            raise ValueError(
+                f"Unknown aggregate_fn_name='{agg_name}'. "
+                f"Options: {list(self._AGG_FNS.keys())}"
+            )
+        self._agg_name = agg_name
+        
+        # Timestep bookkeeping for LeRobot parity
+        self._timestep_cursor: int = 0  # next timestep to assign on production
+        self._latest_executed_timestep: int = -1
         self.add_on_set_parameters_callback(self._on_params)
 
         # ---------------- Contract ----------------
@@ -381,6 +397,41 @@ class PolicyBridge(Node):
         self._cbg = ReentrantCallbackGroup()
         self._obs_zero, self._subs, self._ros_sub_handles = {}, {}, []
         self._state_specs = [s for s in self._obs_specs if s.key == "observation.state"]
+        
+        # Build contract state name order (for layout audit)
+        self._contract_state_names = []
+        for sv in self._state_specs:
+            self._contract_state_names.extend(list(sv.names or []))
+        
+        # State layout audit and permutation mapping (critical for correct policy inputs)
+        self._state_index_map = None
+        expected = None
+        try:
+            # Try a few common locations/keys
+            if isinstance(ds_stats, dict):
+                if "observation.state" in ds_stats and isinstance(ds_stats["observation.state"], dict):
+                    expected = ds_stats["observation.state"].get("names")
+                if expected is None:
+                    expected = ds_stats.get("state_names")
+            if expected is None and hasattr(self.policy.config, "state_names"):
+                expected = list(self.policy.config.state_names)
+        except Exception as e:
+            self.get_logger().warning(f"Could not read expected state names: {e!r}")
+        
+        if expected:
+            cur = self._contract_state_names
+            if set(cur) != set(expected):
+                raise RuntimeError(
+                    "State feature set mismatch between contract and policy. "
+                    f"Contract-only={sorted(set(cur)-set(expected))}, Policy-only={sorted(set(expected)-set(cur))}"
+                )
+            if cur != expected:
+                # map from current index -> expected index
+                pos = {name: i for i, name in enumerate(cur)}
+                self._state_index_map = np.asarray([pos[name] for name in expected], dtype=np.int64)
+                self.get_logger().warning(
+                    "Observation state order differs from policy; applying runtime permutation to match policy."
+                )
 
         for s in self._obs_specs:
             k, meta, _ = feature_from_spec(s, use_videos=False)
@@ -477,20 +528,24 @@ class PolicyBridge(Node):
         )
 
         # ---------------- Timing strategy ----------------
-        # Get publish strategy from first action spec if available
-        first_contract_action = self._contract.actions[0] if self._contract.actions else None
-        strategy = getattr(first_contract_action, "publish_strategy", None) or {}
-        self._publish_mode = strategy.get("mode", "nearest")
         # Be a bit lenient on timing jitter (network + scheduling)
-        self._publish_tolerance_ns = int(self.step_ns)
+        tol_ms = self._params.publish_tolerance_ms
+        self._publish_tolerance_ns = int(self.step_ns) if tol_ms is None else int(float(tol_ms) * 1e6)
+        
+        # Starvation guard (must-produce after queue empties)
+        self._starved_since_ns: Optional[int] = None
+        
+        # Warning throttle
+        self._last_warn_ns = 0
 
         # ---------------- Async producer/executor ----------------
-        self._queue: Deque[Tuple[int, Dict[str, np.ndarray]]] = deque(
+        # Queue holds (publish_time_ns, timestep, packet)
+        self._queue: Deque[Tuple[int, int, Dict[str, np.ndarray]]] = deque(
             maxlen=self._params.max_queue_actions
         )
         self._queue_lock = threading.Lock()
         self._last_packet: Optional[Dict[str, np.ndarray]] = None
-        self._producer_buffer: List[Tuple[int, Dict[str, np.ndarray]]] = []
+        self._producer_buffer: List[Tuple[int, int, Dict[str, np.ndarray]]] = []
 
         self._cbg_timers = ReentrantCallbackGroup()
         self._producer_timer = self.create_timer(
@@ -519,6 +574,8 @@ class PolicyBridge(Node):
             use_header_time=bool(self.get_parameter("use_header_time").value),
             use_autocast=bool(self.get_parameter("use_autocast").value),
             max_queue_actions=self.get_parameter("max_queue_actions").value,
+            header_skew_ms=float(self.get_parameter("header_skew_ms").value),
+            publish_tolerance_ms=self.get_parameter("publish_tolerance_ms").value,
         )
 
     def _on_params(self, _params: List[Parameter]) -> SetParametersResult:
@@ -527,6 +584,9 @@ class PolicyBridge(Node):
             with self._queue_lock:
                 self._queue = deque(self._queue, maxlen=new_params.max_queue_actions)
         self._params = new_params
+        # Recompute derived values
+        tol_ms = self._params.publish_tolerance_ms
+        self._publish_tolerance_ns = int(self.step_ns) if tol_ms is None else int(float(tol_ms) * 1e6)
         return SetParametersResult(successful=True)
 
     def _next_exec_tick_ns(self, now_ns: int) -> int:
@@ -613,6 +673,13 @@ class PolicyBridge(Node):
         self._pub_count = 0
         with self._queue_lock:
             self._queue.clear()
+        
+        # Reset run-local cursors / lasts (critical for correct aggregation)
+        self._timestep_cursor = 0
+        self._latest_executed_timestep = -1
+        self._last_packet = None
+        self._starved_since_ns = None
+        self._last_warn_ns = 0
 
         task = getattr(goal_handle.request, "task", None)
         prompt = getattr(goal_handle.request, "prompt", None)
@@ -675,7 +742,7 @@ class PolicyBridge(Node):
 
         # Decide outcome only - don't send status from worker thread
         if timeout:
-            self._terminal = ("timeout", f"Completed successfully after {self._max_duration_s:.1f}s")
+            self._terminal = ("timeout", f"Timed out after {self._max_duration_s:.1f}s")
             self.get_logger().info(f"{_ACTION_NAME}: completed (timeout)")
         elif self._stop_requested.is_set():
             self._terminal = ("canceled", "Cancelled")
@@ -707,18 +774,111 @@ class PolicyBridge(Node):
                                error_context: str = "action") -> None:
         """Publish an action packet with consistent error handling."""
         try:
-            def _inc(): 
-                self._pub_count += 1
-            self._router.publish_packet(packet, increment_cb=_inc if increment_count else None, context=error_context)
+            self._validate_packet(packet)
+            published_topics = self._router.publish_packet(packet, context=error_context)
+            if published_topics > 0 and increment_count:
+                self._pub_count += 1  # once per packet/timestep (not per topic)
             if log_message:
                 self.get_logger().info(log_message)
         except Exception as e:
             self.get_logger().error(f"{error_context} publish error: {e}")
+            raise
 
     def _publish_safety_command(self, increment_count: bool = True, log_message: str = None) -> None:
         """Publish safety command (zeros or hold last) across all keys/specs."""
         pkt = self._create_safety_packet()
         self._publish_action_packet(pkt, increment_count, log_message, "safety")
+
+    # ---------- Aggregation helpers ----------
+    def _shape_str(self, x) -> str:
+        """Safely format shape for logging (handles tensors, dicts, numpy arrays)."""
+        try:
+            return str({k: tuple(v.shape) for k, v in x.items()}) if isinstance(x, dict) else str(tuple(x.shape))
+        except Exception:
+            return "<unknown>"
+
+    def _aggregate_packets(self, old_pkt: Dict[str, np.ndarray],
+                           new_pkt: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        """Elementwise aggregate old/new packets (numpy), key-wise."""
+        agg = self._AGG_FNS[self._agg_name]
+        out: Dict[str, np.ndarray] = {}
+        keys = set(old_pkt.keys()) | set(new_pkt.keys())
+        for k in keys:
+            a = old_pkt.get(k)
+            b = new_pkt.get(k)
+            if a is None:
+                out[k] = b
+                continue
+            if b is None:
+                out[k] = a
+                continue
+            if a.shape != b.shape:
+                raise ValueError(f"Aggregate shape mismatch for key='{k}': {a.shape} vs {b.shape}")
+            out[k] = agg(a, b)
+        return out
+
+    def _merge_step_packets(self, step: int, old_pkt: Dict[str, np.ndarray], 
+                            new_pkt: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        """Merge packets for the same timestep using configured aggregation function."""
+        mode = self._agg_name
+        if mode == "latest_only":
+            return new_pkt
+        elif mode in {"average", "conservative", "weighted_average"}:
+            return self._aggregate_packets(old_pkt, new_pkt)
+        else:
+            # default fallback: latest_only
+            return new_pkt
+
+    def _warn_throttled(self, msg: str, period_ms: float = 500.0) -> None:
+        """Emit a warning, but only if period_ms has elapsed since last warning."""
+        now_ns = self.get_clock().now().nanoseconds
+        if now_ns - self._last_warn_ns >= int(period_ms * 1e6):
+            self._last_warn_ns = now_ns
+            self.get_logger().warning(msg)
+
+    def _enqueue_actions(self, items: List[Tuple[int, int, Dict[str, np.ndarray]]]) -> None:
+        """
+        Merge items into queue with LeRobot semantics:
+        - skip timesteps <= latest executed
+        - if timestep exists in queue, aggregate its packet
+        - keep queue sorted by publish time
+        """
+        with self._queue_lock:
+            # Build index by timestep from current queue
+            by_step: Dict[int, Tuple[int, Dict[str, np.ndarray]]] = {}
+            for t_ns, step, pkt in self._queue:
+                by_step[step] = (t_ns, pkt)
+
+            # Merge incoming
+            for t_ns, step, pkt in items:
+                if step <= self._latest_executed_timestep:
+                    continue  # too old, skip
+                if step in by_step:
+                    old_t_ns, old_pkt = by_step[step]
+                    merged = self._merge_step_packets(step, old_pkt, pkt)
+                    # keep the earlier publish time for stability
+                    by_step[step] = (min(old_t_ns, t_ns), merged)
+                else:
+                    by_step[step] = (t_ns, pkt)
+
+            # Rebuild sorted by time and truncate to maxlen
+            merged_list = sorted([(t_ns, step, pkt) for step, (t_ns, pkt) in by_step.items()],
+                                 key=lambda x: x[0])
+            self._queue.clear()
+            # honor maxlen
+            for item in merged_list[-self._queue.maxlen:]:
+                self._queue.append(item)
+
+    def _validate_packet(self, pkt: Dict[str, np.ndarray]) -> None:
+        """Ensure every key is known and vector lengths match concatenated spec."""
+        for key, vec in pkt.items():
+            if key not in self._action_specs_by_key:
+                raise KeyError(f"Unknown action key in packet: '{key}'")
+            expected = sum(len(s.names or []) for s in self._action_specs_by_key[key])
+            if vec.ndim != 1 or vec.size != expected:
+                raise ValueError(
+                    f"Packet key '{key}' size mismatch: got {vec.shape}, expected ({expected},)"
+                )
 
     # ---------------- Sub callback ----------------
     def _obs_cb(self, msg, spec: SpecView) -> None:
@@ -759,10 +919,14 @@ class PolicyBridge(Node):
         thr = float(self._params.chunk_size_threshold)
 
         produced = 0
+        
+        # Starvation guard: if we published safety, force production
+        starved = self._starved_since_ns is not None
+        
         with self._queue_lock:
             queue_length = len(self._queue)
             need_chunk = use_chunks and (
-                queue_length == 0 or (k > 0 and (queue_length / max(1, k)) <= thr)
+                starved or queue_length == 0 or (k > 0 and (queue_length / max(1, k)) <= thr)
             )
         if use_chunks and not need_chunk:
             return 0
@@ -780,7 +944,7 @@ class PolicyBridge(Node):
             # Guard: if header time is too stale relative to node clock, ignore it
             if ts is not None:
                 skew = self.get_clock().now().nanoseconds - ts
-                if 0 <= skew <= int(500e6):  # <= 500 ms stale is OK
+                if 0 <= skew <= int(self._params.header_skew_ms * 1e6):
                     sample_t_ns = ts
         if sample_t_ns is None:
             sample_t_ns = self.get_clock().now().nanoseconds
@@ -797,15 +961,41 @@ class PolicyBridge(Node):
                 if use_chunks:
                     try:
                         chunk = self.policy.predict_action_chunk(batch)
-                        self.get_logger().info(f"Generated action chunk shape: {chunk.shape}")
+                        self.get_logger().debug(f"Generated action chunk shape: {self._shape_str(chunk)}")
                         chunk = chunk.squeeze(0)
-                        chunk = self._postprocess_actions(chunk)  # could be tensor or dict
-                        self.get_logger().info(f"Postprocessed action chunk shape: {chunk.shape}")
+                        
+                        # Per-timestep postprocessing (mirrors server behavior)
+                        def postproc_one(x_i):
+                            return self.postprocessor(x_i.unsqueeze(0)).squeeze(0)
+                        
+                        if isinstance(chunk, dict):
+                            for k, t in chunk.items():
+                                chunk[k] = torch.stack([postproc_one(t[i]) for i in range(t.shape[0])], dim=0)
+                        else:
+                            chunk = torch.stack([postproc_one(chunk[i]) for i in range(chunk.shape[0])], dim=0)
+                        
+                        self.get_logger().debug(f"Postprocessed action chunk shape: {self._shape_str(chunk)}")
+                        
+                        # Diagnostics: log action dims on first chunk (fail-fast on mismatch)
+                        if not hasattr(self, "_logged_layout_once"):
+                            self._logged_layout_once = True
+                            sizes = {k: v.shape[-1] for k, v in (chunk.items() if isinstance(chunk, dict) else {"action": chunk}).items()}
+                            expected = {k: sum(len(s.names or []) for s in self._action_specs_by_key.get(k, [])) for k in sizes}
+                            self.get_logger().debug(f"Action dims (policy vs contract): {sizes} vs {expected}")
+                            if sizes != expected:
+                                raise RuntimeError(f"Policy/contract action dimension mismatch: {sizes} vs {expected}")
                     except Exception as e:
                         self.get_logger().error(f"Error generating actions: {e}")
                         import traceback
                         self.get_logger().error(f"Traceback: {traceback.format_exc()}")
                         return 0
+
+                    # Determine actual chunk length (tensor vs dict)
+                    def _chunk_len(x):
+                        return min([t.shape[0] for t in x.values()]) if isinstance(x, dict) else int(x.shape[0])
+                    m = min(k, _chunk_len(chunk))
+                    if m <= 0:
+                        raise RuntimeError("predict_action_chunk returned empty chunk")
 
                     # Normalize postprocessed outputs into packets
                     def to_packet(i: int) -> Dict[str, np.ndarray]:
@@ -826,16 +1016,19 @@ class PolicyBridge(Node):
                     #    aligned to the next execution tick and in the future.
                     now_wall = self.get_clock().now().nanoseconds
                     base_t = self._next_exec_tick_ns(now_wall + self.step_ns)
-                    for i in range(k):
+                    i0 = self._timestep_cursor
+                    for i in range(m):
                         t_i = base_t + i * self.step_ns
-                        self._producer_buffer.append((t_i, to_packet(i)))
-                    produced = k
+                        step_i = i0 + i
+                        self._producer_buffer.append((t_i, step_i, to_packet(i)))
+                    self._timestep_cursor += m
+                    produced = m
                 else:
                     try:
                         a = self.policy.select_action(batch)
-                        self.get_logger().info(f"Generated single action shape: {a.shape}")
+                        self.get_logger().debug(f"Generated single action shape: {self._shape_str(a)}")
                         a = self._postprocess_actions(a)  # could be tensor or dict
-                        self.get_logger().info(f"Postprocessed single action shape: {a.shape}")
+                        self.get_logger().debug(f"Postprocessed single action shape: {self._shape_str(a)}")
                     except Exception as e:
                         self.get_logger().error(f"Error generating single action: {e}")
                         import traceback
@@ -843,16 +1036,21 @@ class PolicyBridge(Node):
                         return 0
                     now_wall = self.get_clock().now().nanoseconds
                     t0 = self._next_exec_tick_ns(now_wall + self.step_ns)
+                    i0 = self._timestep_cursor
                     if isinstance(a, dict):
                         pkt = {k: a[k][0].detach().cpu().numpy().astype(np.float32).ravel() for k in a}
                     else:
                         pkt = {"action": a[0].detach().cpu().numpy().astype(np.float32).ravel()}
-                    self._producer_buffer.append((t0, pkt))
+                    self._producer_buffer.append((t0, i0, pkt))
+                    self._timestep_cursor += 1
                     produced = 1
 
         if self._producer_buffer:
-            with self._queue_lock:
-                self._queue.extend(self._producer_buffer)
+            # Aggregate into queue by timestep (LeRobot parity)
+            self._enqueue_actions(self._producer_buffer)
+            # Clear starvation flag if we successfully produced
+            if produced > 0:
+                self._starved_since_ns = None
 
         return produced
 
@@ -867,6 +1065,7 @@ class PolicyBridge(Node):
         tol_ns = self._publish_tolerance_ns
 
         packet: Optional[Dict[str, np.ndarray]] = None
+        selected_step: Optional[int] = None
         with self._queue_lock:
             # Drop clearly stale actions so we can catch up
             while self._queue and (self._queue[0][0] < now_ns - tol_ns):
@@ -874,17 +1073,19 @@ class PolicyBridge(Node):
             
             # Check if queue is empty (either initially or after cleanup)
             if not self._queue:
-                self.get_logger().warning(
+                self._warn_throttled(
                     "Executor tick: queue empty, publishing safety command"
                 )
                 # Publish safety command instead of skipping
+                if self._starved_since_ns is None:
+                    self._starved_since_ns = now_ns
                 self._publish_safety_command()
                 return
 
             # Find best action after cleanup
             best_idx = -1
             best_abs = None
-            for idx, (t_ns, _) in enumerate(self._queue):
+            for idx, (t_ns, _, _) in enumerate(self._queue):
                 d = abs(t_ns - now_ns)
                 if best_abs is None or d < best_abs:
                     best_abs, best_idx = d, idx
@@ -894,18 +1095,23 @@ class PolicyBridge(Node):
                     (self._queue[0][0] - now_ns) /
                     1e6 if self._queue else 0
                 )
-                self.get_logger().warning(
+                self._warn_throttled(
                     f"No action within ±{tol_ns/1e6:.1f}ms of now "
                     f"(head Δ={head_dt_ms:.1f}ms, size={len(self._queue)})"
                 )
+                if self._starved_since_ns is None:
+                    self._starved_since_ns = now_ns
+                self._publish_safety_command()
                 return
 
             # Remove all actions before the best one
             for _ in range(best_idx):
                 self._queue.popleft()
-            _t_sel, packet = self._queue.popleft()
+            _t_sel, selected_step, packet = self._queue.popleft()
 
         self._last_packet = packet
+        if selected_step is not None:
+            self._latest_executed_timestep = max(self._latest_executed_timestep, selected_step)
         self._publish_action_packet(packet)
 
 
@@ -931,7 +1137,8 @@ class PolicyBridge(Node):
         # Optional: log clock skew for debugging
         if most_recent_ts is not None:
             skew_ms = (self.get_clock().now().nanoseconds - most_recent_ts) / 1e6
-            self.get_logger().info(f"obs-header skew: {skew_ms:.1f} ms")
+            # noisy while running; keep at debug
+            self.get_logger().debug(f"obs-header skew: {skew_ms:.1f} ms")
                     
         return most_recent_ts
 
@@ -961,6 +1168,10 @@ class PolicyBridge(Node):
                 obs_frame["observation.state"] = np.concatenate(state_parts, axis=0)
             else:
                 obs_frame["observation.state"] = np.zeros((0,), dtype=np.float32)
+            
+            # Apply permutation if state order differs from policy training order
+            if self._state_index_map is not None and obs_frame["observation.state"].ndim == 1:
+                obs_frame["observation.state"] = obs_frame["observation.state"][self._state_index_map]
         
         # Handle all other observations
         for key, st in self._subs.items():
