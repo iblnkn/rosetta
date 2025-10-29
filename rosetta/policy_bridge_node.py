@@ -11,7 +11,6 @@ import json
 import os
 import threading
 from collections import deque
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -51,6 +50,92 @@ _ACTION_NAME = "run_policy"
 _FEEDBACK_PERIOD_S = 0.5
 
 
+# ---------------- Action routing helpers ----------------
+@dataclass(frozen=True, slots=True)
+class _ActionSpecView:
+    key: str
+    topic: str
+    ros_type: str
+    names: List[str]
+    clamp: Optional[Tuple[float, float]]
+
+
+class ActionRouter:
+    """
+    Routes model outputs to ROS topics per contract action specs.
+    - Supports multiple action KEYS (e.g., 'action', 'action.arm', 'action.gripper').
+    - Supports repeated KEYS (multiple specs under the same key, different topics).
+    - Accepts either a dict[str, np.ndarray] keyed by action key, or a single vector for legacy 'action'.
+    """
+    def __init__(self, specs_by_key: Dict[str, List[SpecView]], pubs_by_topic: Dict[str, Any], logger):
+        self._logger = logger
+        self._groups: Dict[str, List[_ActionSpecView]] = {}
+        self._pubs = pubs_by_topic
+        for k, specs in specs_by_key.items():
+            group: List[_ActionSpecView] = []
+            for s in specs:
+                group.append(
+                    _ActionSpecView(
+                        key=k,
+                        topic=s.topic,
+                        ros_type=s.ros_type,
+                        names=list(s.names or []),
+                        clamp=getattr(s, "clamp", None),
+                    )
+                )
+            self._groups[k] = group
+
+    def _concat_layout_len(self, key: str) -> int:
+        return sum(len(sv.names) for sv in self._groups.get(key, []))
+
+    def _split_and_publish(self, key: str, vec: np.ndarray, increment_cb=None, context="action") -> int:
+        """Split vec across specs of 'key' in contract order and publish."""
+        if key not in self._groups:
+            self._logger.error(f"{context}: unknown action key '{key}'")
+            return 0
+        idx = 0
+        published = 0
+        for sv in self._groups[key]:
+            n = len(sv.names)
+            if n == 0:
+                continue
+            j = idx + n
+            if j > len(vec):
+                self._logger.error(
+                    f"{context}: vec too short for {sv.topic} (need {n}, have {len(vec) - idx})"
+                )
+                break
+            slice_vec = vec[idx:j]
+            idx = j
+            msg = encode_value(
+                ros_type=sv.ros_type,
+                names=sv.names,
+                action_vec=slice_vec,
+                clamp=sv.clamp,
+            )
+            pub = self._pubs.get(sv.topic)
+            if pub is None:
+                self._logger.error(f"{context}: no publisher for {sv.topic}")
+                continue
+            try:
+                pub.publish(msg)
+                published += 1
+            except Exception as e:
+                self._logger.error(f"{context}: publish failed for {sv.topic}: {e}")
+        if published and increment_cb:
+            increment_cb()
+        return published
+
+    def publish_packet(self, packet: Dict[str, np.ndarray], increment_cb=None, context="action") -> int:
+        """Publish a packet of {action_key -> vec}."""
+        total = 0
+        for key, vec in packet.items():
+            total += self._split_and_publish(key, vec, increment_cb=None, context=context)
+        if total and increment_cb:
+            increment_cb()
+        return total
+
+
 @dataclass(slots=True)
 class _SubState:
     spec: SpecView
@@ -61,7 +146,7 @@ class _SubState:
 
 @dataclass(slots=True)
 class _RuntimeParams:
-    use_chunks: bool
+    use_action_chunks: bool
     actions_per_chunk: int
     chunk_size_threshold: float
     use_header_time: bool
@@ -112,7 +197,8 @@ class PolicyBridge(Node):
         self.declare_parameter("contract_path", "")
         self.declare_parameter("policy_path", "")
         self.declare_parameter("policy_device", "auto")
-        self.declare_parameter("use_chunks", True)
+        # Canonical LeRobot-style async knobs
+        self.declare_parameter("use_action_chunks", True)
         self.declare_parameter("actions_per_chunk", 25)
         self.declare_parameter("chunk_size_threshold", 0.5)
         self.declare_parameter("max_queue_actions", 512)
@@ -242,6 +328,28 @@ class PolicyBridge(Node):
             postprocessor_overrides={
                 "device_processor": {"device": str(self.device)}},
         )
+        
+        # After policy is loaded, clamp actions_per_chunk to policy limits (if exposed)
+        try:
+            policy_max = None
+            if hasattr(self.policy.config, "n_action_steps"):
+                policy_max = int(self.policy.config.n_action_steps)
+            elif hasattr(self.policy.config, "chunk_size"):
+                policy_max = int(self.policy.config.chunk_size)
+            if policy_max is not None and self._params.actions_per_chunk > policy_max:
+                self.get_logger().info(
+                    f"Clamping actions_per_chunk from {self._params.actions_per_chunk} to policy max {policy_max}"
+                )
+                self._params = _RuntimeParams(
+                    use_action_chunks=self._params.use_action_chunks,
+                    actions_per_chunk=policy_max,
+                    chunk_size_threshold=self._params.chunk_size_threshold,
+                    use_header_time=self._params.use_header_time,
+                    use_autocast=self._params.use_autocast,
+                    max_queue_actions=self._params.max_queue_actions,
+                )
+        except Exception as e:
+            self.get_logger().debug(f"Could not clamp actions_per_chunk from policy config: {e!r}")
 
         # ---------------- Specs & rate ----------------
         self._specs: List[SpecView] = list(iter_specs(self._contract))
@@ -249,26 +357,20 @@ class PolicyBridge(Node):
         self._act_specs = [s for s in self._specs if s.is_action]
         #TODO: process _task_specs
 
-        # Handle multiple action specs with the same key (consolidate them)
+        # Group action specs by key
         self._action_specs_by_key: Dict[str, List[SpecView]] = {}
         for spec in self._act_specs:
-            if spec.key not in self._action_specs_by_key:
-                self._action_specs_by_key[spec.key] = []
-            self._action_specs_by_key[spec.key].append(spec)
+            self._action_specs_by_key.setdefault(spec.key, []).append(spec)
         
-        # For now, we only support one action key (but multiple specs with that key)
-        if len(self._action_specs_by_key) != 1:
-            raise ValueError(
-                f"This bridge expects exactly one action key in the contract, got {list(self._action_specs_by_key.keys())}. "
-                f"Multiple action keys (e.g., action.arm, action.gripper) are not yet supported."
+        if len(self._act_specs) == 0:
+            raise ValueError("Contract must declare at least one action spec.")
+        if len(self._action_specs_by_key) > 1:
+            self.get_logger().info(
+                f"Detected multiple action keys: {list(self._action_specs_by_key.keys())}"
             )
         
-        # Get the action key and specs
-        self._action_key = list(self._action_specs_by_key.keys())[0]
-        self._action_specs = self._action_specs_by_key[self._action_key]
-        
-        # For backward compatibility, keep the first spec as the "primary" one
-        self._act_spec = self._action_specs[0]
+        # Keep action_keys for reference
+        self._action_keys = list(self._action_specs_by_key.keys())
 
         self.fps = int(self._contract.rate_hz)
         if self.fps <= 0:
@@ -312,8 +414,9 @@ class PolicyBridge(Node):
 
         # ---------------- Publishers ----------------
         self._act_pubs: Dict[str, Any] = {}
-        for spec in self._action_specs:
-            act_qos_dict = self._act_qos_by_key.get(spec.key)
+        for spec in self._act_specs:
+            # Prefer per-spec QoS, then fall back to key-based QoS
+            act_qos_dict = getattr(spec, "publish_qos", None) or self._act_qos_by_key.get(spec.key)
             pub_qos = qos_profile_from_dict(act_qos_dict) or QoSProfile(depth=10)
             pub = self.create_publisher(
                 get_message(spec.ros_type), spec.topic, pub_qos
@@ -321,8 +424,8 @@ class PolicyBridge(Node):
             self._act_pubs[spec.topic] = pub
             self.get_logger().info(f"Created publisher for {spec.topic} ({spec.ros_type})")
         
-        # For backward compatibility, keep the primary publisher reference
-        self._act_pub = self._act_pubs[self._act_spec.topic]
+        # Initialize action router
+        self._router = ActionRouter(self._action_specs_by_key, self._act_pubs, self.get_logger())
 
         self._cancel_srv = self.create_service(
             Trigger, f"{_ACTION_NAME}/cancel", self._cancel_service_cb,
@@ -357,9 +460,11 @@ class PolicyBridge(Node):
 
 
         # ---------------- Safety behavior ----------------
+        # Get safety behavior from first action spec (all specs should have the same)
+        first_spec = self._act_specs[0] if self._act_specs else None
         self._safety_behavior = getattr(
-            self._act_spec, "safety_behavior", "zeros"
-        ).lower()
+            first_spec, "safety_behavior", "zeros"
+        ).lower() if first_spec else "zeros"
         if self._safety_behavior not in ("zeros", "hold"):
             self.get_logger().warning(
                 f"Unknown safety_behavior '{self._safety_behavior}', defaulting to 'zeros'"
@@ -372,19 +477,20 @@ class PolicyBridge(Node):
         )
 
         # ---------------- Timing strategy ----------------
-        raw_action_spec = self._contract.actions[0] if self._contract.actions else None
-        strategy = getattr(raw_action_spec, "publish_strategy", None) or {}
+        # Get publish strategy from first action spec if available
+        first_contract_action = self._contract.actions[0] if self._contract.actions else None
+        strategy = getattr(first_contract_action, "publish_strategy", None) or {}
         self._publish_mode = strategy.get("mode", "nearest")
         # Be a bit lenient on timing jitter (network + scheduling)
         self._publish_tolerance_ns = int(self.step_ns)
 
         # ---------------- Async producer/executor ----------------
-        self._queue: Deque[Tuple[int, np.ndarray]] = deque(
+        self._queue: Deque[Tuple[int, Dict[str, np.ndarray]]] = deque(
             maxlen=self._params.max_queue_actions
         )
         self._queue_lock = threading.Lock()
-        self._last_action: Optional[np.ndarray] = None
-        self._producer_buffer: List[Tuple[int, np.ndarray]] = []
+        self._last_packet: Optional[Dict[str, np.ndarray]] = None
+        self._producer_buffer: List[Tuple[int, Dict[str, np.ndarray]]] = []
 
         self._cbg_timers = ReentrantCallbackGroup()
         self._producer_timer = self.create_timer(
@@ -407,11 +513,9 @@ class PolicyBridge(Node):
     # ---------------- Parameter handling ----------------
     def _read_params(self) -> _RuntimeParams:
         return _RuntimeParams(
-            use_chunks=bool(self.get_parameter("use_chunks").value),
-            actions_per_chunk=self.get_parameter("actions_per_chunk").value, #TODO: this should come from the model/policy config. This nomenclature is confusing and not consistent with LeRobot. 
-            chunk_size_threshold=float(
-                self.get_parameter("chunk_size_threshold").value or 0.5 #TODO: also inconsistent with LeRobot naming.
-            ),
+            use_action_chunks=bool(self.get_parameter("use_action_chunks").value),
+            actions_per_chunk=int(self.get_parameter("actions_per_chunk").value),
+            chunk_size_threshold=float(self.get_parameter("chunk_size_threshold").value),
             use_header_time=bool(self.get_parameter("use_header_time").value),
             use_autocast=bool(self.get_parameter("use_autocast").value),
             max_queue_actions=self.get_parameter("max_queue_actions").value,
@@ -586,108 +690,35 @@ class PolicyBridge(Node):
         self._prompt = ""
         self._done_event.set()
 
-    def _create_safety_vector(self) -> np.ndarray:
-        """Create safety action vector (zeros or hold last action)."""
-        if self._safety_behavior == "hold" and self._last_action is not None:
-            return self._last_action.copy()
-        else:
-            # Calculate total action vector size for all specs
-            total_size = sum(len(spec.names or []) for spec in self._action_specs)
-            if total_size == 0:
-                total_size = 2  # fallback minimum
-            return np.zeros((total_size,), dtype=np.float32)
+    def _create_safety_packet(self) -> Dict[str, np.ndarray]:
+        """Create safety packet for all action keys."""
+        if self._safety_behavior == "hold" and self._last_packet is not None:
+            # Deep copy to avoid mutation
+            return {k: v.copy() for k, v in self._last_packet.items()}
+        packet: Dict[str, np.ndarray] = {}
+        for key, specs in self._action_specs_by_key.items():
+            total = sum(len(s.names or []) for s in specs) or 2
+            packet[key] = np.zeros((total,), dtype=np.float32)
+        return packet
 
-    def _publish_action_vector(self, action_vec: np.ndarray, increment_count: bool = True, 
-                              log_message: str = None, error_context: str = "action") -> None:
-        """Publish an action vector with consistent error handling.
-        
-        Args:
-            action_vec: The action vector to publish
-            increment_count: Whether to increment the publish counter
-            log_message: Optional message to log after successful publish
-            error_context: Context string for error messages
-        """
+    def _publish_action_packet(self, packet: Dict[str, np.ndarray],
+                               increment_count: bool = True,
+                               log_message: Optional[str] = None,
+                               error_context: str = "action") -> None:
+        """Publish an action packet with consistent error handling."""
         try:
-            # Handle multiple action specs by splitting the action vector
-            if len(self._action_specs) > 1:
-                self._publish_multiple_actions(action_vec, increment_count, log_message, error_context)
-            else:
-                # Single action spec (original behavior)
-                msg = encode_value(
-                    ros_type=self._act_spec.ros_type,
-                    names=self._act_spec.names,
-                    action_vec=action_vec,
-                    clamp=getattr(self._act_spec, "clamp", None),
-                )
-                self._act_pub.publish(msg)
-
-                if increment_count:
-                    self._pub_count += 1
-                if log_message:
-                    self.get_logger().info(log_message)
-
-        except (RuntimeError, ValueError, TypeError) as e:
-            action_type = getattr(self._act_spec, "ros_type", "unknown")
-            action_names = getattr(self._act_spec, "names", None)
-            vec_len = len(action_vec) if action_vec is not None else "unknown"
-            names_count = len(action_names) if action_names else 0
-            self.get_logger().error(
-                f"{error_context} publish error: {e} "
-                f"(type={action_type}, names_count={names_count}, vec_len={vec_len})"
-            )
-
-    def _publish_multiple_actions(self, action_vec: np.ndarray, increment_count: bool = True,
-                                log_message: str = None, error_context: str = "action") -> None:
-        """Publish action vector to multiple action specs by splitting based on names."""
-        start_idx = 0
-        published_count = 0
-        
-        for spec in self._action_specs:
-            try:
-                # Calculate how many values this spec needs
-                spec_len = len(spec.names) if spec.names else 0
-                if spec_len == 0:
-                    continue
-                    
-                # Extract the portion of the action vector for this spec
-                end_idx = start_idx + spec_len
-                if end_idx > len(action_vec):
-                    self.get_logger().error(
-                        f"Action vector too short for spec {spec.topic}: "
-                        f"need {spec_len} values, have {len(action_vec) - start_idx}"
-                    )
-                    break
-                    
-                spec_action_vec = action_vec[start_idx:end_idx]
-                
-                # Encode and publish
-                msg = encode_value(
-                    ros_type=spec.ros_type,
-                    names=spec.names,
-                    action_vec=spec_action_vec,
-                    clamp=getattr(spec, "clamp", None),
-                )
-                
-                pub = self._act_pubs[spec.topic]
-                pub.publish(msg)
-                published_count += 1
-                start_idx = end_idx
-                
-            except (RuntimeError, ValueError, TypeError) as e:
-                self.get_logger().error(
-                    f"{error_context} publish error for {spec.topic}: {e} "
-                    f"(type={spec.ros_type}, names_count={len(spec.names) if spec.names else 0})"
-                )
-        
-        if increment_count and published_count > 0:
-            self._pub_count += 1
-        if log_message and published_count > 0:
-            self.get_logger().info(f"{log_message} (published to {published_count} topics)")
+            def _inc(): 
+                self._pub_count += 1
+            self._router.publish_packet(packet, increment_cb=_inc if increment_count else None, context=error_context)
+            if log_message:
+                self.get_logger().info(log_message)
+        except Exception as e:
+            self.get_logger().error(f"{error_context} publish error: {e}")
 
     def _publish_safety_command(self, increment_count: bool = True, log_message: str = None) -> None:
-        """Publish safety command (zeros or hold last action)."""
-        safety_vec = self._create_safety_vector()
-        self._publish_action_vector(safety_vec, increment_count, log_message, "safety")
+        """Publish safety command (zeros or hold last) across all keys/specs."""
+        pkt = self._create_safety_packet()
+        self._publish_action_packet(pkt, increment_count, log_message, "safety")
 
     # ---------------- Sub callback ----------------
     def _obs_cb(self, msg, spec: SpecView) -> None:
@@ -723,8 +754,8 @@ class PolicyBridge(Node):
 
     def _produce_actions(self) -> int:
         """Run policy inference and enqueue actions. Returns number produced."""
-        use_chunks = self._params.use_chunks
-        k = self._params.actions_per_chunk
+        use_chunks = self._params.use_action_chunks
+        k = int(self._params.actions_per_chunk)
         thr = float(self._params.chunk_size_threshold)
 
         produced = 0
@@ -768,7 +799,7 @@ class PolicyBridge(Node):
                         chunk = self.policy.predict_action_chunk(batch)
                         self.get_logger().info(f"Generated action chunk shape: {chunk.shape}")
                         chunk = chunk.squeeze(0)
-                        chunk = self._postprocess_actions(chunk)
+                        chunk = self._postprocess_actions(chunk)  # could be tensor or dict
                         self.get_logger().info(f"Postprocessed action chunk shape: {chunk.shape}")
                     except Exception as e:
                         self.get_logger().error(f"Error generating actions: {e}")
@@ -776,27 +807,34 @@ class PolicyBridge(Node):
                         self.get_logger().error(f"Traceback: {traceback.format_exc()}")
                         return 0
 
+                    # Normalize postprocessed outputs into packets
+                    def to_packet(i: int) -> Dict[str, np.ndarray]:
+                        # dict case: {"action": T[d], "action.arm": T[m], ...}
+                        if isinstance(chunk, dict):
+                            pkt = {}
+                            for key, t in chunk.items():
+                                v = t[i].detach().cpu().numpy().astype(np.float32).ravel()
+                                pkt[key] = v
+                            return pkt
+                        # tensor case (legacy single key)
+                        vec = chunk[i].detach().cpu().numpy().astype(np.float32).ravel()
+                        # If multiple keys exist but model returns a single 'action' vector,
+                        # put it under 'action' and let router split across repeated specs.
+                        return {"action": vec}
+
                     # 2) Always schedule publishes on the node clock,
                     #    aligned to the next execution tick and in the future.
                     now_wall = self.get_clock().now().nanoseconds
                     base_t = self._next_exec_tick_ns(now_wall + self.step_ns)
                     for i in range(k):
                         t_i = base_t + i * self.step_ns
-                        self._producer_buffer.append(
-                            (
-                                t_i,
-                                np.asarray(
-                                    chunk[i].detach().cpu().numpy(),
-                                    dtype=np.float32, #TODO: We might want to have the option to use other dtypes
-                                ).ravel(),
-                            )
-                        )
-                        produced = k
+                        self._producer_buffer.append((t_i, to_packet(i)))
+                    produced = k
                 else:
                     try:
                         a = self.policy.select_action(batch)
                         self.get_logger().info(f"Generated single action shape: {a.shape}")
-                        a = self._postprocess_actions(a)
+                        a = self._postprocess_actions(a)  # could be tensor or dict
                         self.get_logger().info(f"Postprocessed single action shape: {a.shape}")
                     except Exception as e:
                         self.get_logger().error(f"Error generating single action: {e}")
@@ -805,14 +843,11 @@ class PolicyBridge(Node):
                         return 0
                     now_wall = self.get_clock().now().nanoseconds
                     t0 = self._next_exec_tick_ns(now_wall + self.step_ns)
-                    self._producer_buffer.append(
-                        (
-                            t0,
-                            np.asarray(
-                                a[0].detach().cpu().numpy(), dtype=np.float32
-                            ).ravel(),
-                        )
-                    )
+                    if isinstance(a, dict):
+                        pkt = {k: a[k][0].detach().cpu().numpy().astype(np.float32).ravel() for k in a}
+                    else:
+                        pkt = {"action": a[0].detach().cpu().numpy().astype(np.float32).ravel()}
+                    self._producer_buffer.append((t0, pkt))
                     produced = 1
 
         if self._producer_buffer:
@@ -831,7 +866,7 @@ class PolicyBridge(Node):
         # Warmup: widen tolerance x4 and avoid noisy warnings
         tol_ns = self._publish_tolerance_ns
 
-        act_vec: Optional[np.ndarray] = None
+        packet: Optional[Dict[str, np.ndarray]] = None
         with self._queue_lock:
             # Drop clearly stale actions so we can catch up
             while self._queue and (self._queue[0][0] < now_ns - tol_ns):
@@ -868,10 +903,10 @@ class PolicyBridge(Node):
             # Remove all actions before the best one
             for _ in range(best_idx):
                 self._queue.popleft()
-            _t_sel, act_vec = self._queue.popleft()
+            _t_sel, packet = self._queue.popleft()
 
-        self._last_action = act_vec
-        self._publish_action_vector(act_vec)
+        self._last_packet = packet
+        self._publish_action_packet(packet)
 
 
     def _get_most_recent_image_timestamp(self) -> Optional[int]:
@@ -941,6 +976,9 @@ class PolicyBridge(Node):
                 self.get_logger().warning(f"Observation {key} is None, zero padding")
             else:
                 obs_frame[key] = v
+        
+        # Always inject the current goal's prompt as 'task'
+        # If there are additional streams like 'task.local', 'task.plan', they are already in obs_frame.
         obs_frame["task"] = self._prompt
         return obs_frame
 
@@ -982,6 +1020,14 @@ class PolicyBridge(Node):
 
     # ---------------- Postprocess wrapper ----------------
     def _postprocess_actions(self, x):
+        """Postprocess action outputs: accepts torch.Tensor or dict[str, torch.Tensor]."""
+        if isinstance(x, dict):
+            out: Dict[str, torch.Tensor] = {}
+            for k, v in x.items():
+                v = v.to(self.device)
+                out[k] = self.postprocessor(v)
+            return out
+        else:
             x = x.to(self.device)
             return self.postprocessor(x)
 
