@@ -352,11 +352,19 @@ class EpisodeRecorderServer(Node):
 
         # Optional tuning (MCAP supports preset/config; harmless if empty)
         if self._storage_preset_profile:
-            # type: ignore[attr-defined]
-            storage_options.storage_preset_profile = self._storage_preset_profile
+            if hasattr(storage_options, "storage_preset_profile"):
+                setattr(storage_options, "storage_preset_profile", self._storage_preset_profile)
+            else:
+                self.get_logger().info(
+                    "storage_preset_profile ignored on this rosbag2 distro (not supported)"
+                )
         if self._storage_config_uri:
-            # type: ignore[attr-defined]
-            storage_options.storage_config_uri = self._storage_config_uri
+            if hasattr(storage_options, "storage_config_uri"):
+                setattr(storage_options, "storage_config_uri", self._storage_config_uri)
+            else:
+                self.get_logger().info(
+                    "storage_config_uri ignored on this rosbag2 distro (not supported)"
+                )
 
         converter_options = rosbag2_py.ConverterOptions(
             input_serialization_format="cdr", output_serialization_format="cdr"
@@ -658,16 +666,9 @@ class EpisodeRecorderServer(Node):
                     yaml.safe_dump(meta, f, sort_keys=False)
                 return
             except (OSError, yaml.YAMLError):
-                # Back off via a short ROS timer rather than wall clock sleep
-                def _release() -> None:
-                    pass
-
-                t = self.create_timer(
-                    METADATA_RETRY_PERIOD_S, _release, callback_group=self._cbg
-                )
-                # Wait for timer to fire
-                time.sleep(METADATA_RETRY_PERIOD_S)
-                self.destroy_timer(t)
+                # Back off by spinning ROS executor with timeout (non-blocking)
+                # This allows other callbacks to execute during the retry delay
+                rclpy.spin_once(self, timeout_sec=METADATA_RETRY_PERIOD_S)
 
 
 def main() -> None:

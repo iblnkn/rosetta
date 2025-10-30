@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -199,6 +199,8 @@ class SpecView:
     stamp_src: str
     clamp: Optional[Tuple[float, float]]  # actions only
     safety_behavior: Optional[str]  # actions only: "zeros" | "hold"
+    qos: Optional[Dict[str, Any]] = None  # observation subscription QoS
+    publish_qos: Optional[Dict[str, Any]] = None  # action publisher QoS
 
 
 def _num_channels_from_encoding(encoding: str) -> int:
@@ -213,10 +215,10 @@ def _num_channels_from_encoding(encoding: str) -> int:
     if enc in ("bgra8", "rgba8", "bgra16", "rgba16"):
         return 4
     
-    # Bayer encodings (all single channel)
+    # Bayer encodings (all single channel raw mosaics)
     if enc in ("bayer_rggb8", "bayer_bggr8", "bayer_gbrg8", "bayer_grbg8",
                "bayer_rggb16", "bayer_bggr16", "bayer_gbrg16", "bayer_grbg16"):
-        return 4
+        return 1
     
     # Generic content encodings (8UC1, 16UC3, 32FC1, etc.)
     abstract_prefixes = ["8uc", "8sc", "16uc", "16sc", "32sc", "32fc", "64fc"]
@@ -288,6 +290,8 @@ def iter_specs(contract: Contract) -> Iterable[SpecView]:
             stamp_src=al.stamp,
             clamp=None,
             safety_behavior=None,
+            qos=o.qos,  # per-spec QoS for subscription
+            publish_qos=None,  # observations don't publish
         )
 
     # Actions
@@ -312,6 +316,8 @@ def iter_specs(contract: Contract) -> Iterable[SpecView]:
             stamp_src=contract.timestamp_source,
             clamp=clamp,
             safety_behavior=(a.safety_behavior or "zeros").lower(),
+            qos=None,  # actions don't subscribe
+            publish_qos=a.publish_qos,  # per-spec QoS for publication
         )
 
 
@@ -564,6 +570,142 @@ def zero_pad(feature_meta: Dict[str, Any]) -> Any:
     return None
 
 
+def concatenate_action_specs(
+    action_specs: List[SpecView],
+    samples: Dict[str, Optional[np.ndarray]],
+    zero_pad_map: Optional[Dict[str, Any]] = None,
+    logger: Optional[Any] = None,
+) -> np.ndarray:
+    """Concatenate multiple action specs with the same key into a single ordered vector.
+    
+    Given a list of action specs (for the same action key) and a dictionary of per-topic
+    samples, extracts values for each spec in contract order, handles missing values with
+    zero padding.
+    
+    Args:
+        action_specs: List of SpecView for action specs with the same key (in contract order)
+        samples: Dict mapping dict_key -> sample value (or None if missing)
+            Keys should be "<action_key>_<topic>" format
+        zero_pad_map: Optional dict mapping dict_key -> zero-padded default
+            If None, creates zeros from spec.names length
+        logger: Optional logger for warnings (if None, warnings are silenced)
+            
+    Returns:
+        Concatenated action vector as numpy array (float32)
+    """
+    if not action_specs:
+        return np.zeros((0,), dtype=np.float32)
+    
+    if zero_pad_map is None:
+        zero_pad_map = {}
+    
+    action_parts = []
+    for sv in action_specs:
+        # Create unique key for action specs (always use topic suffix for consistency)
+        dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+        
+        # Get sample value
+        v = samples.get(dict_key)
+        
+        if v is None:
+            # Use zero padding
+            zp = zero_pad_map.get(dict_key)
+            if zp is None:
+                # Create default zeros from spec names length
+                zp = np.zeros((len(sv.names) if sv.names else 0,), dtype=np.float32)
+            v = zp.copy() if isinstance(zp, np.ndarray) else zp
+            if logger:
+                logger.warning(f"Action {dict_key} is None, zero padding")
+        else:
+            # Ensure it's a numpy array
+            if not isinstance(v, np.ndarray):
+                v = np.asarray(v, dtype=np.float32)
+            # Flatten to 1D if needed
+            v = v.ravel()
+        
+        action_parts.append(v)
+    
+    # Concatenate all action parts in contract order
+    if action_parts:
+        concatenated = np.concatenate(action_parts, axis=0)
+    else:
+        concatenated = np.zeros((0,), dtype=np.float32)
+    
+    return concatenated.astype(np.float32)
+
+
+def concatenate_state_specs(
+    state_specs: List[SpecView],
+    samples: Dict[str, Optional[np.ndarray]],
+    zero_pad_map: Optional[Dict[str, Any]] = None,
+    permutation_map: Optional[np.ndarray] = None,
+    logger: Optional[Any] = None,
+) -> np.ndarray:
+    """Concatenate multiple observation.state specs into a single ordered vector.
+    
+    Given a list of state specs and a dictionary of per-topic samples, extracts
+    values for each spec in contract order, handles missing values with zero padding,
+    and optionally applies a permutation to match policy training order.
+    
+    Args:
+        state_specs: List of SpecView for observation.state specs (in contract order)
+        samples: Dict mapping dict_key -> sample value (or None if missing)
+            Keys should be either "observation.state" or "observation.state_<topic>"
+        zero_pad_map: Optional dict mapping dict_key -> zero-padded default
+            If None, creates zeros from spec.names length
+        permutation_map: Optional numpy array for reordering state dimensions
+            (e.g., to match policy training order)
+        logger: Optional logger for warnings (if None, warnings are silenced)
+            
+    Returns:
+        Concatenated state vector as numpy array (float32)
+    """
+    if not state_specs:
+        return np.zeros((0,), dtype=np.float32)
+    
+    if zero_pad_map is None:
+        zero_pad_map = {}
+    
+    state_parts = []
+    for sv in state_specs:
+        # Create unique key for observation.state specs (always use topic suffix for consistency)
+        # This matches the key format used in bag_to_lerobot and PolicyBridge
+        dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+        
+        # Get sample value
+        v = samples.get(dict_key)
+        
+        if v is None:
+            # Use zero padding
+            zp = zero_pad_map.get(dict_key)
+            if zp is None:
+                # Create default zeros from spec names length
+                zp = np.zeros((len(sv.names) if sv.names else 0,), dtype=np.float32)
+            v = zp.copy() if isinstance(zp, np.ndarray) else zp
+            if logger:
+                logger.warning(f"Observation {dict_key} is None, zero padding")
+        else:
+            # Ensure it's a numpy array
+            if not isinstance(v, np.ndarray):
+                v = np.asarray(v, dtype=np.float32)
+            # Flatten to 1D if needed
+            v = v.ravel()
+        
+        state_parts.append(v)
+    
+    # Concatenate all state parts in contract order
+    if state_parts:
+        concatenated = np.concatenate(state_parts, axis=0)
+    else:
+        concatenated = np.zeros((0,), dtype=np.float32)
+    
+    # Apply permutation if provided and vector is 1D
+    if permutation_map is not None and concatenated.ndim == 1:
+        concatenated = concatenated[permutation_map]
+    
+    return concatenated.astype(np.float32)
+
+
 def contract_fingerprint(contract) -> str:
     """Generate a deterministic fingerprint for a contract to detect changes.
     
@@ -571,50 +713,48 @@ def contract_fingerprint(contract) -> str:
     data processing, allowing training to validate that the policy was trained
     with the same contract structure as the serving environment.
     
+    The fingerprint is computed from SpecView (which is what's actually used
+    for training/serving), ensuring it captures all meaningful contract changes.
+    
     Args:
-        contract: Either a dict or Contract dataclass instance
+        contract: Contract dataclass instance
         
     Returns:
         A hex string representing the contract fingerprint.
     """
-    # Convert Contract dataclass to dict if needed
-    if hasattr(contract, '__dataclass_fields__'):
-        contract_dict = asdict(contract)
-    else:
-        contract_dict = contract
-    # Extract key structural elements that affect data processing
+    # Compute fingerprint from SpecView list (what's actually used)
+    specs = list(iter_specs(contract))
+    
     fingerprint_data = {
-        "meta": contract_dict.get("meta", {}),
-        "topics": contract_dict.get("topics", {}),
-        "types": contract_dict.get("types", {}),
-        "order": contract_dict.get("order", {}),
-        "observations": [],
-        "actions": []
+        "rate_hz": float(contract.rate_hz),
+        "specs": []
     }
-
-    # Add observation specs
-    for obs in contract_dict.get("observations", []):
-        fingerprint_data["observations"].append({
-            "key": obs.get("key"),
-            "topic": obs.get("topic"),
-            "ros_type": obs.get("ros_type"),
-            "selector": obs.get("selector", {}),
-            "align": obs.get("align", {}),
-            "image_resize": obs.get("image_resize"),
-            "image_channels": obs.get("image_channels")
-        })
-
-    # Add action specs
-    for act in contract_dict.get("actions", []):
-        fingerprint_data["actions"].append({
-            "key": act.get("key"),
-            "topic": act.get("topic"),
-            "ros_type": act.get("ros_type"),
-            "selector": act.get("selector", {}),
-            "publish_qos": act.get("publish_qos", {}),
-            "safety_behavior": act.get("safety_behavior")
-        })
-
+    
+    # Extract meaningful fields from each SpecView
+    for spec in specs:
+        spec_data = {
+            "key": spec.key,
+            "topic": spec.topic,
+            "ros_type": spec.ros_type,
+            "is_action": spec.is_action,
+            "names": list(spec.names) if spec.names else [],
+            "image_resize": list(spec.image_resize) if spec.image_resize else None,
+            "image_channels": spec.image_channels,
+            "resample_policy": spec.resample_policy,
+            "asof_tol_ms": spec.asof_tol_ms,
+            "stamp_src": spec.stamp_src,
+        }
+        
+        # Action-specific fields
+        if spec.is_action:
+            spec_data["clamp"] = list(spec.clamp) if spec.clamp else None
+            spec_data["safety_behavior"] = spec.safety_behavior
+            spec_data["publish_qos"] = spec.publish_qos
+        else:
+            spec_data["qos"] = spec.qos
+        
+        fingerprint_data["specs"].append(spec_data)
+    
     # Create deterministic JSON string and hash it
     json_str = json.dumps(fingerprint_data, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(json_str.encode('utf-8')).hexdigest()[:16]

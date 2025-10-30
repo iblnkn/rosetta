@@ -8,8 +8,12 @@ This module contains all registered decoders for converting ROS messages into
 forms suitable for policy inference. Decoders are registered using the
 @register_decoder decorator and called via decode_value() in processing_utils.py.
 
+Image resizing uses NumPy nearest-neighbor interpolation, which handles all dtypes
+and special values (NaN, Inf) correctly.
+
 Supported message types:
 - sensor_msgs/msg/Image: Convert to HxWx3 uint8 RGB arrays
+- sensor_msgs/msg/CompressedImage: Decompress and convert to HxWx3 RGB arrays (requires opencv-python)
 - std_msgs/msg/Float32MultiArray: Convert to float32 numpy arrays
 - std_msgs/msg/Int32MultiArray: Convert to int32 numpy arrays  
 - std_msgs/msg/String: Convert to Python strings
@@ -17,6 +21,13 @@ Supported message types:
 
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+
+# Guarded import for OpenCV (used for CompressedImage)
+try:
+    import cv2
+    _CV2_AVAILABLE = True
+except ImportError:
+    _CV2_AVAILABLE = False
 
 from rosetta.common.contract_utils import register_decoder
 
@@ -50,20 +61,17 @@ def dot_get(obj, path: str):
     return cur
 
 
-def _nearest_resize_rgb(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
-    """Pure-numpy nearest-neighbor resize for HxWxC arrays (uint8)."""
-    if img.shape[0] == rh and img.shape[1] == rw:
-        return img
-    y = np.clip(np.linspace(0, img.shape[0] - 1, rh), 0, img.shape[0] - 1).astype(
-        np.int64
-    )
-    x = np.clip(np.linspace(0, img.shape[1] - 1, rw), 0, img.shape[1] - 1).astype(
-        np.int64
-    )
-    return img[y][:, x]
-
-def _nearest_resize_any(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
-    # img is HxW or HxWxC
+def _nearest_resize_numpy(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
+    """Pure-numpy nearest-neighbor resize fallback.
+    
+    Args:
+        img: Image array in HxW or HxWxC format
+        rh: Target height
+        rw: Target width
+        
+    Returns:
+        Resized image array
+    """
     H, W = img.shape[:2]
     if H == rh and W == rw:
         return img
@@ -73,6 +81,41 @@ def _nearest_resize_any(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
         return img[np.ix_(y, x)]
     else:  # HxWxC
         return img[y][:, x, :]
+
+
+def resize_image(img: np.ndarray, rh: int, rw: int, interpolation: str = "nearest") -> np.ndarray:
+    """
+    Resize image using NumPy nearest-neighbor interpolation.
+    
+    Args:
+        img: Image array in HxW or HxWxC format (any dtype)
+        rh: Target height
+        rw: Target width
+        interpolation: Interpolation mode (only 'nearest' is supported)
+            
+    Returns:
+        Resized image array with same dtype and channel count as input
+    """
+    # Only supports nearest-neighbor interpolation
+    if interpolation != "nearest":
+        import warnings
+        warnings.warn(
+            f"NumPy resize only supports 'nearest' interpolation, "
+            f"got '{interpolation}'. Using nearest-neighbor.",
+            UserWarning
+        )
+    return _nearest_resize_numpy(img, rh, rw)
+
+
+# Backward compatibility aliases (using the new pluggable resize)
+def _nearest_resize_rgb(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
+    """Legacy alias: RGB resize using pluggable fast path."""
+    return resize_image(img, rh, rw, interpolation="nearest")
+
+
+def _nearest_resize_any(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
+    """Legacy alias: generic resize using pluggable fast path."""
+    return resize_image(img, rh, rw, interpolation="nearest")
 
 
 def decode_ros_image(
@@ -133,7 +176,7 @@ def decode_ros_image(
         # Normalize depth to [0,1] while preserving REP 117 special values (NaN, ±Inf)
         hwc_normalized = np.where(
             np.isfinite(hwc),
-            np.clip(hwc, 0, 10) / 10,  # Cap at 50m, normalize to [0,1]
+            np.clip(hwc, 0, 50) / 50,  # Cap at 50m, normalize to [0,1]
             hwc  # Preserve NaN, -Inf, +Inf
         )
         hwc_3ch = np.repeat(hwc_normalized, 3, axis=-1)  # H'xW'x3
@@ -152,7 +195,7 @@ def decode_ros_image(
         hwc_3ch = np.repeat(hwc, 3, axis=-1)  # H'xW'x3
         return hwc_3ch.astype(np.float32)
 
-    # --- Color paths (unchanged behavior) ---
+    # --- Color paths ---
     elif enc in ("rgb8", "bgr8"):
         ch = 3
         row = raw.reshape(h, step)[:, : w * ch]
@@ -164,8 +207,30 @@ def decode_ros_image(
         arr = row.reshape(h, w, ch)
         rgb = arr[..., :3]
         hwc_rgb = rgb if enc == "rgba8" else rgb[..., ::-1]
+    # --- Bayer encodings: convert to grayscale (demosaic not yet implemented) ---
+    elif enc.startswith("bayer_"):
+        # Bayer encodings are single-channel raw mosaics; convert to grayscale
+        if not step: step = max(w, 1)
+        arr = raw.reshape(h, step)[:, :w].reshape(h, w)
+        hwc = (arr.astype(np.float32) / 255.0)[..., None]  # HxWx1
+        if resize_hw:
+            rh, rw = int(resize_hw[0]), int(resize_hw[1])
+            hwc = _nearest_resize_any(hwc, rh, rw)
+        # Replicate to 3 channels for LeRobot compatibility
+        hwc_3ch = np.repeat(hwc, 3, axis=-1)  # H'xW'x3
+        return hwc_3ch.astype(np.float32)
+    # --- Unknown encodings: attempt grayscale fallback ---
     else:
-        raise ValueError(f"Unsupported image encoding '{enc}'")
+        # Fallback: try to interpret as grayscale 8-bit
+        if not step: step = max(w, 1)
+        arr = raw.reshape(h, step)[:, :w].reshape(h, w)
+        hwc = (arr.astype(np.float32) / 255.0)[..., None]  # HxWx1
+        if resize_hw:
+            rh, rw = int(resize_hw[0]), int(resize_hw[1])
+            hwc = _nearest_resize_any(hwc, rh, rw)
+        # Replicate to 3 channels for LeRobot compatibility
+        hwc_3ch = np.repeat(hwc, 3, axis=-1)  # H'xW'x3
+        return hwc_3ch.astype(np.float32)
 
     # Color processing: resize and normalize to [0,1]
     if resize_hw:
@@ -187,6 +252,42 @@ def _dec_image(msg, spec):
     if spec.names:
         return _decode_via_names(msg, spec.names)
     return decode_ros_image(msg, spec.image_encoding, spec.image_resize)
+
+
+@register_decoder("sensor_msgs/msg/CompressedImage")
+def _dec_compressed_image(msg, spec):
+    """CompressedImage decoder: decompress using cv2 if available."""
+    if spec.names:
+        return _decode_via_names(msg, spec.names)
+    
+    if not _CV2_AVAILABLE:
+        raise RuntimeError(
+            "sensor_msgs/CompressedImage requires OpenCV (cv2). "
+            "Install with: pip install opencv-python"
+        )
+    
+    # Decompress image data
+    compressed_data = np.frombuffer(msg.data, dtype=np.uint8)
+    # cv2.imdecode expects a NumPy array and returns BGR format
+    # Type ignore needed because cv2 is conditionally imported
+    img_bgr = cv2.imdecode(compressed_data, cv2.IMREAD_COLOR)  # type: ignore[attr-defined]
+    
+    if img_bgr is None:
+        raise ValueError(
+            f"Failed to decode CompressedImage with format '{msg.format}'"
+        )
+    
+    # Convert BGR to RGB for consistency with other decoders
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # type: ignore[attr-defined]
+    
+    # Resize if needed (use pluggable resize for consistency)
+    if spec.image_resize:
+        rh, rw = int(spec.image_resize[0]), int(spec.image_resize[1])
+        img_rgb = resize_image(img_rgb, rh, rw, interpolation="nearest")
+    
+    # Normalize to [0,1] and return HWC format
+    hwc_float = img_rgb.astype(np.float32) / 255.0
+    return hwc_float
 
 
 # ---------- Array decoders ----------

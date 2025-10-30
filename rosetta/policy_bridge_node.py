@@ -37,11 +37,13 @@ from rosetta.common.contract_utils import (
     SpecView,
     feature_from_spec,
     zero_pad,
-    qos_profile_from_dict,    contract_fingerprint,
+    qos_profile_from_dict,
+    contract_fingerprint,
     decode_value,
     StreamBuffer,
     stamp_from_header_ns,
     encode_value,
+    concatenate_state_specs,
 )
 
 from rosetta_interfaces.action import RunPolicy
@@ -146,6 +148,59 @@ class _RuntimeParams:
     max_queue_actions: int = 512
     header_skew_ms: float = 500.0
     publish_tolerance_ms: Optional[float] = None
+
+
+@dataclass(slots=True)
+class TimingPolicy:
+    """Consolidates timing-related configuration and logic.
+    
+    Centralizes tolerance, anchor, skew, and safety strategy configuration
+    to simplify PolicyBridge timing logic.
+    """
+    step_ns: int
+    use_header_time: bool
+    header_skew_ms: float
+    publish_tolerance_ms: Optional[float]
+    
+    @property
+    def header_skew_ns(self) -> int:
+        """Header skew tolerance in nanoseconds."""
+        return int(self.header_skew_ms * 1e6)
+    
+    @property
+    def publish_tolerance_ns(self) -> int:
+        """Publish tolerance in nanoseconds. Defaults to one frame if None."""
+        if self.publish_tolerance_ms is None:
+            return self.step_ns
+        return int(float(self.publish_tolerance_ms) * 1e6)
+    
+    def compute_sample_time(self, clock, anchor_timestamp_fn) -> int:
+        """Compute sampling time using configured anchor strategy.
+        
+        Args:
+            clock: ROS clock for current time
+            anchor_timestamp_fn: Function returning anchor timestamp or None
+            
+        Returns:
+            Sampling timestamp in nanoseconds
+        """
+        sample_t_ns = None
+        if self.use_header_time:
+            ts = anchor_timestamp_fn()
+            if ts is not None:
+                skew = clock.now().nanoseconds - ts
+                if 0 <= skew <= self.header_skew_ns:
+                    sample_t_ns = ts
+        if sample_t_ns is None:
+            sample_t_ns = clock.now().nanoseconds
+        return sample_t_ns
+    
+    def is_header_time_valid(self, header_ts_ns: int, now_ns: int) -> bool:
+        """Check if header timestamp is within valid skew window."""
+        if not self.use_header_time:
+            return False
+        skew = now_ns - header_ts_ns
+        return 0 <= skew <= self.header_skew_ns
 
 
 def _device_from_param(requested: Optional[str] = None) -> torch.device:
@@ -363,6 +418,8 @@ class PolicyBridge(Node):
                     use_header_time=self._params.use_header_time,
                     use_autocast=self._params.use_autocast,
                     max_queue_actions=self._params.max_queue_actions,
+                    header_skew_ms=self._params.header_skew_ms,
+                    publish_tolerance_ms=self._params.publish_tolerance_ms,
                 )
         except Exception as e:
             self.get_logger().debug(f"Could not clamp actions_per_chunk from policy config: {e!r}")
@@ -394,13 +451,26 @@ class PolicyBridge(Node):
         self.step_ns = int(round(1e9 / self.fps))
         self.step_sec = 1.0 / self.fps
 
+        # ---------------- Timing Policy ----------------
+        # Consolidate timing configuration and logic
+        self._timing_policy = TimingPolicy(
+            step_ns=self.step_ns,
+            use_header_time=self._params.use_header_time,
+            header_skew_ms=self._params.header_skew_ms,
+            publish_tolerance_ms=self._params.publish_tolerance_ms,
+        )
+
         self._cbg = ReentrantCallbackGroup()
         self._obs_zero, self._subs, self._ros_sub_handles = {}, {}, []
-        self._state_specs = [s for s in self._obs_specs if s.key == "observation.state"]
+        # Group any observation.state* (e.g., observation.state, observation.state.arm)
+        self._state_groups: Dict[str, List[SpecView]] = {}
+        for s in self._obs_specs:
+            if s.key.startswith("observation.state"):
+                self._state_groups.setdefault(s.key, []).append(s)
         
-        # Build contract state name order (for layout audit)
+        # Keep permutation audit ONLY for the base 'observation.state' group (if present)
         self._contract_state_names = []
-        for sv in self._state_specs:
+        for sv in self._state_groups.get("observation.state", []):
             self._contract_state_names.extend(list(sv.names or []))
         
         # State layout audit and permutation mapping (critical for correct policy inputs)
@@ -436,8 +506,9 @@ class PolicyBridge(Node):
         for s in self._obs_specs:
             k, meta, _ = feature_from_spec(s, use_videos=False)
             
-            # Create unique key for multiple observation.state specs (mirror bag_to_lerobot logic)
-            if s.key == "observation.state" and len(self._state_specs) > 1:
+            # Create unique key for observation.state specs (always use topic suffix for consistency)
+            # This matches bag_to_lerobot and concatenate_state_specs helper
+            if s.key.startswith("observation.state"):
                 dict_key = f"{s.key}_{s.topic.replace('/', '_')}"
             else:
                 dict_key = s.key
@@ -445,9 +516,12 @@ class PolicyBridge(Node):
             self._obs_zero[dict_key] = zero_pad(meta)
 
             msg_cls = get_message(s.ros_type)
+            # Prefer per-spec QoS, then fall back to key-based QoS
+            obs_qos_dict = s.qos or self._obs_qos_by_key.get(s.key)
+            sub_qos = qos_profile_from_dict(obs_qos_dict) or QoSProfile(depth=10)
             sub = self.create_subscription(
                 msg_cls, s.topic, lambda m, sv=s: self._obs_cb(m, sv),
-                qos_profile_from_dict(self._obs_qos_by_key.get(s.key)),
+                sub_qos,
                 callback_group=self._cbg,
             )
             self._ros_sub_handles.append(sub)
@@ -467,7 +541,7 @@ class PolicyBridge(Node):
         self._act_pubs: Dict[str, Any] = {}
         for spec in self._act_specs:
             # Prefer per-spec QoS, then fall back to key-based QoS
-            act_qos_dict = getattr(spec, "publish_qos", None) or self._act_qos_by_key.get(spec.key)
+            act_qos_dict = spec.publish_qos or self._act_qos_by_key.get(spec.key)
             pub_qos = qos_profile_from_dict(act_qos_dict) or QoSProfile(depth=10)
             pub = self.create_publisher(
                 get_message(spec.ros_type), spec.topic, pub_qos
@@ -511,26 +585,24 @@ class PolicyBridge(Node):
 
 
         # ---------------- Safety behavior ----------------
-        # Get safety behavior from first action spec (all specs should have the same)
-        first_spec = self._act_specs[0] if self._act_specs else None
-        self._safety_behavior = getattr(
-            first_spec, "safety_behavior", "zeros"
-        ).lower() if first_spec else "zeros"
-        if self._safety_behavior not in ("zeros", "hold"):
-            self.get_logger().warning(
-                f"Unknown safety_behavior '{self._safety_behavior}', defaulting to 'zeros'"
+        # Store safety behavior per action key (different keys may have different behaviors)
+        self._safety_behavior_by_key: Dict[str, str] = {}
+        for key, specs in self._action_specs_by_key.items():
+            # Get safety behavior from first spec of this key (specs for same key should share behavior)
+            first_spec = specs[0] if specs else None
+            behavior = getattr(first_spec, "safety_behavior", "zeros").lower() if first_spec else "zeros"
+            if behavior not in ("zeros", "hold"):
+                self.get_logger().warning(
+                    f"Unknown safety_behavior '{behavior}' for key '{key}', defaulting to 'zeros'"
+                )
+                behavior = "zeros"
+            self._safety_behavior_by_key[key] = behavior
+            self.get_logger().info(
+                f"Safety for '{key}': {'hold last action' if behavior == 'hold' else 'zeros'} on stop."
             )
-            self._safety_behavior = "zeros"
-        self.get_logger().info(
-            "Safety: zeros on stop."
-            if self._safety_behavior == "zeros"
-            else "Safety: hold last action on stop."
-        )
 
         # ---------------- Timing strategy ----------------
-        # Be a bit lenient on timing jitter (network + scheduling)
-        tol_ms = self._params.publish_tolerance_ms
-        self._publish_tolerance_ns = int(self.step_ns) if tol_ms is None else int(float(tol_ms) * 1e6)
+        # Timing policy already handles publish_tolerance_ns via property
         
         # Starvation guard (must-produce after queue empties)
         self._starved_since_ns: Optional[int] = None
@@ -543,7 +615,10 @@ class PolicyBridge(Node):
         self._queue: Deque[Tuple[int, int, Dict[str, np.ndarray]]] = deque(
             maxlen=self._params.max_queue_actions
         )
+        # Ordered mapping by timestep for O(1) merge lookups (avoids quadratic rebuild)
+        self._queue_by_step: Dict[int, Tuple[int, Dict[str, np.ndarray]]] = {}
         self._queue_lock = threading.Lock()
+        self._last_packet_lock = threading.Lock()
         self._last_packet: Optional[Dict[str, np.ndarray]] = None
         self._producer_buffer: List[Tuple[int, int, Dict[str, np.ndarray]]] = []
 
@@ -584,9 +659,13 @@ class PolicyBridge(Node):
             with self._queue_lock:
                 self._queue = deque(self._queue, maxlen=new_params.max_queue_actions)
         self._params = new_params
-        # Recompute derived values
-        tol_ms = self._params.publish_tolerance_ms
-        self._publish_tolerance_ns = int(self.step_ns) if tol_ms is None else int(float(tol_ms) * 1e6)
+        # Update timing policy with new parameters
+        self._timing_policy = TimingPolicy(
+            step_ns=self.step_ns,
+            use_header_time=self._params.use_header_time,
+            header_skew_ms=self._params.header_skew_ms,
+            publish_tolerance_ms=self._params.publish_tolerance_ms,
+        )
         return SetParametersResult(successful=True)
 
     def _next_exec_tick_ns(self, now_ns: int) -> int:
@@ -673,11 +752,13 @@ class PolicyBridge(Node):
         self._pub_count = 0
         with self._queue_lock:
             self._queue.clear()
+            self._queue_by_step.clear()
         
         # Reset run-local cursors / lasts (critical for correct aggregation)
         self._timestep_cursor = 0
         self._latest_executed_timestep = -1
-        self._last_packet = None
+        with self._last_packet_lock:
+            self._last_packet = None
         self._starved_since_ns = None
         self._last_warn_ns = 0
 
@@ -754,18 +835,29 @@ class PolicyBridge(Node):
         self._publish_safety_command(increment_count=False, log_message="Published safety command on stop.")
         with self._queue_lock:
             self._queue.clear()
+            self._queue_by_step.clear()
         self._prompt = ""
         self._done_event.set()
 
     def _create_safety_packet(self) -> Dict[str, np.ndarray]:
-        """Create safety packet for all action keys."""
-        if self._safety_behavior == "hold" and self._last_packet is not None:
-            # Deep copy to avoid mutation
-            return {k: v.copy() for k, v in self._last_packet.items()}
+        """Create safety packet for all action keys using per-key safety behavior."""
         packet: Dict[str, np.ndarray] = {}
+        # Thread-safe read of _last_packet
+        with self._last_packet_lock:
+            last_packet = self._last_packet
+        
         for key, specs in self._action_specs_by_key.items():
-            total = sum(len(s.names or []) for s in specs) or 2
-            packet[key] = np.zeros((total,), dtype=np.float32)
+            behavior = self._safety_behavior_by_key.get(key, "zeros")
+            total = sum(len(s.names or []) for s in specs)
+            if total == 0:
+                raise ValueError(f"No dims for action key '{key}' in contract")
+            
+            if behavior == "hold" and last_packet is not None and key in last_packet:
+                # Hold last action for this key
+                packet[key] = last_packet[key].copy()
+            else:
+                # Zeros for this key
+                packet[key] = np.zeros((total,), dtype=np.float32)
         return packet
 
     def _publish_action_packet(self, packet: Dict[str, np.ndarray],
@@ -842,32 +934,37 @@ class PolicyBridge(Node):
         - skip timesteps <= latest executed
         - if timestep exists in queue, aggregate its packet
         - keep queue sorted by publish time
+        
+        Uses persistent _queue_by_step dict for O(1) merge lookups,
+        avoiding quadratic rebuild cost.
         """
         with self._queue_lock:
-            # Build index by timestep from current queue
-            by_step: Dict[int, Tuple[int, Dict[str, np.ndarray]]] = {}
-            for t_ns, step, pkt in self._queue:
-                by_step[step] = (t_ns, pkt)
+            # Sync dict from queue if needed (shouldn't happen, but safety)
+            if len(self._queue_by_step) != len(self._queue):
+                self._queue_by_step = {step: (t_ns, pkt) for t_ns, step, pkt in self._queue}
 
-            # Merge incoming
+            # Merge incoming items (O(m) where m = len(items))
             for t_ns, step, pkt in items:
                 if step <= self._latest_executed_timestep:
                     continue  # too old, skip
-                if step in by_step:
-                    old_t_ns, old_pkt = by_step[step]
+                if step in self._queue_by_step:
+                    old_t_ns, old_pkt = self._queue_by_step[step]
                     merged = self._merge_step_packets(step, old_pkt, pkt)
                     # keep the earlier publish time for stability
-                    by_step[step] = (min(old_t_ns, t_ns), merged)
+                    self._queue_by_step[step] = (min(old_t_ns, t_ns), merged)
                 else:
-                    by_step[step] = (t_ns, pkt)
+                    self._queue_by_step[step] = (t_ns, pkt)
 
-            # Rebuild sorted by time and truncate to maxlen
-            merged_list = sorted([(t_ns, step, pkt) for step, (t_ns, pkt) in by_step.items()],
+            # Rebuild queue from dict (O(n log n) but only rebuild, not re-index)
+            merged_list = sorted([(t_ns, step, pkt) for step, (t_ns, pkt) in self._queue_by_step.items()],
                                  key=lambda x: x[0])
             self._queue.clear()
-            # honor maxlen
-            for item in merged_list[-self._queue.maxlen:]:
+            # honor maxlen and sync dict
+            kept_items = merged_list[-self._queue.maxlen:]
+            for item in kept_items:
                 self._queue.append(item)
+            # Sync dict to match queue (for items that were dropped)
+            self._queue_by_step = {step: (t_ns, pkt) for t_ns, step, pkt in kept_items}
 
     def _validate_packet(self, pkt: Dict[str, np.ndarray]) -> None:
         """Ensure every key is known and vector lengths match concatenated spec."""
@@ -882,15 +979,16 @@ class PolicyBridge(Node):
 
     # ---------------- Sub callback ----------------
     def _obs_cb(self, msg, spec: SpecView) -> None:
-        use_header = (spec.stamp_src ==
-                      "header") or self._params.use_header_time
+        # Honor per-spec stamp_src when pushing to buffer (no global override here)
+        # The global use_header_time is only used for anchor selection in compute_sample_time
+        use_header = (spec.stamp_src == "header")
         ts = stamp_from_header_ns(msg) if use_header else None
         ts_ns = int(
             ts) if ts is not None else self.get_clock().now().nanoseconds
         val = decode_value(spec.ros_type, msg, spec)
         if val is not None:
             # Mirror the subscription key used at construction time
-            if spec.key == "observation.state" and len(self._state_specs) > 1:
+            if spec.key.startswith("observation.state"):
                 dict_key = f"{spec.key}_{spec.topic.replace('/', '_')}"
             else:
                 dict_key = spec.key
@@ -937,17 +1035,11 @@ class PolicyBridge(Node):
             and torch.amp.autocast_mode.is_autocast_available(self.device.type)
         )
 
-        # 1) Choose a sampling time (can be header time) for observations
-        sample_t_ns = None
-        if self._params.use_header_time:
-            ts = self._get_most_recent_image_timestamp()
-            # Guard: if header time is too stale relative to node clock, ignore it
-            if ts is not None:
-                skew = self.get_clock().now().nanoseconds - ts
-                if 0 <= skew <= int(self._params.header_skew_ms * 1e6):
-                    sample_t_ns = ts
-        if sample_t_ns is None:
-            sample_t_ns = self.get_clock().now().nanoseconds
+        # 1) Choose a sampling time using timing policy (handles anchor + skew)
+        sample_t_ns = self._timing_policy.compute_sample_time(
+            self.get_clock(),
+            self._get_most_recent_image_timestamp
+        )
 
         obs_frame = self._sample_obs_frame(sample_t_ns)
         batch = self._prepare(obs_frame)
@@ -960,26 +1052,18 @@ class PolicyBridge(Node):
             with cm:
                 if use_chunks:
                     try:
-                        chunk = self.policy.predict_action_chunk(batch)
+                        chunk = self.policy.predict_action_chunk(batch)  # [B, T, ...]
                         self.get_logger().debug(f"Generated action chunk shape: {self._shape_str(chunk)}")
-                        chunk = chunk.squeeze(0)
                         
-                        # Per-timestep postprocessing (mirrors server behavior)
-                        def postproc_one(x_i):
-                            return self.postprocessor(x_i.unsqueeze(0)).squeeze(0)
+                        # Batch postprocessing (process entire chunk at once, keep batch dim)
+                        post = self._postprocess_actions(chunk)  # same structure, same dims
                         
-                        if isinstance(chunk, dict):
-                            for k, t in chunk.items():
-                                chunk[k] = torch.stack([postproc_one(t[i]) for i in range(t.shape[0])], dim=0)
-                        else:
-                            chunk = torch.stack([postproc_one(chunk[i]) for i in range(chunk.shape[0])], dim=0)
-                        
-                        self.get_logger().debug(f"Postprocessed action chunk shape: {self._shape_str(chunk)}")
+                        self.get_logger().debug(f"Postprocessed action chunk shape: {self._shape_str(post)}")
                         
                         # Diagnostics: log action dims on first chunk (fail-fast on mismatch)
                         if not hasattr(self, "_logged_layout_once"):
                             self._logged_layout_once = True
-                            sizes = {k: v.shape[-1] for k, v in (chunk.items() if isinstance(chunk, dict) else {"action": chunk}).items()}
+                            sizes = {k: v.shape[-1] for k, v in (post.items() if isinstance(post, dict) else {"action": post}).items()}
                             expected = {k: sum(len(s.names or []) for s in self._action_specs_by_key.get(k, [])) for k in sizes}
                             self.get_logger().debug(f"Action dims (policy vs contract): {sizes} vs {expected}")
                             if sizes != expected:
@@ -990,27 +1074,18 @@ class PolicyBridge(Node):
                         self.get_logger().error(f"Traceback: {traceback.format_exc()}")
                         return 0
 
-                    # Determine actual chunk length (tensor vs dict)
-                    def _chunk_len(x):
-                        return min([t.shape[0] for t in x.values()]) if isinstance(x, dict) else int(x.shape[0])
-                    m = min(k, _chunk_len(chunk))
+                    # De-batch to numpy (post is [B, T, ...] where B=1 typically)
+                    if isinstance(post, dict):
+                        # Extract batch dimension [B=0] then convert to numpy
+                        arrs = {k: v[0].detach().cpu().numpy().astype(np.float32) for k, v in post.items()}
+                        m = min(k, min(a.shape[0] for a in arrs.values()))
+                    else:
+                        # Tensor case: extract batch dimension then convert
+                        arr = post[0].detach().cpu().numpy().astype(np.float32)  # [T, D]
+                        m = min(k, arr.shape[0])
+                    
                     if m <= 0:
-                        raise RuntimeError("predict_action_chunk returned empty chunk")
-
-                    # Normalize postprocessed outputs into packets
-                    def to_packet(i: int) -> Dict[str, np.ndarray]:
-                        # dict case: {"action": T[d], "action.arm": T[m], ...}
-                        if isinstance(chunk, dict):
-                            pkt = {}
-                            for key, t in chunk.items():
-                                v = t[i].detach().cpu().numpy().astype(np.float32).ravel()
-                                pkt[key] = v
-                            return pkt
-                        # tensor case (legacy single key)
-                        vec = chunk[i].detach().cpu().numpy().astype(np.float32).ravel()
-                        # If multiple keys exist but model returns a single 'action' vector,
-                        # put it under 'action' and let router split across repeated specs.
-                        return {"action": vec}
+                        raise RuntimeError("Postprocessed chunk is empty")
 
                     # 2) Always schedule publishes on the node clock,
                     #    aligned to the next execution tick and in the future.
@@ -1020,15 +1095,22 @@ class PolicyBridge(Node):
                     for i in range(m):
                         t_i = base_t + i * self.step_ns
                         step_i = i0 + i
-                        self._producer_buffer.append((t_i, step_i, to_packet(i)))
+                        # De-batch to individual packets (slicing from numpy is cheap)
+                        if isinstance(post, dict):
+                            pkt = {key: arrs[key][i].ravel() for key in arrs.keys()}
+                        else:
+                            # If multiple keys exist but model returns a single 'action' vector,
+                            # put it under 'action' and let router split across repeated specs.
+                            pkt = {"action": arr[i].ravel()}
+                        self._producer_buffer.append((t_i, step_i, pkt))
                     self._timestep_cursor += m
                     produced = m
                 else:
                     try:
                         a = self.policy.select_action(batch)
                         self.get_logger().debug(f"Generated single action shape: {self._shape_str(a)}")
-                        a = self._postprocess_actions(a)  # could be tensor or dict
-                        self.get_logger().debug(f"Postprocessed single action shape: {self._shape_str(a)}")
+                        post = self._postprocess_actions(a)  # could be tensor or dict, keeps batch dim
+                        self.get_logger().debug(f"Postprocessed single action shape: {self._shape_str(post)}")
                     except Exception as e:
                         self.get_logger().error(f"Error generating single action: {e}")
                         import traceback
@@ -1037,10 +1119,11 @@ class PolicyBridge(Node):
                     now_wall = self.get_clock().now().nanoseconds
                     t0 = self._next_exec_tick_ns(now_wall + self.step_ns)
                     i0 = self._timestep_cursor
-                    if isinstance(a, dict):
-                        pkt = {k: a[k][0].detach().cpu().numpy().astype(np.float32).ravel() for k in a}
+                    # Extract batch dimension [B=0] and convert to numpy
+                    if isinstance(post, dict):
+                        pkt = {k: post[k][0].detach().cpu().numpy().astype(np.float32).ravel() for k in post}
                     else:
-                        pkt = {"action": a[0].detach().cpu().numpy().astype(np.float32).ravel()}
+                        pkt = {"action": post[0].detach().cpu().numpy().astype(np.float32).ravel()}
                     self._producer_buffer.append((t0, i0, pkt))
                     self._timestep_cursor += 1
                     produced = 1
@@ -1062,14 +1145,20 @@ class PolicyBridge(Node):
         now_ns = self.get_clock().now().nanoseconds
 
         # Warmup: widen tolerance x4 and avoid noisy warnings
-        tol_ns = self._publish_tolerance_ns
+        tol_ns = self._timing_policy.publish_tolerance_ns
 
         packet: Optional[Dict[str, np.ndarray]] = None
         selected_step: Optional[int] = None
         with self._queue_lock:
             # Drop clearly stale actions so we can catch up
+            removed_steps = set()
             while self._queue and (self._queue[0][0] < now_ns - tol_ns):
-                self._queue.popleft()
+                _, step, _ = self._queue.popleft()
+                removed_steps.add(step)
+            # Sync dict after pops
+            if removed_steps:
+                for step in removed_steps:
+                    self._queue_by_step.pop(step, None)
             
             # Check if queue is empty (either initially or after cleanup)
             if not self._queue:
@@ -1104,23 +1193,40 @@ class PolicyBridge(Node):
                 self._publish_safety_command()
                 return
 
-            # Remove all actions before the best one
+            # Remove all actions before the best one and sync dict
+            removed_steps = set()
             for _ in range(best_idx):
-                self._queue.popleft()
+                _, step, _ = self._queue.popleft()
+                removed_steps.add(step)
             _t_sel, selected_step, packet = self._queue.popleft()
+            removed_steps.add(selected_step)
+            # Sync dict after pops
+            for step in removed_steps:
+                self._queue_by_step.pop(step, None)
 
-        self._last_packet = packet
         if selected_step is not None:
             self._latest_executed_timestep = max(self._latest_executed_timestep, selected_step)
-        self._publish_action_packet(packet)
+        # Thread-safe write of _last_packet
+        with self._last_packet_lock:
+            self._last_packet = packet
+        try:
+            self._publish_action_packet(packet)
+        except Exception as e:
+            self._warn_throttled(f"Publish failed: {e}")
+            return
 
 
     def _get_most_recent_image_timestamp(self) -> Optional[int]:
-        """Get the timestamp of the most recent primary image observation."""
-        # Look for image observations by checking if the spec has image_resize set
+        """Get the timestamp of the most recent image observation.
+        
+        Uses image observations (sensor_msgs/msg/Image) as the timing anchor
+        for synchronizing other observations. Falls back to None if no images.
+        """
+        # Look for image observations by ROS message type
         image_keys = []
         for key, sub_state in self._subs.items():
-            if hasattr(sub_state.spec, 'image_resize') and sub_state.spec.image_resize is not None:
+            ros_type = getattr(sub_state.spec, 'ros_type', '')
+            if ros_type == 'sensor_msgs/msg/Image':
                 image_keys.append(key)
         
         if not image_keys:
@@ -1146,37 +1252,29 @@ class PolicyBridge(Node):
     def _sample_obs_frame(self, sample_t_ns: int) -> Dict[str, Any]:
         obs_frame: Dict[str, Any] = {}
         
-        # Handle multiple observation.state specs by consolidating them
-        if len(self._state_specs) > 1:
-            state_parts = []
-            for sv in self._state_specs:
+        # Concatenate every observation.state* group
+        for group_key, group_specs in self._state_groups.items():
+            samples = {}
+            for sv in group_specs:
                 dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
                 if dict_key in self._subs:
-                    v = self._subs[dict_key].buf.sample(sample_t_ns)
-                    if v is None:
-                        zp = self._obs_zero[dict_key]
-                        v = zp.copy() if isinstance(zp, np.ndarray) else zp
-                        self.get_logger().warning(f"Observation {dict_key} is None, zero padding")
-                    state_parts.append(v)
-                else:
-                    # Fallback to zero padding if subscription missing
-                    zp = self._obs_zero.get(dict_key, np.zeros((len(sv.names),), dtype=np.float32))
-                    state_parts.append(zp.copy() if isinstance(zp, np.ndarray) else zp)
+                    samples[dict_key] = self._subs[dict_key].buf.sample(sample_t_ns)
             
-            # Concatenate all state parts in contract order
-            if state_parts:
-                obs_frame["observation.state"] = np.concatenate(state_parts, axis=0)
-            else:
-                obs_frame["observation.state"] = np.zeros((0,), dtype=np.float32)
+            # Only the base group uses the computed permutation (if any)
+            perm = self._state_index_map if group_key == "observation.state" else None
             
-            # Apply permutation if state order differs from policy training order
-            if self._state_index_map is not None and obs_frame["observation.state"].ndim == 1:
-                obs_frame["observation.state"] = obs_frame["observation.state"][self._state_index_map]
+            obs_frame[group_key] = concatenate_state_specs(
+                state_specs=group_specs,
+                samples=samples,
+                zero_pad_map=self._obs_zero,
+                permutation_map=perm,
+                logger=self.get_logger(),
+            )
         
         # Handle all other observations
         for key, st in self._subs.items():
-            # Skip individual state keys if we have multiple state specs (already handled above)
-            if key.startswith("observation.state_") and len(self._state_specs) > 1:
+            # Skip individual state keys (already handled by concatenate_state_specs above)
+            if key.startswith("observation.state_"):
                 continue
                 
             v = st.buf.sample(sample_t_ns)
@@ -1231,16 +1329,12 @@ class PolicyBridge(Node):
 
     # ---------------- Postprocess wrapper ----------------
     def _postprocess_actions(self, x):
-        """Postprocess action outputs: accepts torch.Tensor or dict[str, torch.Tensor]."""
-        if isinstance(x, dict):
-            out: Dict[str, torch.Tensor] = {}
-            for k, v in x.items():
-                v = v.to(self.device)
-                out[k] = self.postprocessor(v)
-            return out
-        else:
-            x = x.to(self.device)
-            return self.postprocessor(x)
+        """Postprocess action outputs: accepts torch.Tensor or dict[str, torch.Tensor].
+        
+        Postprocessor pipeline expects the full output structure (tensor or dict),
+        not each key separately. Keeps batch dimensions intact.
+        """
+        return self.postprocessor(x)
 
 
 def main() -> None:

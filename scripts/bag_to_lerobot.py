@@ -95,6 +95,8 @@ from rosetta.common.contract_utils import (
     iter_specs,
     feature_from_spec,
     contract_fingerprint,
+    concatenate_state_specs,
+    concatenate_action_specs,
 )
 from rosetta.common.contract_utils import (
     decode_value,
@@ -190,8 +192,8 @@ def _plan_streams(
             continue
         rt = sv.ros_type or tmap[sv.topic]
         
-        # Create unique key for multiple observation.state specs and action specs
-        if sv.key == "observation.state":
+        # Create unique key for multiple observation.state specs (all groups) and action specs
+        if sv.key.startswith("observation.state"):
             unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
         elif sv.is_action:
             # For action specs, we need to check if there are multiple specs with the same key
@@ -249,11 +251,11 @@ def export_bags_to_lerobot(
         Target data file size in MB per chunk.
     video_mb : int, default 500
         Target video file size in MB per chunk.
-    timestamp_source : {"contract","receive","header"}, default "contract"
+    timestamp_source : {"contract","bag","header"}, default "contract"
         Timestamp selection policy per decoded message:
         - "contract": Use bag time, unless spec.stamp_src == "header"
                       and a valid header stamp exists.
-        - "receive":  Always use bag receive time.
+        - "bag":      Always use bag receive time.
         - "header":   Prefer header stamp; fall back to bag receive time.
 
     Raises
@@ -280,13 +282,13 @@ def export_bags_to_lerobot(
     # Features (also detect first image key as anchor)
     features: Dict[str, Dict[str, Any]] = {}
     primary_image_key: Optional[str] = None
-    state_specs = []  # Track multiple observation.state specs
+    state_groups: Dict[str, List[Any]] = {}  # Track state specs by full key (e.g., observation.state, observation.state.arm)
     action_specs_by_key: Dict[str, List[Any]] = {}  # Track multiple action specs by key
     
     for sv in specs:
-        # Handle multiple observation.state specs
-        if sv.key == "observation.state":
-            state_specs.append(sv)
+        # Group state specs by full key (e.g., observation.state, observation.state.arm, etc.)
+        if sv.key.startswith("observation.state"):
+            state_groups.setdefault(sv.key, []).append(sv)
             # Don't add to features yet - we'll consolidate them
             continue
             
@@ -312,21 +314,22 @@ def export_bags_to_lerobot(
             # Special handling for depth images - they now have 3 channels
             if k.endswith(".depth") and ft["shape"][-1] == 1:
                 # Update the shape to reflect 3 channels
-                ft["shape"] = list(ft["shape"])
-                ft["shape"][-1] = 3
+                shape_list = list(ft["shape"])
+                shape_list[-1] = 3
+                ft = {**ft, "shape": tuple(shape_list)}
             features[k] = ft
         if is_img and primary_image_key is None:
             primary_image_key = sv.key
     
-    # Consolidate multiple observation.state specs into a single feature
-    if state_specs:
+    # Consolidate multiple state specs into features for each state group
+    for group_key, group_specs in state_groups.items():
         all_names = []
         total_shape = 0
-        for sv in state_specs:
+        for sv in group_specs:
             all_names.extend(sv.names)
             total_shape += len(sv.names)
         
-        features["observation.state"] = {
+        features[group_key] = {
             "dtype": "float32",
             "shape": (total_shape,),
             "names": all_names
@@ -386,14 +389,22 @@ def export_bags_to_lerobot(
     )
     
 
-    # Precompute zero pads + shapes for fast frame assembly.
-    zero_pad_map = {k: make_zero_pad(ft) for k, ft in features.items()}
+    # Zero pads for consolidated features
+    zero_pad_features = {k: make_zero_pad(ft) for k, ft in features.items()}
+    
+    # Zero pads for per-stream keys used by concat helpers
+    zero_pad_streams: Dict[str, np.ndarray] = {}
+    for sv in specs:
+        if sv.key.startswith("observation.state") or getattr(sv, "is_action", False):
+            uk = f"{sv.key}_{sv.topic.replace('/', '_')}"
+            _, ft, _ = feature_from_spec(sv, use_videos)  # ft is per-stream feature
+            zero_pad_streams[uk] = make_zero_pad(ft)
+    
     write_keys = [
         k
         for k, ft in features.items()
         if ft["dtype"] in ("video", "image", "float32", "float64", "string")
     ]
-    shapes = {k: tuple(features[k]["shape"]) for k in write_keys}
 
     # Episodes
     for epi_idx, bag_dir in enumerate(bag_dirs):
@@ -429,15 +440,6 @@ def export_bags_to_lerobot(
 
         # Plan once - handle multiple observation.state specs and action specs
         streams, by_topic = _plan_streams(specs, tmap)
-        
-        # Create consolidated observation.state stream if we have multiple state specs
-        if state_specs:
-            # Find all observation.state streams
-            state_streams = [k for k in streams.keys() if k == "observation.state"]
-            if len(state_streams) > 1:
-                # Create a consolidated stream that will concatenate the data
-                # We'll handle this in the frame processing
-                pass
         print(f"streams: {streams}")
 
         # Counters for light diagnostics
@@ -454,7 +456,7 @@ def export_bags_to_lerobot(
                 sv = st.spec
 
                 # Timestamp selection policy
-                if timestamp_source == "receive":
+                if timestamp_source == "bag":
                     ts_sel = int(bag_ns)
                 elif timestamp_source == "header":
                     ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
@@ -526,53 +528,48 @@ def export_bags_to_lerobot(
         for i in range(n_ticks):
             frame: Dict[str, Any] = {}
             
-            # Handle consolidated observation.state by concatenating multiple state streams first
-            if "observation.state" in features and state_specs:
-                # Concatenate all observation.state values from different topics
-                state_values = []
-                for sv in state_specs:
+            # 2.a Handle all state groups via concatenate_state_specs
+            for group_key, group_specs in state_groups.items():
+                # Build samples dict for this frame
+                samples = {}
+                for sv in group_specs:
                     unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
                     stream_val = resampled.get(unique_key, [None] * n_ticks)[i]
                     if stream_val is not None:
-                        val_array = np.asarray(stream_val, dtype=np.float32).reshape(-1)
-                        state_values.append(val_array)
+                        samples[unique_key] = np.asarray(stream_val, dtype=np.float32)
                 
-                if state_values:
-                    # Concatenate all state values
-                    concatenated_state = np.concatenate(state_values)
-                    frame["observation.state"] = concatenated_state
-                else:
-                    # Use zero padding if no state values available
-                    frame["observation.state"] = zero_pad_map["observation.state"]
+                # Use centralized concatenation helper
+                frame[group_key] = concatenate_state_specs(
+                    state_specs=group_specs,
+                    samples=samples,
+                    zero_pad_map=zero_pad_streams,
+                    permutation_map=None,  # bag_to_lerobot doesn't need permutation
+                    logger=None,  # No logger available in this context
+                )
             
-            # Handle consolidated action specs by concatenating multiple action streams
+            # 2.b Handle actions (works for 1 or many specs under the same key)
             for action_key, action_specs in action_specs_by_key.items():
-                if len(action_specs) > 1 and action_key in features:
-                    # Concatenate all action values from different topics
-                    action_values = []
-                    for sv in action_specs:
-                        unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
-                        stream_val = resampled.get(unique_key, [None] * n_ticks)[i]
-                        if stream_val is not None:
-                            val_array = np.asarray(stream_val, dtype=np.float32).reshape(-1)
-                            action_values.append(val_array)
-                    
-                    if action_values:
-                        # Concatenate all action values
-                        concatenated_action = np.concatenate(action_values)
-                        frame[action_key] = concatenated_action
-                    else:
-                        # Use zero padding if no action values available
-                        frame[action_key] = zero_pad_map[action_key]
-            
-            # Process all other features
-            for name in write_keys:
-                # Skip observation.state as it's handled above
-                if name == "observation.state":
-                    continue
+                # Build samples dict for this frame
+                samples = {}
+                for sv in action_specs:
+                    unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+                    stream_val = resampled.get(unique_key, [None] * n_ticks)[i]
+                    if stream_val is not None:
+                        samples[unique_key] = np.asarray(stream_val, dtype=np.float32)
                 
-                # Skip consolidated actions as they're handled above
-                if name in action_specs_by_key and len(action_specs_by_key[name]) > 1: #TODO: I think this can just be if name == "action"
+                # Use centralized concatenation helper (always, even for single specs)
+                frame[action_key] = concatenate_action_specs(
+                    action_specs=action_specs,
+                    samples=samples,
+                    zero_pad_map=zero_pad_streams,
+                    logger=None,  # No logger available in this context
+                )
+            
+            # 2.c Process all other features (skip actions and state groups)
+            for name in write_keys:
+                if name in state_groups:  # Skip all state group keys (e.g., observation.state, observation.state.arm, ...)
+                    continue
+                if name in action_specs_by_key:  # Skip all action keys always
                     continue
                     
                 ft = features[name]
@@ -580,7 +577,7 @@ def export_bags_to_lerobot(
                 val = resampled.get(name, [None] * n_ticks)[i]
 
                 if val is None:
-                    frame[name] = zero_pad_map[name]
+                    frame[name] = zero_pad_features[name]
                     continue
 
                 if dtype in ("video", "image"):
@@ -609,7 +606,7 @@ def export_bags_to_lerobot(
 
             # Episode-level operator prompt from bag metadata (kept for policy compatibility).
             # This is`` distinct from any per-frame task.* fields coming from ROS topics.
-            if prompt:
+            if prompt and "task" in features:
                 frame["task"] = prompt
             ds.add_frame(frame)
 
