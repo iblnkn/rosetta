@@ -934,9 +934,8 @@ class PolicyBridge(Node):
         - skip timesteps <= latest executed
         - if timestep exists in queue, aggregate its packet
         - keep queue sorted by publish time
-        
-        Uses persistent _queue_by_step dict for O(1) merge lookups,
-        avoiding quadratic rebuild cost.
+        - drop stale (past) items first
+        - if overflow, drop farthest-future items
         """
         with self._queue_lock:
             # Sync dict from queue if needed (shouldn't happen, but safety)
@@ -955,16 +954,47 @@ class PolicyBridge(Node):
                 else:
                     self._queue_by_step[step] = (t_ns, pkt)
 
-            # Rebuild queue from dict (O(n log n) but only rebuild, not re-index)
-            merged_list = sorted([(t_ns, step, pkt) for step, (t_ns, pkt) in self._queue_by_step.items()],
-                                 key=lambda x: x[0])
+            # Rebuild list and sort by publish time ascending
+            merged_list = sorted(
+                [(t_ns, step, pkt) for step, (t_ns, pkt) in self._queue_by_step.items()],
+                key=lambda x: x[0]
+            )
+
+            # 1) Drop stale (publish time before now - tolerance)
+            now_ns = self.get_clock().now().nanoseconds
+            tol_ns = self._timing_policy.publish_tolerance_ns
+            fresh = [(t_ns, step, pkt) for (t_ns, step, pkt) in merged_list if t_ns >= now_ns - tol_ns]
+
+            # Keep dict in sync (remove truly stale entries)
+            if len(fresh) != len(merged_list):
+                stale_steps = {step for (t_ns, step, pkt) in merged_list if t_ns < now_ns - tol_ns}
+                for s in stale_steps:
+                    self._queue_by_step.pop(s, None)
+            merged_list = fresh
+
             self._queue.clear()
-            # honor maxlen and sync dict
-            kept_items = merged_list[-self._queue.maxlen:]
-            for item in kept_items:
-                self._queue.append(item)
+            # 2) Enforce capacity: keep earliest due items; drop far-future overflow
+            capacity = self._queue.maxlen
+            if capacity is None or len(merged_list) <= capacity:
+                kept_items = merged_list
+                dropped = 0
+            else:
+                kept_items = merged_list[:capacity]        # earliest items
+                dropped = len(merged_list) - capacity      # how many far-future we dropped
+
+            for it in kept_items:
+                self._queue.append(it)
             # Sync dict to match queue (for items that were dropped)
             self._queue_by_step = {step: (t_ns, pkt) for t_ns, step, pkt in kept_items}
+
+            # Optional visibility
+            if dropped:
+                head_dt_ms = (kept_items[0][0] - now_ns) / 1e6 if kept_items else 0.0
+                tail_dt_ms = (kept_items[-1][0] - now_ns) / 1e6 if kept_items else 0.0
+                self._warn_throttled(
+                    f"Queue overflow: dropped {dropped} far-future items; "
+                    f"kept window [{head_dt_ms:.1f}ms .. {tail_dt_ms:.1f}ms]"
+                )
 
     def _validate_packet(self, pkt: Dict[str, np.ndarray]) -> None:
         """Ensure every key is known and vector lengths match concatenated spec."""
