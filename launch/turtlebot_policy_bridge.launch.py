@@ -24,7 +24,7 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[
                 {'contract_path': contract},
-                {'policy_path': 'iblnk/act-turtlebot3_demo'},
+                {'policy_path': '/workspaces/reo_ws/models/diffusion/turtlebot3_demo/checkpoints/200000/pretrained_model'},
                 {'use_sim_time': True},
                 #TODO add inference specific parameters here
             ],
