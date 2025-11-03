@@ -443,6 +443,12 @@ class PolicyBridge(Node):
             if not self._queue:
                 if self._starved_since_ns is None:
                     self._starved_since_ns = now_ns
+                # Only log occasionally to avoid spam
+                starved_duration_ms = (now_ns - self._starved_since_ns) / 1e6
+                self.get_logger().warning(
+                    f"Queue empty, publishing safety (starved for {starved_duration_ms:.1f}ms). "
+                    f"Producer may be waiting for observations or inference failing."
+                )
                 self._publish_safety()
                 return
 
@@ -455,6 +461,14 @@ class PolicyBridge(Node):
             if best_abs is None or best_abs > tol_ns:
                 if self._starved_since_ns is None:
                     self._starved_since_ns = now_ns
+                # Only log occasionally to avoid spam
+                starved_duration_ms = (now_ns - self._starved_since_ns) / 1e6
+                best_abs_ms = best_abs / 1e6 if best_abs is not None else None
+                self.get_logger().warning(
+                    f"No action within tolerance, publishing safety "
+                    f"(starved {starved_duration_ms:.1f}ms, closest action {best_abs_ms:.1f}ms away, "
+                    f"tolerance {tol_ns/1e6:.1f}ms, queue size: {len(self._queue)})."
+                )
                 self._publish_safety()
                 return
 
@@ -531,16 +545,77 @@ class PolicyBridge(Node):
         # Sample frame and build tensor batch
         obs_frame = self.client.sample_frame(sample_t_ns, self._prompt, permutation_map=self._state_index_map)
         batch = self._prepare_tensor_batch(obs_frame)
+        
+        # Log batch info at debug level for troubleshooting
+        # Note: logger will filter by log level automatically
+        batch_shapes = {k: (v.shape if isinstance(v, torch.Tensor) else type(v).__name__) 
+                       for k, v in batch.items()}
+        self.get_logger().debug(f"Pre-preprocessor batch keys: {list(batch.keys())}, shapes: {batch_shapes}")
+
+        # Validate that we have at least some observations before inference
+        # Skip "task" string key - check for actual tensor observations
+        tensor_keys = [k for k, v in batch.items() if isinstance(v, torch.Tensor)]
+        if not tensor_keys:
+            # No tensor observations yet - wait for data to arrive
+            # Only log occasionally to avoid spam
+            if self._starved_since_ns is not None:
+                starved_ms = (self.get_clock().now().nanoseconds - self._starved_since_ns) / 1e6
+                self.get_logger().debug(
+                    f"No observation tensors available yet (waiting {starved_ms:.0f}ms), skipping inference. "
+                    f"Frame keys: {list(obs_frame.keys())}"
+                )
+            else:
+                self.get_logger().debug("No observation tensors available yet, skipping inference")
+            return
+        
+        # Check that tensors have non-empty shapes and valid values
+        for k in tensor_keys:
+            if batch[k].numel() == 0:
+                # Only log occasionally
+                if self._starved_since_ns is not None:
+                    starved_ms = (self.get_clock().now().nanoseconds - self._starved_since_ns) / 1e6
+                    if starved_ms > 100.0 or int(starved_ms) % 1000 == 0:
+                        self.get_logger().debug(
+                            f"Observation tensor '{k}' is empty (shape={batch[k].shape}), skipping inference"
+                        )
+                else:
+                    self.get_logger().debug(f"Observation tensor '{k}' is empty (shape={batch[k].shape}), skipping inference")
+                return
 
         # Inference (chunks or single)
         use_autocast = self._params.use_autocast and _torch_autocast_ok(getattr(self.server, "device", torch.device("cpu")).type)
-        with torch.inference_mode(), torch.autocast(getattr(self.server, "device", torch.device("cpu")).type, enabled=use_autocast):
-            out = self.server.predict_chunk(batch)
-            if not self._params.use_action_chunks:
-                if isinstance(out, dict):
-                    out = {k: v[:, :1, ...] for k, v in out.items()}
-                else:
-                    out = out[:, :1, ...]
+        try:
+            with torch.inference_mode(), torch.autocast(getattr(self.server, "device", torch.device("cpu")).type, enabled=use_autocast):
+                out = self.server.predict_chunk(batch)
+                if not self._params.use_action_chunks:
+                    if isinstance(out, dict):
+                        out = {k: v[:, :1, ...] for k, v in out.items()}
+                    else:
+                        out = out[:, :1, ...]
+        except (RuntimeError, KeyError) as e:
+            error_msg = str(e)
+            if "stack expects a non-empty TensorList" in error_msg or "KeyError" in type(e).__name__:
+                # This typically means observations are missing, incomplete, or keys don't match
+                # Log more details for debugging
+                policy_info = ""
+                if hasattr(self.server, "policy") and hasattr(self.server.policy, "config"):
+                    cfg = self.server.policy.config
+                    if hasattr(cfg, "image_features"):
+                        policy_info = f", Policy expects image_features: {cfg.image_features}"
+                    if hasattr(cfg, "robot_state_feature"):
+                        policy_info += f", robot_state_feature: {cfg.robot_state_feature}"
+                    if hasattr(cfg, "env_state_feature"):
+                        policy_info += f", env_state_feature: {cfg.env_state_feature}"
+                
+                self.get_logger().warning(
+                    f"Inference failed due to observation mismatch. "
+                    f"Batch keys: {list(batch.keys())}, "
+                    f"Tensor keys: {tensor_keys}{policy_info}. "
+                    f"Error: {error_msg}. "
+                    f"Waiting for observations to match policy expectations."
+                )
+                return
+            raise
 
         # Convert to numpy packets and enqueue
         if isinstance(out, dict):

@@ -168,10 +168,43 @@ class LocalPolicyServer(InferenceServer):
 
     def predict_chunk(self, batch: Dict[str, Any]) -> TensorOrDict:
         if self.preprocessor is not None:
-            batch = self.preprocessor(batch)
+            try:
+                batch = self.preprocessor(batch)
+            except Exception as e:
+                # Re-raise with more context about what keys were provided
+                raise RuntimeError(
+                    f"Preprocessor failed. Input batch keys: {list(batch.keys())}. "
+                    f"Error: {e!r}"
+                ) from e
+        
         with torch.inference_mode():
             # Many LeRobot policies expose predict_action_chunk(); keep API stable.
-            out = self.policy.predict_action_chunk(batch)
+            try:
+                out = self.policy.predict_action_chunk(batch)
+            except (RuntimeError, KeyError) as e:
+                error_msg = str(e)
+                # Provide detailed error context for ACT policy issues
+                if hasattr(self.policy, "config") and hasattr(self.policy.config, "image_features"):
+                    from lerobot.utils.constants import OBS_IMAGES, OBS_STATE, OBS_ENV_STATE
+                    expected_images = self.policy.config.image_features or []
+                    policy_info = (
+                        f"Policy config - image_features: {expected_images}, "
+                        f"robot_state_feature: {getattr(self.policy.config, 'robot_state_feature', None)}, "
+                        f"env_state_feature: {getattr(self.policy.config, 'env_state_feature', None)}. "
+                    )
+                    # Check what keys are actually in batch
+                    batch_info = (
+                        f"Batch has keys: {list(batch.keys())}. "
+                        f"Has {OBS_STATE}: {OBS_STATE in batch}, "
+                        f"Has {OBS_ENV_STATE}: {OBS_ENV_STATE in batch}. "
+                    )
+                    missing_images = [k for k in expected_images if k not in batch]
+                    if missing_images:
+                        batch_info += f"Missing image keys: {missing_images}. "
+                    raise RuntimeError(
+                        f"ACT policy inference failed. {policy_info}{batch_info}Error: {error_msg}"
+                    ) from e
+                raise
         # --- enforce configured horizon on the local path ---
         try:
             h = int(self.actions_per_chunk)
