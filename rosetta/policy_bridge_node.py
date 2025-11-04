@@ -55,13 +55,14 @@ from .server import (
 
 from rosetta_interfaces.action import RunPolicy
 
-_ACTION_NAME = "run_policy"
+_ACTION_NAME = "run_policy" # TODO: This should just be the node name
 _FEEDBACK_PERIOD_S = 0.5
 
 
 @dataclass(slots=True)
 class RuntimeParams:
     use_action_chunks: bool
+    latency_compensation_ns: int
     actions_per_chunk: int
     chunk_size_threshold: float
     use_header_time: bool
@@ -86,7 +87,7 @@ class PolicyBridge(Node):
         self.declare_parameter("contract_path", "")
         self.declare_parameter("policy_path", "")
         self.declare_parameter("policy_device", "auto")
-
+        self.declare_parameter("latency_compensation_ns", 0)
         self.declare_parameter("use_action_chunks", True)
         self.declare_parameter("actions_per_chunk", 100)
         self.declare_parameter("chunk_size_threshold", 0.5)
@@ -95,7 +96,7 @@ class PolicyBridge(Node):
         self.declare_parameter("use_autocast", False)
         self.declare_parameter("aggregate_fn_name", "weighted_average")
         self.declare_parameter("header_skew_ms", 500.0)
-        desc = ParameterDescriptor()
+        desc = ParameterDescriptor()     # TODO: Remove all through 102 (self.declare_parameter)? 
         desc.type = ParameterType.PARAMETER_DOUBLE
         desc.dynamic_typing = True
         self.declare_parameter("publish_tolerance_ms", None, desc)
@@ -135,13 +136,13 @@ class PolicyBridge(Node):
             "average": lambda a, b: 0.5 * a + 0.5 * b,
             "conservative": lambda a, b: 0.7 * a + 0.3 * b,
         }
-        agg_name = str(self.get_parameter("aggregate_fn_name").value or "weighted_average")
+        agg_name = str(self.get_parameter("aggregate_fn_name").value)
         if agg_name not in self._AGG:
             raise ValueError(f"Unknown aggregate_fn_name='{agg_name}'")
         self._agg_name = agg_name
 
         # --- Inference backend ---
-        backend = str(self.get_parameter("server_backend").value or "local")
+        backend = str(self.get_parameter("server_backend").value)
         if backend == "lerobot_grpc":
             host = str(self.get_parameter("lerobot_host").value)
             port = int(self.get_parameter("lerobot_port").value)
@@ -149,7 +150,7 @@ class PolicyBridge(Node):
             self.get_logger().info(f"Backend: lerobot_grpc @ {host}:{port}")
         else:
             self.server = LocalPolicyServer()
-            self.get_logger().info("Backend: local (in-process)")
+            self.get_logger().info("Backend: local")
 
         # Optional dataset stats passthrough (parity with your preprocessing)
         self._ds_stats = None
@@ -175,7 +176,7 @@ class PolicyBridge(Node):
         )
 
         # ---- Build state permutation to match training order ----
-        self._state_index_map = None
+        self._state_index_map = None # TODO: Remove this? 
         try:
             expected = None
             if isinstance(self._ds_stats, dict):
@@ -251,11 +252,12 @@ class PolicyBridge(Node):
         self._executor_timer = self.create_timer(self.client.step_sec, self._executor_tick, callback_group=self._cbg_timers)
         self._feedback_timer = self.create_timer(_FEEDBACK_PERIOD_S, self._feedback_tick, callback_group=self._cbg_timers)
 
-        self.get_logger().info(f"PolicyBridge ready at {self.client.fps:.1f} Hz.")
+        self.get_logger().info(f"PolicyBridge ready.")
 
     # ---------------- Param handling ----------------
     def _read_params(self) -> RuntimeParams:
         return RuntimeParams(
+            latency_compensation_ns=int(self.get_parameter("latency_compensation_ns").value),
             use_action_chunks=bool(self.get_parameter("use_action_chunks").value),
             actions_per_chunk=int(self.get_parameter("actions_per_chunk").value),
             chunk_size_threshold=float(self.get_parameter("chunk_size_threshold").value),
@@ -330,13 +332,14 @@ class PolicyBridge(Node):
         self._starved_since_ns = None
 
         # prompt/task
-        self._prompt = getattr(goal_handle.request, "task", None) or getattr(goal_handle.request, "prompt", "") or ""
+        self._prompt = getattr(goal_handle.request, "prompt", "")
         try:
             self.server.reset()
         except Exception:
+            self.get_logger().warning(f"Error resetting server: {e!r}")
             pass
 
-        self.get_logger().info(f"{_ACTION_NAME}: started (task='{self._prompt}')")
+        self.get_logger().info(f"{_ACTION_NAME}: started (prompt='{self._prompt}')")
         self._done_evt.wait()
 
         ok, msg = True, "Policy run ended"
@@ -374,6 +377,7 @@ class PolicyBridge(Node):
             self.get_logger().warning(f"feedback publish failed: {e!r}")
 
     def _producer_tick(self) -> None:
+        self._timestep_cursor += 1
         if not self._running.is_set() or self._finishing.is_set():
             return
         if self._stop_requested.is_set():
@@ -382,38 +386,25 @@ class PolicyBridge(Node):
         try:
             # --- gating like the monolith ---
             if self._params.use_action_chunks:
-                k = max(1, int(self._params.actions_per_chunk))
+                k = int(self._params.actions_per_chunk)
                 thr = float(self._params.chunk_size_threshold)
                 with self._queue_lock:
                     qlen = len(self._queue)
                     head_dt_ns = None
                     if qlen > 0:
                         head_dt_ns = self._queue[0][0] - self.get_clock().now().nanoseconds
+                        #print head_dt_ns and self._queue[0][0]
+                        print(head_dt_ns, self._queue[0][0])
+                #print qlen and k and thr
+                print(qlen, k, thr)
                 need_chunk = (
-                    self._starved_since_ns is not None
-                    or qlen == 0
+                    qlen == 0
                     or (qlen / k) <= thr
                 )
-                # If starved because head is *ahead* of now, producing more is harmful.
-                if (
-                    self._starved_since_ns is not None
-                    and head_dt_ns is not None
-                    and head_dt_ns > self.timing.publish_tolerance_ns
-                ):
-                    # Aggressively trim to the future window to let executor catch up
-                    if head_dt_ns > self._future_window_ns():
-                        cutoff = self.get_clock().now().nanoseconds + self._future_window_ns()
-                        with self._queue_lock:
-                            kept = [(t, s, p) for (t, s, p) in self._queue if t <= cutoff]
-                            self._queue.clear()
-                            for it in kept:
-                                self._queue.append(it)
-                            self._queue_by_step = {s: (t, p) for (t, s, p) in kept}
-                    self.get_logger().debug("starved-but-ahead: suppressing production to let executor catch up")
-                    return
                 if not need_chunk:
                     return
-            self._produce()
+                self._produce()
+
         except Exception as e:
             self.get_logger().error(f"producer tick failed: {e!r}")
 
@@ -533,17 +524,14 @@ class PolicyBridge(Node):
         return batch
 
     def _produce(self) -> None:
-        # Anchor using image header when possible (client may implement recent_image_timestamp_ns())
-        get_anchor = getattr(self.client, "recent_image_timestamp_ns", None)
-        anchor_ts = get_anchor() if callable(get_anchor) and self._params.use_header_time else None
-        if anchor_ts is not None:
-            skew = self.get_clock().now().nanoseconds - anchor_ts
-            if skew < 0 or skew > int(self._params.header_skew_ms * 1e6):
-                anchor_ts = None
-        sample_t_ns = anchor_ts if anchor_ts is not None else self.get_clock().now().nanoseconds
+        sample_t_ns = self.get_clock().now().nanoseconds - self._params.latency_compensation_ns
+
+        #TODO compute running average of latency, and if it grows above step_ns, print a warning, suggesting increasing latency_compensation_ns
+        #this should probably be tracked for each message seperately, and warn about the specific message that is causing the issue
+        #this is a perfect use case for throttled warning messages.
 
         # Sample frame and build tensor batch
-        obs_frame = self.client.sample_frame(sample_t_ns, self._prompt, permutation_map=self._state_index_map)
+        obs_frame = self.client.sample_frame(sample_t_ns, self._prompt, permutation_map=self._state_index_map) #TODO: remember to remove permutation_map
         batch = self._prepare_tensor_batch(obs_frame)
         
         # Log batch info at debug level for troubleshooting
@@ -571,7 +559,6 @@ class PolicyBridge(Node):
         # Check that tensors have non-empty shapes and valid values
         for k in tensor_keys:
             if batch[k].numel() == 0:
-                # Only log occasionally
                 if self._starved_since_ns is not None:
                     starved_ms = (self.get_clock().now().nanoseconds - self._starved_since_ns) / 1e6
                     if starved_ms > 100.0 or int(starved_ms) % 1000 == 0:
@@ -583,9 +570,9 @@ class PolicyBridge(Node):
                 return
 
         # Inference (chunks or single)
-        use_autocast = self._params.use_autocast and _torch_autocast_ok(getattr(self.server, "device", torch.device("cpu")).type)
+        use_autocast = self._params.use_autocast and _torch_autocast_ok(getattr(self.server, "device").type) #TODO: This should be closer to param initialization
         try:
-            with torch.inference_mode(), torch.autocast(getattr(self.server, "device", torch.device("cpu")).type, enabled=use_autocast):
+            with torch.inference_mode(), torch.autocast(getattr(self.server, "device").type, enabled=use_autocast):
                 out = self.server.predict_chunk(batch)
                 if not self._params.use_action_chunks:
                     if isinstance(out, dict):
@@ -618,21 +605,12 @@ class PolicyBridge(Node):
             raise
 
         # Convert to numpy packets and enqueue
-        if isinstance(out, dict):
-            arrs = {k: v[0].detach().cpu().numpy().astype(np.float32) for k, v in out.items()}  # [T, Dk]
-            T = min(a.shape[0] for a in arrs.values())
-        else:
-            arr = out[0].detach().cpu().numpy().astype(np.float32)  # [T, D]
-            T = arr.shape[0]
-
+        arr = out[0].detach().cpu().numpy().astype(np.float32)  # [T, D]
+        T = arr.shape[0]
+        print(f"arr is not a dict: {arr}")
+        print(f"T from arr: {T}")
         # --- clamp horizon to actions_per_chunk like the monolith ---
-        k = int(self._params.actions_per_chunk)
-        if k > 0:
-            T = min(T, k)
-            if isinstance(out, dict):
-                arrs = {key: arrs[key][:T] for key in arrs.keys()}
-            else:
-                arr = arr[:T]
+        k = int(self._params.actions_per_chunk) #TODO really we should be setting k (globally to T) (ideally checking earlier, but we could do this as a hack.)
 
         now_ns = self.get_clock().now().nanoseconds
         base_t = self._next_exec_tick_ns(now_ns + self.client.step_ns)
@@ -641,14 +619,11 @@ class PolicyBridge(Node):
         for i in range(T):
             t_i = base_t + i * self.client.step_ns
             step_i = i0 + i
-            if isinstance(out, dict):
-                pkt = {k: arrs[k][i].ravel() for k in arrs.keys()}
-            else:
-                pkt = {"action": arr[i].ravel()}
+            pkt = {"action": arr[i].ravel()}
             items.append((t_i, step_i, pkt))
+        print(f"items: {items}")
 
         self._enqueue(items)
-        self._timestep_cursor += T
         if T > 0:
             self._starved_since_ns = None
 
@@ -675,12 +650,7 @@ class PolicyBridge(Node):
     def _enqueue(self, items: List[Tuple[int, int, Dict[str, np.ndarray]]]) -> None:
         """Drop stale, then enforce capacity (drop farthest-future)."""
         with self._queue_lock:
-            if len(self._queue_by_step) != len(self._queue):
-                self._queue_by_step = {step: (t_ns, pkt) for t_ns, step, pkt in self._queue}
-
             for t_ns, step, pkt in items:
-                if step <= self._latest_executed_timestep:
-                    continue
                 if step in self._queue_by_step:
                     old_t, old_pkt = self._queue_by_step[step]
                     merged = self._merge_packets(old_pkt, pkt)

@@ -151,7 +151,7 @@ class RosClient:
         self._n = node
         self._contract = load_contract(contract_path)
 
-        self.fps: int = int(rate_hz or self._contract.rate_hz)
+        self.fps: int = int(self._contract.rate_hz)
         if self.fps <= 0:
             raise ValueError("Contract rate_hz must be >= 1")
         self.step_ns: int = int(round(1e9 / self.fps))
@@ -169,7 +169,8 @@ class RosClient:
         self._state_groups: Dict[str, List[SpecView]] = {}  # observation.state*
 
         for s in self._obs_specs:
-            if s.key.startswith("observation.state"):
+            # this shouldn't be starts with, it should be equals/exact match "observation.state"
+            if s.key == "observation.state":
                 self._state_groups.setdefault(s.key, []).append(s)
 
         for s in self._obs_specs:
@@ -280,10 +281,14 @@ class RosClient:
                 dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
                 if dict_key in self._subs:
                     samples[dict_key] = self._subs[dict_key].buf.sample(sample_t_ns)
+                    print(f"sampled state group {dict_key} at {samples[dict_key]}")
+            #print keys of samples
+            print(f"keys of samples: {list(samples.keys())}")
 
             # Only apply provided permutation to the base 'observation.state' group
             perm = permutation_map if group_key == "observation.state" else None
-
+            #print group_key
+            print(f"group_key: {group_key}")
             frame[group_key] = concatenate_state_specs(
                 state_specs=group_specs,
                 samples=samples,
@@ -291,18 +296,24 @@ class RosClient:
                 permutation_map=perm,
                 logger=self._n.get_logger(),
             )
+            #print keys of frame
+            print(f"keys of frame: {list(frame.keys())}")
+            #print frame
+            print(f"frame: {frame}")
 
         # 2) All other observations
         for key, st in self._subs.items():
             if key.startswith("observation.state_"):
+                print(f"skipping {key} because it is a state group")
                 continue
             v = st.buf.sample(sample_t_ns)
             if v is None:
                 zp = self._obs_zero[key]
                 frame[key] = zp.copy() if isinstance(zp, np.ndarray) else zp
+                print(f"zero-padded {key} at {zp}")
             else:
                 frame[key] = v
-
+            print(f"sampled {key} at {v}")
         # 3) Inject task/prompt string expected by many LeRobot policies
         frame["task"] = prompt or ""
         return frame
