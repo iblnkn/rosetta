@@ -34,7 +34,6 @@ from rosetta.common.contract_utils import (
     zero_pad,
 )
 
-
 # ---------- Data containers ----------
 
 @dataclass(frozen=True, slots=True)
@@ -45,12 +44,10 @@ class ActionView:
     names: List[str]
     clamp: Optional[Tuple[float, float]]
 
-
 @dataclass(slots=True)
 class SubState:
     spec: SpecView
     buf: StreamBuffer
-
 
 @dataclass(slots=True)
 class TimingPolicy:
@@ -70,7 +67,6 @@ class TimingPolicy:
     @property
     def header_skew_ns(self) -> int:
         return int(float(self.header_skew_ms) * 1e6)
-
 
 # ---------- Action routing ----------
 
@@ -128,7 +124,6 @@ class ActionRouter:
             total += 1
         return total
 
-
 # ---------- Main client ----------
 
 class RosClient:
@@ -142,9 +137,9 @@ class RosClient:
       - fps, step_sec, step_ns
       - sample_frame(sample_t_ns, prompt, permutation_map)
       - publish_packet(packet)
-      - recent_image_timestamp_ns()       (anchor helper for the node)
-      - action_key_dims()                 (used by safety helper in node)
-      - safety_behavior_by_key()          (used by safety helper in node)
+      - recent_image_timestamp_ns()
+      - action_key_dims()
+      - safety_behavior_by_key()
     """
 
     def __init__(self, node: Node, contract_path: str, rate_hz: Optional[int] = None) -> None:
@@ -168,8 +163,8 @@ class RosClient:
         self._ros_sub_handles: List[Any] = []
         self._state_groups: Dict[str, List[SpecView]] = {}  # observation.state*
 
+        # Only group the exact base key "observation.state"
         for s in self._obs_specs:
-            # this shouldn't be starts with, it should be equals/exact match "observation.state"
             if s.key == "observation.state":
                 self._state_groups.setdefault(s.key, []).append(s)
 
@@ -177,7 +172,7 @@ class RosClient:
             _k, meta, _ = feature_from_spec(s, use_videos=False)
 
             # Unique dict key: disambiguate repeated state groups by topic suffix
-            if s.key.startswith("observation.state"):
+            if s.key == "observation.state":
                 dict_key = f"{s.key}_{s.topic.replace('/', '_')}"
             else:
                 dict_key = s.key
@@ -226,10 +221,8 @@ class RosClient:
         }
         self._safety_behavior_by_key: Dict[str, str] = {}
         for k, v in groups.items():
-            # Specs for a given key should share behavior; take from first action spec for that key
             behavior = getattr(v[0], "safety_behavior", None)
             if behavior is None:
-                # try original SpecView on _act_specs with same key
                 src = next((sv for sv in self._act_specs if sv.key == k), None)
                 behavior = getattr(src, "safety_behavior", "zeros") if src else "zeros"
             behavior = str(behavior).lower()
@@ -252,7 +245,7 @@ class RosClient:
         if ts_ns is None:
             ts_ns = self._n.get_clock().now().nanoseconds
 
-        if sv.key.startswith("observation.state"):
+        if sv.key == "observation.state":
             dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
         else:
             dict_key = sv.key
@@ -274,21 +267,14 @@ class RosClient:
         """
         frame: Dict[str, Any] = {}
 
-        # 1) Concatenate grouped state specs
+        # 1) Concatenate grouped state specs (exact base key)
         for group_key, group_specs in self._state_groups.items():
             samples: Dict[str, Any] = {}
             for sv in group_specs:
                 dict_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
                 if dict_key in self._subs:
                     samples[dict_key] = self._subs[dict_key].buf.sample(sample_t_ns)
-                    print(f"sampled state group {dict_key} at {samples[dict_key]}")
-            #print keys of samples
-            print(f"keys of samples: {list(samples.keys())}")
-
-            # Only apply provided permutation to the base 'observation.state' group
             perm = permutation_map if group_key == "observation.state" else None
-            #print group_key
-            print(f"group_key: {group_key}")
             frame[group_key] = concatenate_state_specs(
                 state_specs=group_specs,
                 samples=samples,
@@ -296,24 +282,18 @@ class RosClient:
                 permutation_map=perm,
                 logger=self._n.get_logger(),
             )
-            #print keys of frame
-            print(f"keys of frame: {list(frame.keys())}")
-            #print frame
-            print(f"frame: {frame}")
 
         # 2) All other observations
         for key, st in self._subs.items():
             if key.startswith("observation.state_"):
-                print(f"skipping {key} because it is a state group")
                 continue
             v = st.buf.sample(sample_t_ns)
             if v is None:
                 zp = self._obs_zero[key]
                 frame[key] = zp.copy() if isinstance(zp, np.ndarray) else zp
-                print(f"zero-padded {key} at {zp}")
             else:
                 frame[key] = v
-            print(f"sampled {key} at {v}")
+
         # 3) Inject task/prompt string expected by many LeRobot policies
         frame["task"] = prompt or ""
         return frame

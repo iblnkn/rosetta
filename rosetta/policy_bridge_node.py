@@ -1,37 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-PolicyBridge (slim): orchestrates ROS I/O (client) and inference (server).
+PolicyBridge (bin-queued): orchestrates ROS I/O (client) and inference (server).
 
-- ROS I/O lives in client.py (subs/pubs, resampling, routing).
-- Inference backends live in server.py (local LeRobot or LeRobot gRPC).
-- This node owns timers, queue policy, action server, feedback, and safety.
+- Actions are time-stamped samples on a fixed step grid (step_ns).
+- Each chunk's i-th action is assigned to bin: base_bin(sample_t_ns) + i.
+- Overlaps across chunks are merged ONLY when they land in the same bin.
+- Executor publishes exactly the current bin (or safety if missing).
 
-Params (subset):
-  contract_path (str)  — required
-  policy_path   (str)  — required
-  policy_device (str)  — "auto"/"cuda"/"cuda:N"/"mps"/"cpu"
-  server_backend (str) — "local" (default) | "lerobot_grpc"
-  lerobot_host   (str) — host for gRPC backend
-  lerobot_port   (int) — port for gRPC backend
-  use_action_chunks (bool)
-  actions_per_chunk (int)
-  chunk_size_threshold (float)
-  max_queue_actions (int)
-  use_header_time (bool)
-  header_skew_ms (float)
-  publish_tolerance_ms (float|None)
-  aggregate_fn_name (str) — "weighted_average"|"latest_only"|"average"|"conservative"
+Compatibility:
+- Keeps the same parameters and action interface for drop-in use.
+- 'publish_tolerance_ms', 'max_future_ms', 'header_skew_ms', 'max_queue_actions'
+  are accepted but unused (we log lookahead telemetry instead).
 """
 
 from __future__ import annotations
 
 import json
+import heapq
 from pathlib import Path
 import threading
-from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import rclpy
@@ -44,7 +34,6 @@ from rclpy.parameter import Parameter
 from rcl_interfaces.msg import SetParametersResult, ParameterDescriptor, ParameterType
 from std_srvs.srv import Trigger
 
-# Split modules
 from .client import RosClient, TimingPolicy
 from .server import (
     ServerConfig,
@@ -55,7 +44,7 @@ from .server import (
 
 from rosetta_interfaces.action import RunPolicy
 
-_ACTION_NAME = "run_policy" # TODO: This should just be the node name
+_ACTION_NAME = "run_policy"
 _FEEDBACK_PERIOD_S = 0.5
 
 
@@ -67,6 +56,7 @@ class RuntimeParams:
     chunk_size_threshold: float
     use_header_time: bool
     use_autocast: bool
+    # Declared but unused (kept for drop-in compatibility)
     max_queue_actions: int
     header_skew_ms: float
     publish_tolerance_ms: Optional[float]
@@ -78,7 +68,7 @@ def _torch_autocast_ok(device_type: str) -> bool:
 
 
 class PolicyBridge(Node):
-    """Slim orchestrator: timers, queue, action interface, safety."""
+    """Slim orchestrator: timers, bin-queue, action interface, safety."""
 
     def __init__(self) -> None:
         super().__init__("policy_bridge")
@@ -90,17 +80,18 @@ class PolicyBridge(Node):
         self.declare_parameter("latency_compensation_ns", 0)
         self.declare_parameter("use_action_chunks", True)
         self.declare_parameter("actions_per_chunk", 100)
-        self.declare_parameter("chunk_size_threshold", 0.5)
+        self.declare_parameter("chunk_size_threshold", 0.9)
+        # Unused (accepted for compatibility)
         self.declare_parameter("max_queue_actions", 512)
         self.declare_parameter("use_header_time", True)
         self.declare_parameter("use_autocast", False)
         self.declare_parameter("aggregate_fn_name", "weighted_average")
         self.declare_parameter("header_skew_ms", 500.0)
-        desc = ParameterDescriptor()     # TODO: Remove all through 102 (self.declare_parameter)? 
+        desc = ParameterDescriptor()
         desc.type = ParameterType.PARAMETER_DOUBLE
         desc.dynamic_typing = True
         self.declare_parameter("publish_tolerance_ms", None, desc)
-        self.declare_parameter("max_future_ms", 250.0)  # cap how far-ahead we keep
+        self.declare_parameter("max_future_ms", 250.0)
 
         # Backend selection (local vs LeRobot gRPC)
         self.declare_parameter("server_backend", "local")  # "local" | "lerobot_grpc"
@@ -121,15 +112,16 @@ class PolicyBridge(Node):
 
         # --- ROS client (subs/pubs per contract) ---
         self.client = RosClient(self, contract_path)
-        # Timing policy for sampling/publish tolerance
+
+        # TimingPolicy kept for compatibility (node no longer uses its tolerances)
         self.timing = TimingPolicy(
             step_ns=self.client.step_ns,
-            publish_tolerance_ms=self._params.publish_tolerance_ms,
+            publish_tolerance_ms=self._params.publish_tolerance_ms,  # unused here
             use_header_time=self._params.use_header_time,
-            header_skew_ms=self._params.header_skew_ms,
+            header_skew_ms=self._params.header_skew_ms,              # unused here
         )
 
-        # --- Aggregation modes (parity with your node) ---
+        # --- Aggregation modes ---
         self._AGG = {
             "weighted_average": lambda a, b: 0.3 * a + 0.7 * b,
             "latest_only": lambda a, b: b,
@@ -152,7 +144,7 @@ class PolicyBridge(Node):
             self.server = LocalPolicyServer()
             self.get_logger().info("Backend: local")
 
-        # Optional dataset stats passthrough (parity with your preprocessing)
+        # Optional dataset stats (to help with state permutation)
         self._ds_stats = None
         for cand in ("dataset_stats.json", "stats.json", "meta/stats.json"):
             p = Path(policy_path) / cand
@@ -171,12 +163,12 @@ class PolicyBridge(Node):
                 device=str(self.get_parameter("policy_device").value),
                 actions_per_chunk=int(self.get_parameter("actions_per_chunk").value),
                 dataset_stats=self._ds_stats,
-                rename_map=None,  # can supply if you have renames
+                rename_map=None,
             )
         )
 
-        # ---- Build state permutation to match training order ----
-        self._state_index_map = None # TODO: Remove this? 
+        # ---- Build state permutation to match training order (optional) ----
+        self._state_index_map = None
         try:
             expected = None
             if isinstance(self._ds_stats, dict):
@@ -184,13 +176,11 @@ class PolicyBridge(Node):
                     expected = self._ds_stats["observation.state"].get("names")
                 if expected is None:
                     expected = self._ds_stats.get("state_names")
-            # Fallback if your LeRobot policy exposes names in config (optional)
             if expected is None and hasattr(getattr(self.server, "policy", None), "config"):
                 cfg = self.server.policy.config  # type: ignore[attr-defined]
                 if hasattr(cfg, "state_names"):
                     expected = list(cfg.state_names)
             if expected:
-                # Current contract order from client (base group only)
                 contract_names = []
                 for sv in self.client._state_groups.get("observation.state", []):  # type: ignore[attr-defined]
                     contract_names.extend(list(sv.names or []))
@@ -225,7 +215,7 @@ class PolicyBridge(Node):
             Trigger, f"{_ACTION_NAME}/cancel", self._cancel_service_cb, callback_group=self._cbg
         )
 
-        # --- State for run ---
+        # --- Run state ---
         self._active_handle: Optional[Any] = None
         self._running = threading.Event()
         self._stop_requested = threading.Event()
@@ -234,17 +224,19 @@ class PolicyBridge(Node):
         self._prompt = ""
         self._pub_count = 0
 
-        # Timesteps + queue
-        self._timestep_cursor: int = 0
-        self._latest_executed_timestep: int = -1
-        self._queue: Deque[Tuple[int, int, Dict[str, np.ndarray]]] = deque(maxlen=self._params.max_queue_actions)
-        self._queue_by_step: Dict[int, Tuple[int, Dict[str, np.ndarray]]] = {}
+        # --- Bin queue (time-grid) ---
+        self._step_ns = self.client.step_ns
+        # _bins: {bin_idx -> packet}, _bin_heap: min-heap of bin_idx
+        self._bins: Dict[int, Dict[str, np.ndarray]] = {}
+        self._bin_heap: List[int] = []
         self._queue_lock = threading.Lock()
 
-        # Safety state
+        # Throttled lookahead logging
+        self._future_log_next_ns = 0
+
+        # Safety
         self._last_packet: Optional[Dict[str, np.ndarray]] = None
         self._last_packet_lock = threading.Lock()
-        self._starved_since_ns: Optional[int] = None
 
         # Timers
         self._cbg_timers = ReentrantCallbackGroup()
@@ -252,7 +244,7 @@ class PolicyBridge(Node):
         self._executor_timer = self.create_timer(self.client.step_sec, self._executor_tick, callback_group=self._cbg_timers)
         self._feedback_timer = self.create_timer(_FEEDBACK_PERIOD_S, self._feedback_tick, callback_group=self._cbg_timers)
 
-        self.get_logger().info(f"PolicyBridge ready.")
+        self.get_logger().info("PolicyBridge ready (bin-queued).")
 
     # ---------------- Param handling ----------------
     def _read_params(self) -> RuntimeParams:
@@ -263,6 +255,7 @@ class PolicyBridge(Node):
             chunk_size_threshold=float(self.get_parameter("chunk_size_threshold").value),
             use_header_time=bool(self.get_parameter("use_header_time").value),
             use_autocast=bool(self.get_parameter("use_autocast").value),
+            # Unused (compat only)
             max_queue_actions=int(self.get_parameter("max_queue_actions").value),
             header_skew_ms=float(self.get_parameter("header_skew_ms").value),
             publish_tolerance_ms=self.get_parameter("publish_tolerance_ms").value,
@@ -270,22 +263,23 @@ class PolicyBridge(Node):
         )
 
     def _on_params(self, _params: List[Parameter]) -> SetParametersResult:
-        newp = self._read_params()
-        if self._queue.maxlen != newp.max_queue_actions:
-            with self._queue_lock:
-                self._queue = deque(self._queue, maxlen=newp.max_queue_actions)
-        self._params = newp
+        self._params = self._read_params()
         self.timing = TimingPolicy(
             step_ns=self.client.step_ns,
-            publish_tolerance_ms=newp.publish_tolerance_ms,
-            use_header_time=newp.use_header_time,
-            header_skew_ms=newp.header_skew_ms,
+            publish_tolerance_ms=self._params.publish_tolerance_ms,
+            use_header_time=self._params.use_header_time,
+            header_skew_ms=self._params.header_skew_ms,
         )
         return SetParametersResult(successful=True)
 
-    def _future_window_ns(self) -> int:
-        """Convenience helper: max_future_ms in nanoseconds."""
-        return int(float(self._params.max_future_ms) * 1e6)
+    # ---------------- Bin helpers ----------------
+    def _bin_index(self, t_ns: int) -> int:
+        """Quantize timestamp to bin **start** (floor), not nearest."""
+        s = self._step_ns
+        return int(t_ns // s)
+
+    def _time_from_bin(self, b: int) -> int:
+        return b * self._step_ns
 
     # ---------------- Action lifecycle ----------------
     def _goal_cb(self, _req) -> GoalResponse:
@@ -315,29 +309,23 @@ class PolicyBridge(Node):
             goal_handle.abort()
             return self._mk_result(False, "Already running")
 
-        # start
         self._active_handle = goal_handle
         self._running.set()
         self._stop_requested.clear()
         self._done_evt.clear()
         self._finishing.clear()
         self._pub_count = 0
-        self._timestep_cursor = 0
-        self._latest_executed_timestep = -1
         with self._queue_lock:
-            self._queue.clear()
-            self._queue_by_step.clear()
+            self._bins.clear()
+            self._bin_heap.clear()
         with self._last_packet_lock:
             self._last_packet = None
-        self._starved_since_ns = None
 
-        # prompt/task
         self._prompt = getattr(goal_handle.request, "prompt", "")
         try:
             self.server.reset()
-        except Exception:
+        except Exception as e:
             self.get_logger().warning(f"Error resetting server: {e!r}")
-            pass
 
         self.get_logger().info(f"{_ACTION_NAME}: started (prompt='{self._prompt}')")
         self._done_evt.wait()
@@ -345,7 +333,6 @@ class PolicyBridge(Node):
         ok, msg = True, "Policy run ended"
         if self._stop_requested.is_set():
             ok, msg = False, "Cancelled"
-
         try:
             if goal_handle.is_cancel_requested:
                 goal_handle.canceled()
@@ -368,8 +355,9 @@ class PolicyBridge(Node):
             if hasattr(fb, "published_actions"):
                 fb.published_actions = int(self._pub_count)
             with self._queue_lock:
-                if hasattr(fb, "queue_depth"):
-                    fb.queue_depth = int(len(self._queue))
+                depth = len(self._bins)
+            if hasattr(fb, "queue_depth"):
+                fb.queue_depth = int(depth)
             if hasattr(fb, "status"):
                 fb.status = "executing"
             self._active_handle.publish_feedback(fb)
@@ -377,32 +365,36 @@ class PolicyBridge(Node):
             self.get_logger().warning(f"feedback publish failed: {e!r}")
 
     def _producer_tick(self) -> None:
-        self._timestep_cursor += 1
         if not self._running.is_set() or self._finishing.is_set():
             return
         if self._stop_requested.is_set():
             self._finish_run()
             return
         try:
-            # --- gating like the monolith ---
-            if self._params.use_action_chunks:
-                k = int(self._params.actions_per_chunk)
-                thr = float(self._params.chunk_size_threshold)
-                with self._queue_lock:
-                    qlen = len(self._queue)
-                    head_dt_ns = None
-                    if qlen > 0:
-                        head_dt_ns = self._queue[0][0] - self.get_clock().now().nanoseconds
-                        #print head_dt_ns and self._queue[0][0]
-                        print(head_dt_ns, self._queue[0][0])
-                #print qlen and k and thr
-                print(qlen, k, thr)
-                need_chunk = (
-                    qlen == 0
-                    or (qlen / k) <= thr
-                )
-                if not need_chunk:
-                    return
+            if not self._params.use_action_chunks:
+                self._produce()
+                return
+
+            k = int(self._params.actions_per_chunk)
+            low_water = int(max(1, self._params.chunk_size_threshold * k))
+
+            with self._queue_lock:
+                if self._bins:
+                    now_bin = self._bin_index(self.get_clock().now().nanoseconds)
+                    max_bin = max(self._bins.keys())
+                    lookahead_bins = max(0, max_bin - now_bin)
+                else:
+                    lookahead_bins = 0
+
+            if lookahead_bins > 0:
+                now_ns = self.get_clock().now().nanoseconds
+                if now_ns >= self._future_log_next_ns:
+                    future_ms = lookahead_bins * (self._step_ns / 1e6)
+                    if future_ms >= 1000.0:
+                        self.get_logger().info(f"lookahead ≈ {future_ms:.1f} ms ({lookahead_bins} bins ahead)")
+                    self._future_log_next_ns = now_ns + int(2e9)
+
+            if lookahead_bins < low_water:
                 self._produce()
 
         except Exception as e:
@@ -413,90 +405,51 @@ class PolicyBridge(Node):
             return
 
         now_ns = self.get_clock().now().nanoseconds
-        tol_ns = self.timing.publish_tolerance_ns
+        now_bin = self._bin_index(now_ns)
 
         packet = None
-        selected_step = None
+        dropped = 0
+
         with self._queue_lock:
-            # Drop stale first
-            removed = set()
-            while self._queue and (self._queue[0][0] < now_ns - tol_ns):
-                _, step, _ = self._queue.popleft()
-                removed.add(step)
-            for s in removed:
-                self._queue_by_step.pop(s, None)
+            # Drop strictly past bins
+            while self._bin_heap and self._bin_heap[0] < now_bin:
+                b = heapq.heappop(self._bin_heap)
+                if self._bins.pop(b, None) is not None:
+                    dropped += 1
 
-            # Telemetry: head lead
-            head_dt_ms = (self._queue[0][0] - now_ns) / 1e6 if self._queue else None
-            if head_dt_ms is not None:
-                self.get_logger().debug(f"head_dt={head_dt_ms:.1f}ms q={len(self._queue)} tol={tol_ns/1e6:.1f}ms")
+            # Publish exactly the current bin if present
+            if self._bin_heap and self._bin_heap[0] == now_bin:
+                _ = heapq.heappop(self._bin_heap)
+                packet = self._bins.pop(now_bin, None)
+            else:
+                packet = self._bins.pop(now_bin, None)
 
-            if not self._queue:
-                if self._starved_since_ns is None:
-                    self._starved_since_ns = now_ns
-                # Only log occasionally to avoid spam
-                starved_duration_ms = (now_ns - self._starved_since_ns) / 1e6
-                self.get_logger().warning(
-                    f"Queue empty, publishing safety (starved for {starved_duration_ms:.1f}ms). "
-                    f"Producer may be waiting for observations or inference failing."
+            # Tiny diagnostic (debug only) when we miss
+            if packet is None and self._bin_heap:
+                head = self._bin_heap[0]
+                tail = max(self._bin_heap) if self._bin_heap else head
+                self.get_logger().debug(
+                    f"no action for now_bin={now_bin}; queue range: [{head}, {tail}] "
+                    f"(gap={head - now_bin} bins)"
                 )
-                self._publish_safety()
-                return
 
-            # Choose closest item to now
-            best_idx, best_abs = -1, None
-            for idx, (t_ns, _, _) in enumerate(self._queue):
-                d = abs(t_ns - now_ns)
-                if best_abs is None or d < best_abs:
-                    best_abs, best_idx = d, idx
-            if best_abs is None or best_abs > tol_ns:
-                if self._starved_since_ns is None:
-                    self._starved_since_ns = now_ns
-                # Only log occasionally to avoid spam
-                starved_duration_ms = (now_ns - self._starved_since_ns) / 1e6
-                best_abs_ms = best_abs / 1e6 if best_abs is not None else None
-                self.get_logger().warning(
-                    f"No action within tolerance, publishing safety "
-                    f"(starved {starved_duration_ms:.1f}ms, closest action {best_abs_ms:.1f}ms away, "
-                    f"tolerance {tol_ns/1e6:.1f}ms, queue size: {len(self._queue)})."
-                )
-                self._publish_safety()
-                return
+        if dropped:
+            self.get_logger().debug(f"dropped {dropped} stale bins before publish (real-time)")
 
-            # Pop up to best
-            removed = set()
-            for _ in range(best_idx):
-                _, step, _ = self._queue.popleft()
-                removed.add(step)
-            _t_sel, selected_step, packet = self._queue.popleft()
-            removed.add(selected_step)
-            for s in removed:
-                self._queue_by_step.pop(s, None)
+        if packet is None:
+            self._publish_safety()
+            return
 
-        if selected_step is not None:
-            self._latest_executed_timestep = max(self._latest_executed_timestep, selected_step)
-            # Optional telemetry: log if action is stale
-            sel_ms = (now_ns - _t_sel) / 1e6
-            if sel_ms > 5.0:
-                with self._queue_lock:
-                    qlen = len(self._queue)
-                self.get_logger().debug(f"Selected action was {sel_ms:.1f}ms old; q={qlen}")
-
-        with self._last_packet_lock:
-            self._last_packet = packet
         try:
+            with self._last_packet_lock:
+                self._last_packet = packet
             self.client.publish_packet(packet)
             self._pub_count += 1
         except Exception as e:
             self.get_logger().warning(f"publish failed: {e!r}")
 
     # ---------------- Produce path ----------------
-    def _next_exec_tick_ns(self, now_ns: int) -> int:
-        s = self.client.step_ns
-        return ((now_ns + s - 1) // s) * s
-
     def _prepare_tensor_batch(self, obs_frame: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert numpy/strings to torch tensors on the server device."""
         dev = getattr(self.server, "device", torch.device("cpu"))
         batch: Dict[str, Any] = {}
         for k, v in obs_frame.items():
@@ -523,188 +476,116 @@ class PolicyBridge(Node):
                 pass
         return batch
 
+    def _extract_chunk_array(self, out: Union[torch.Tensor, Dict[str, torch.Tensor], List, Tuple]) -> np.ndarray:
+        tensor: Optional[torch.Tensor] = None
+        if isinstance(out, dict):
+            if "action" not in out:
+                raise ValueError("Policy output dict missing 'action' key")
+            tensor = out["action"]
+        elif isinstance(out, (list, tuple)):
+            if not out:
+                raise ValueError("Empty sequence from policy output")
+            tensor = out[0] if isinstance(out[0], torch.Tensor) else None
+        elif isinstance(out, torch.Tensor):
+            tensor = out
+        else:
+            raise TypeError(f"Unsupported policy output type: {type(out).__name__}")
+        if tensor is None:
+            raise ValueError("Could not locate Tensor in policy output")
+        if tensor.ndim == 3:   # [B, T, D]
+            tensor = tensor[0]
+        elif tensor.ndim != 2: # [T, D]
+            raise ValueError(f"Unexpected policy tensor shape: {tuple(tensor.shape)}")
+        arr = tensor.detach().cpu().numpy().astype(np.float32)
+        if arr.ndim != 2 or arr.shape[0] == 0:
+            raise ValueError(f"Policy produced invalid chunk shape: {arr.shape}")
+        return arr  # [T, D]
+
     def _produce(self) -> None:
         sample_t_ns = self.get_clock().now().nanoseconds - self._params.latency_compensation_ns
 
-        #TODO compute running average of latency, and if it grows above step_ns, print a warning, suggesting increasing latency_compensation_ns
-        #this should probably be tracked for each message seperately, and warn about the specific message that is causing the issue
-        #this is a perfect use case for throttled warning messages.
-
-        # Sample frame and build tensor batch
-        obs_frame = self.client.sample_frame(sample_t_ns, self._prompt, permutation_map=self._state_index_map) #TODO: remember to remove permutation_map
+        obs_frame = self.client.sample_frame(sample_t_ns, self._prompt, permutation_map=self._state_index_map)
         batch = self._prepare_tensor_batch(obs_frame)
-        
-        # Log batch info at debug level for troubleshooting
-        # Note: logger will filter by log level automatically
-        batch_shapes = {k: (v.shape if isinstance(v, torch.Tensor) else type(v).__name__) 
-                       for k, v in batch.items()}
-        self.get_logger().debug(f"Pre-preprocessor batch keys: {list(batch.keys())}, shapes: {batch_shapes}")
 
-        # Validate that we have at least some observations before inference
-        # Skip "task" string key - check for actual tensor observations
-        tensor_keys = [k for k, v in batch.items() if isinstance(v, torch.Tensor)]
-        if not tensor_keys:
-            # No tensor observations yet - wait for data to arrive
-            # Only log occasionally to avoid spam
-            if self._starved_since_ns is not None:
-                starved_ms = (self.get_clock().now().nanoseconds - self._starved_since_ns) / 1e6
-                self.get_logger().debug(
-                    f"No observation tensors available yet (waiting {starved_ms:.0f}ms), skipping inference. "
-                    f"Frame keys: {list(obs_frame.keys())}"
-                )
-            else:
-                self.get_logger().debug("No observation tensors available yet, skipping inference")
+        if not any(isinstance(v, torch.Tensor) for v in batch.values()):
             return
-        
-        # Check that tensors have non-empty shapes and valid values
-        for k in tensor_keys:
-            if batch[k].numel() == 0:
-                if self._starved_since_ns is not None:
-                    starved_ms = (self.get_clock().now().nanoseconds - self._starved_since_ns) / 1e6
-                    if starved_ms > 100.0 or int(starved_ms) % 1000 == 0:
-                        self.get_logger().debug(
-                            f"Observation tensor '{k}' is empty (shape={batch[k].shape}), skipping inference"
-                        )
-                else:
-                    self.get_logger().debug(f"Observation tensor '{k}' is empty (shape={batch[k].shape}), skipping inference")
-                return
 
-        # Inference (chunks or single)
-        use_autocast = self._params.use_autocast and _torch_autocast_ok(getattr(self.server, "device").type) #TODO: This should be closer to param initialization
+        use_autocast = self._params.use_autocast and _torch_autocast_ok(getattr(self.server, "device").type)
         try:
             with torch.inference_mode(), torch.autocast(getattr(self.server, "device").type, enabled=use_autocast):
                 out = self.server.predict_chunk(batch)
                 if not self._params.use_action_chunks:
                     if isinstance(out, dict):
                         out = {k: v[:, :1, ...] for k, v in out.items()}
-                    else:
+                    elif isinstance(out, torch.Tensor):
                         out = out[:, :1, ...]
         except (RuntimeError, KeyError) as e:
             error_msg = str(e)
-            if "stack expects a non-empty TensorList" in error_msg or "KeyError" in type(e).__name__:
-                # This typically means observations are missing, incomplete, or keys don't match
-                # Log more details for debugging
-                policy_info = ""
-                if hasattr(self.server, "policy") and hasattr(self.server.policy, "config"):
-                    cfg = self.server.policy.config
-                    if hasattr(cfg, "image_features"):
-                        policy_info = f", Policy expects image_features: {cfg.image_features}"
-                    if hasattr(cfg, "robot_state_feature"):
-                        policy_info += f", robot_state_feature: {cfg.robot_state_feature}"
-                    if hasattr(cfg, "env_state_feature"):
-                        policy_info += f", env_state_feature: {cfg.env_state_feature}"
-                
-                self.get_logger().warning(
-                    f"Inference failed due to observation mismatch. "
-                    f"Batch keys: {list(batch.keys())}, "
-                    f"Tensor keys: {tensor_keys}{policy_info}. "
-                    f"Error: {error_msg}. "
-                    f"Waiting for observations to match policy expectations."
-                )
-                return
-            raise
+            policy_info = ""
+            if hasattr(self.server, "policy") and hasattr(self.server.policy, "config"):
+                cfg = self.server.policy.config
+                if hasattr(cfg, "image_features"):
+                    policy_info = f", expects image_features={cfg.image_features}"
+                if hasattr(cfg, "robot_state_feature"):
+                    policy_info += f", robot_state_feature={cfg.robot_state_feature}"
+                if hasattr(cfg, "env_state_feature"):
+                    policy_info += f", env_state_feature={cfg.env_state_feature}"
+            self.get_logger().warning(
+                f"Inference failed due to observation mismatch. "
+                f"Batch keys: {list(batch.keys())}{policy_info}. "
+                f"Error: {error_msg}. Waiting for observations to match."
+            )
+            return
 
-        # Convert to numpy packets and enqueue
-        arr = out[0].detach().cpu().numpy().astype(np.float32)  # [T, D]
-        T = arr.shape[0]
-        print(f"arr is not a dict: {arr}")
-        print(f"T from arr: {T}")
-        # --- clamp horizon to actions_per_chunk like the monolith ---
-        k = int(self._params.actions_per_chunk) #TODO really we should be setting k (globally to T) (ideally checking earlier, but we could do this as a hack.)
+        arr = self._extract_chunk_array(out)  # [T, D]
+        T = int(arr.shape[0])
+        if T == 0:
+            return
 
-        now_ns = self.get_clock().now().nanoseconds
-        base_t = self._next_exec_tick_ns(now_ns + self.client.step_ns)
-        i0 = self._timestep_cursor
-        items: List[Tuple[int, int, Dict[str, np.ndarray]]] = []
+        base_bin = self._bin_index(sample_t_ns)  # floor-anchored
+        items: List[Tuple[int, Dict[str, np.ndarray]]] = []
         for i in range(T):
-            t_i = base_t + i * self.client.step_ns
-            step_i = i0 + i
+            bin_i = base_bin + i
             pkt = {"action": arr[i].ravel()}
-            items.append((t_i, step_i, pkt))
-        print(f"items: {items}")
+            items.append((bin_i, pkt))
 
-        self._enqueue(items)
-        if T > 0:
-            self._starved_since_ns = None
+        self._enqueue_bins(items)
 
-    # ---------------- Queue policy ----------------
-    def _merge_packets(self, old_pkt: Dict[str, np.ndarray], new_pkt: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        mode = self._agg_name
-        if mode == "latest_only":
-            return new_pkt
-        agg = self._AGG.get(mode) or self._AGG["latest_only"]
-        keys = set(old_pkt.keys()) | set(new_pkt.keys())
+    # ---------------- Queue policy (bin-based) ----------------
+    def _merge_packets(self, a: Dict[str, np.ndarray], b: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+        if self._agg_name == "latest_only":
+            return b
+        agg = self._AGG.get(self._agg_name) or self._AGG["latest_only"]
+        keys = set(a.keys()) | set(b.keys())
         out: Dict[str, np.ndarray] = {}
         for k in keys:
-            a, b = old_pkt.get(k), new_pkt.get(k)
-            if a is None:
-                out[k] = b
-            elif b is None:
-                out[k] = a
-            else:
-                if a.shape != b.shape:
-                    raise ValueError(f"Aggregate shape mismatch for key='{k}': {a.shape} vs {b.shape}")
-                out[k] = agg(a, b)
+            va, vb = a.get(k), b.get(k)
+            if va is None:
+                out[k] = vb
+                continue
+            if vb is None:
+                out[k] = va
+                continue
+            if va.shape != vb.shape:
+                raise ValueError(f"Aggregate shape mismatch for key='{k}': {va.shape} vs {vb.shape}")
+            out[k] = agg(va, vb)
         return out
 
-    def _enqueue(self, items: List[Tuple[int, int, Dict[str, np.ndarray]]]) -> None:
-        """Drop stale, then enforce capacity (drop farthest-future)."""
+    def _enqueue_bins(self, items: List[Tuple[int, Dict[str, np.ndarray]]]) -> None:
+        merges = 0
         with self._queue_lock:
-            for t_ns, step, pkt in items:
-                if step in self._queue_by_step:
-                    old_t, old_pkt = self._queue_by_step[step]
-                    merged = self._merge_packets(old_pkt, pkt)
-                    self._queue_by_step[step] = (min(old_t, t_ns), merged)
+            for bin_i, pkt in items:
+                if bin_i in self._bins:
+                    self._bins[bin_i] = self._merge_packets(self._bins[bin_i], pkt)
+                    merges += 1
                 else:
-                    self._queue_by_step[step] = (t_ns, pkt)
-
-            merged_list = sorted([(t, s, p) for s, (t, p) in self._queue_by_step.items()], key=lambda x: x[0])
-
-            # 1) Drop stale (t < now - tol)
-            now_ns = self.get_clock().now().nanoseconds
-            tol_ns = self.timing.publish_tolerance_ns
-            fresh = [(t, s, p) for (t, s, p) in merged_list if t >= now_ns - tol_ns]
-            if len(fresh) != len(merged_list):
-                stale_steps = {s for (t, s, _p) in merged_list if t < now_ns - tol_ns}
-                for s in stale_steps:
-                    self._queue_by_step.pop(s, None)
-            merged_list = fresh
-
-            # 1b) Drop too-far future (t > now + future_window)
-            upper = now_ns + self._future_window_ns()
-            in_window = [(t, s, p) for (t, s, p) in merged_list if t <= upper]
-            if len(in_window) != len(merged_list):
-                too_far_steps = {s for (t, s, _p) in merged_list if t > upper}
-                for s in too_far_steps:
-                    self._queue_by_step.pop(s, None)
-            merged_list = in_window
-
-            # 2) Capacity: contextual keep
-            cap = self._queue.maxlen
-            if cap is None or len(merged_list) <= cap:
-                kept = merged_list
-            else:
-                # If we are starved *and* the head is ahead of now (executor is waiting),
-                # keep earliest items to pull the head back toward "now".
-                head_ahead = False
-                if merged_list:
-                    head_dt = merged_list[0][0] - now_ns
-                    head_ahead = head_dt > tol_ns
-                if self._starved_since_ns is not None and head_ahead:
-                    kept = merged_list[:cap]   # keep earliest
-                else:
-                    kept = merged_list[-cap:]  # keep latest (normal case)
-
-            self._queue.clear()
-            for it in kept:
-                self._queue.append(it)
-            self._queue_by_step = {s: (t, p) for t, s, p in kept}
+                    self._bins[bin_i] = pkt
+                    heapq.heappush(self._bin_heap, bin_i)
+        if merges:
+            self.get_logger().debug(f"merged {merges} bins (agg='{self._agg_name}')")
 
     # ---------------- Safety ----------------
     def _create_safety_packet(self) -> Dict[str, np.ndarray]:
-        """Hold last packet if available; otherwise zeros.
-        If client exposes per-key dims or behaviors, use them."""
-        # Optional richer safety if client exposes these helpers
         dims_fn = getattr(self.client, "action_key_dims", None)
         beh_fn = getattr(self.client, "safety_behavior_by_key", None)
         dims = dims_fn() if callable(dims_fn) else {}
@@ -723,7 +604,6 @@ class PolicyBridge(Node):
                     pkt[key] = np.zeros((int(dim),), dtype=np.float32)
             return pkt
 
-        # Fallback (no dims available)
         if last is not None:
             return {k: v.copy() for k, v in last.items()}
         return {"action": np.zeros((1,), dtype=np.float32)}
@@ -745,8 +625,8 @@ class PolicyBridge(Node):
         except Exception:
             pass
         with self._queue_lock:
-            self._queue.clear()
-            self._queue_by_step.clear()
+            self._bins.clear()
+            self._bin_heap.clear()
         self._prompt = ""
         self._done_evt.set()
 
