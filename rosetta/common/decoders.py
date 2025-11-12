@@ -184,16 +184,18 @@ def decode_ros_image(
 
     return hwc_float
 
+import sys
 import pandas as pd
+import logging
 _timestamp_map = None
-def _load_timestamp_map(csv_path): #to load csv just once
-    global _timestamp_map
-    if _timestamp_map is None:
-        df = pd.read_csv(csv_path)
-        _timestamp_map = df
+
+prev_topic = None
+def _load_timestamp_map(csv_path): #to load csv just once   
+    df = pd.read_csv(csv_path)
+    _timestamp_map = df
     return _timestamp_map
 
-def _find_closest_image(images_dir, ts, df, tolerance=0.2):
+def _find_closest_image(images_dir, ts, df, tolerance=0.1):
     """
     Busca la imagen cuyo timestamp esté más cerca de 'ts'.
     tolerance en segundos.
@@ -202,36 +204,17 @@ def _find_closest_image(images_dir, ts, df, tolerance=0.2):
     closest = df.loc[df["diff"].idxmin()]
     if closest["diff"] > tolerance:
         print(f" No close image found for {ts:.6f}, closest diff={closest['diff']:.3f}s")
+    
     return os.path.join(images_dir, closest["image_name"])
 
-def flatten_ros_message(msg, prefix=""):
-    """Recursively flatten ROS2 messages into a flat dict."""
-    result = {}
-    # Check if the message has fields and field types (to handle complex types)
-    if not hasattr(msg, "get_fields_and_field_types"):
-        # Handle simple types (should not happen if called correctly, but for robustness)
-        return {}
-
-    for field_name, field_type in msg.get_fields_and_field_types().items():
-        value = getattr(msg, field_name)
-        key = f"{prefix}{field_name}"
-        if hasattr(value, "get_fields_and_field_types"):
-            # Recurse for nested messages
-            result.update(flatten_ros_message(value, prefix=key + "."))
-        elif isinstance(value, (list, tuple, np.ndarray)):
-            # Handle arrays/lists/tuples
-            result[key] = list(value)
-        else:
-            # Handle primitive types
-            result[key] = value
-    return result
 
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):
+    global prev_topic
+    global _timestamp_map
     """
     Custome decoder for Compressed Images. Search image in image folder based on timestamp
     """
-
     topic = spec.topic.strip("/").replace("/", "_")
 
     IMAGES_DIR = f"/workspace/data/monday_trimmed_dir/data_0/images/{topic}/images"
@@ -239,8 +222,14 @@ def _dec_foxglove_image(msg, spec):
     
     ts = msg.timestamp.sec + msg.timestamp.nanosec * 1e-9
 
-    df = _load_timestamp_map(CSV_PATH)
+    if topic != prev_topic:
+        _timestamp_map = None
+        prev_topic = topic
+
+    if  _timestamp_map is None:
+        df = _load_timestamp_map(CSV_PATH)
     # no puedo asumir que para cada timestamp va a haber una imagen
+
     image_path = _find_closest_image(IMAGES_DIR, ts, df)
 
     frame = cv2.imread(image_path, cv2.IMREAD_COLOR)

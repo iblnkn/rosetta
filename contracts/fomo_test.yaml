@@ -20,6 +20,13 @@ observations:
     align: {resample_policy: hold, stamp: header, tol_ms: 1500}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
+  - key: observation.image.left
+    topic: /video_mapping/left/foxglove
+    type: foxglove_msgs/msg/CompressedVideo
+    image: 
+      resize: [720,1280]
+    align: {resample_policy: hold, stamp: header, tol_ms: 1500}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
 
   - key: observation.state.imu
     topic: /imu/data_abs_heading
