@@ -19,14 +19,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from rosetta.common.contract_utils import register_decoder
-import tempfile
-import subprocess
-
 import os
 import cv2  
 
-from rclpy.serialization import deserialize_message
-from foxglove_msgs.msg import CompressedVideo
+import pandas as pd
+
 # ---------- Helper functions ----------
 
 
@@ -184,21 +181,24 @@ def decode_ros_image(
 
     return hwc_float
 
-import sys
-import pandas as pd
-import logging
-_timestamp_map = None
+timestamp_dict = {}
 
 prev_topic = None
-def _load_timestamp_map(csv_path): #to load csv just once   
-    df = pd.read_csv(csv_path)
-    _timestamp_map = df
-    return _timestamp_map
+
+def _load_timestamp_map(csv_path):
+    """Carga el CSV de timestamps solo una vez por tópico."""
+    if csv_path not in timestamp_dict:
+        df = pd.read_csv(csv_path)
+        timestamp_dict[csv_path] = df
+        print("loaded new df")
+        print(df)
+        print("csv_path:", csv_path)
+    return timestamp_dict[csv_path]
 
 def _find_closest_image(images_dir, ts, df, tolerance=0.1):
     """
     Busca la imagen cuyo timestamp esté más cerca de 'ts'.
-    tolerance en segundos.
+    tolerance solo es para informar
     """
     df["diff"] = np.abs(df["timestamp"] - ts)
     closest = df.loc[df["diff"].idxmin()]
@@ -217,24 +217,22 @@ def _dec_foxglove_image(msg, spec):
     """
     topic = spec.topic.strip("/").replace("/", "_")
 
-    IMAGES_DIR = f"/workspace/data/monday_trimmed_dir/data_0/images/{topic}/images"
-    CSV_PATH = f"/workspace/data/monday_trimmed_dir/data_0/images/{topic}/timestamps.csv"
+    base_dir = "/workspace/data/monday_trimmed_dir/data_0/images"
+    images_dir = os.path.join(base_dir, topic, "images")
+    csv_path = os.path.join(base_dir, topic, "timestamps.csv")
     
     ts = msg.timestamp.sec + msg.timestamp.nanosec * 1e-9
 
-    if topic != prev_topic:
-        _timestamp_map = None
-        prev_topic = topic
-
-    if  _timestamp_map is None:
-        df = _load_timestamp_map(CSV_PATH)
+    df = _load_timestamp_map(csv_path)  
     # no puedo asumir que para cada timestamp va a haber una imagen
 
-    image_path = _find_closest_image(IMAGES_DIR, ts, df)
+    image_path = _find_closest_image(images_dir, ts, df)
+
 
     frame = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
     if frame is None:
+        print("searching for image in df:", csv_path)
         raise ValueError(f"Could not load image at {image_path}")
 
     # 4️Convertir a RGB y normalizar [0,1]

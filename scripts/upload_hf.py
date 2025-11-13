@@ -5,7 +5,7 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 # Cargar dataset local
 dataset = LeRobotDataset(
     repo_id="yaisa5ramriez/monday_test",
-    root="/workspace/data/monday_trimmed_dir/outrosetta2",
+    root="/workspace/data/monday_trimmed_dir/outrosetta3",
 )
 
 dataset.push_to_hub(
