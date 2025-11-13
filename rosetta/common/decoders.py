@@ -184,7 +184,7 @@ def decode_ros_image(
 timestamp_dict = {}
 
 prev_topic = None
-
+'''
 def _load_timestamp_map(csv_path):
     """Carga el CSV de timestamps solo una vez por tópico."""
     if csv_path not in timestamp_dict:
@@ -206,7 +206,66 @@ def _find_closest_image(images_dir, ts, df, tolerance=0.1):
         print(f" No close image found for {ts:.6f}, closest diff={closest['diff']:.3f}s")
     
     return os.path.join(images_dir, closest["image_name"])
+'''
+import pandas as pd
+import numpy as np
+import os
+from typing import Dict, Any
 
+# Diccionario para almacenar DataFrames ya cargados
+timestamp_dict: Dict[str, pd.DataFrame] = {}
+
+def _load_timestamp_map(csv_path: str) -> pd.DataFrame:
+    """Carga el CSV de timestamps, lo ordena y establece el índice. (O(n log n) solo en la carga)"""
+    global timestamp_dict
+    
+    if csv_path not in timestamp_dict:
+        # Lee el CSV
+        df = pd.read_csv(csv_path) 
+
+        df = df.set_index("timestamp")
+        
+        timestamp_dict[csv_path] = df
+        print(f"Loaded and indexed new dataframe from: {csv_path}")
+        
+    return timestamp_dict[csv_path]
+
+def _find_closest_image(images_dir: str, ts: float, df: pd.DataFrame, tolerance: float = 0.1) -> str:
+    """
+    Returns image path that has has the closest timestamp to 'ts'
+    """
+    idx = df.index.searchsorted(ts)
+       
+    # (index >= ts): idx if within bounds
+    if idx < len(df):
+        candidato_b = df.iloc[idx]
+        diff_b = np.abs(candidato_b.name - ts) 
+    else:
+        # Si idx es len(df), ts es mayor que todos los timestamps. No hay candidato posterior.
+        candidato_b = None
+        diff_b = float('inf')
+        
+    # Candidato Anterior (index < ts): Usamos idx - 1 si no está fuera de límites
+    if idx > 0:
+        candidato_a = df.iloc[idx - 1]
+        diff_a = np.abs(candidato_a.name - ts)
+    else:
+        candidato_a = None
+        diff_a = float('inf')
+
+    # 3. Seleccionar el candidato con la diferencia mínima
+    if diff_a <= diff_b:
+        closest = candidato_a
+    else:
+        closest = candidato_b
+
+    #if closest.name != ts:
+    #    print(closest.name, ts)
+    #    print(" No exact image found for {ts:.6f}")
+
+    image_path = os.path.join(images_dir, closest["image_name"])
+    
+    return image_path
 
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):
