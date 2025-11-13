@@ -221,7 +221,7 @@ def export_bags_to_lerobot(
     chunk_size: int = 1000,
     data_mb: int = 100,
     video_mb: int = 500,
-    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header'
+    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' | 'foxglove' | <agregar nueva opción>
 ) -> None:
     """Convert bag directories into a LeRobot v3 dataset under `out_root`.
 
@@ -249,12 +249,13 @@ def export_bags_to_lerobot(
         Target data file size in MB per chunk.
     video_mb : int, default 500
         Target video file size in MB per chunk.
-    timestamp_source : {"contract","receive","header"}, default "contract"
+    timestamp_source : {"contract","receive","header","foxglove"}, default "contract"
         Timestamp selection policy per decoded message:
         - "contract": Use bag time, unless spec.stamp_src == "header"
                       and a valid header stamp exists.
         - "receive":  Always use bag receive time.
         - "header":   Prefer header stamp; fall back to bag receive time.
+        - "foxglove": Use timestamp from Foxglove CompressedVideo messages.
 
     Raises
     ------
@@ -452,18 +453,26 @@ def export_bags_to_lerobot(
                 st = streams[key]
                 msg = deserialize_message(data, get_message(st.ros_type))
                 sv = st.spec
-
+                
                 # Timestamp selection policy
+                #print("timestamp_source is", timestamp_source)
                 if timestamp_source == "receive":
                     ts_sel = int(bag_ns)
                 elif timestamp_source == "header":
                     ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                elif timestamp_source == "foxglove":
+                    if sv.ros_type == "foxglove_msgs/msg/CompressedVideo":
+                        time = msg.timestamp
+                        ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
+                    else:
+                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                    
                 else:  # 'contract' (per-spec stamp_src)
-                    ts_sel = int(bag_ns)
                     if sv.stamp_src == "header":
-                        hdr = stamp_from_header_ns(msg)
-                        if hdr is not None:
-                            ts_sel = int(hdr)
+                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                    elif sv.stamp_src == "foxglove":
+                        time = msg.timestamp
+                        ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
 
                 val = decode_value(st.ros_type, msg, sv)
 
@@ -510,6 +519,21 @@ def export_bags_to_lerobot(
         ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
 
 
+        import csv
+        import os
+        csv_dir = out_root / f"timestamps_episode_{epi_idx}"
+        os.makedirs(csv_dir, exist_ok=True)
+        for key, st in streams.items():
+            # Crear nombre seguro para cada tópico
+            safe_key = key.replace("/", "_").replace(".", "_")
+            csv_path = csv_dir / f"{safe_key}_raw.csv"
+
+            # Guardar los datos originales antes del resample
+            if st.ts and st.val:
+                with open(csv_path, "w") as f:
+                    f.write("index,timestamp_ns,value\n")
+                    for i, (ts, val) in enumerate(zip(st.ts, st.val)):
+                        f.write(f"{i},{ts / 1e9}\n")
         # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
         for key, st in streams.items():
@@ -521,6 +545,57 @@ def export_bags_to_lerobot(
             resampled[key] = resample(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
+
+
+
+        # 📂 Carpeta donde se guardarán los CSV por episodio
+        
+        
+
+        print(f"🕒 Generando CSVs de timestamps para cada tópico en {csv_dir}")
+
+        for key, vals in resampled.items():
+            # Nombre del archivo CSV basado en el nombre del tópico
+            safe_key = key.replace("/", "_").replace(".", "_")
+            csv_path = csv_dir / f"{safe_key}.csv"
+
+            # Obtener timestamps originales del tópico
+            ts_list = np.asarray(streams[key].ts, dtype=np.int64)
+
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "tick_index",
+                    "tick_s",
+                    "msg_ts_s",
+                    "delta_s",
+                    "used_value"
+                ])
+
+                for i, tick in enumerate(ticks_ns):
+                    val = vals[i]
+                    msg_ts = None
+                    delta_ns = None
+                    used = False
+
+                    if val is not None and len(ts_list) > 0:
+                        # Encuentra el timestamp más reciente <= tick
+                        j = np.searchsorted(ts_list, tick, side="right") - 1
+                        if 0 <= j < len(ts_list):
+                            msg_ts = ts_list[j]
+                            delta_ns = tick - msg_ts
+                            used = True
+
+                    writer.writerow([
+                        i,
+                        tick / 1e9,
+                        (msg_ts / 1e9) if msg_ts is not None else "",
+                        (delta_ns / 1e9) if delta_ns is not None else "",
+                        used,
+                    ])
+
+            print(f"✅ Guardado CSV para tópico: {key} → {csv_path.name}")
+
 
         # Write frames
         for i in range(n_ticks):
@@ -654,11 +729,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--video-mb", type=int, default=500)
     ap.add_argument(
         "--timestamp",
-        choices=("contract", "bag", "header"),
+        choices=("contract", "bag", "header", "foxglove"),
         default="contract",
         help=(
             "Which time base to use when resampling: "
-            "'contract' (per-spec), 'bag' (receive), or 'header' (message header)."
+            "'contract' (per-spec), 'bag' (receive), 'header' (message header), or 'foxglove' (Foxglove message timestamp)."
         ),
     )
     return ap.parse_args()

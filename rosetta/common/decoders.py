@@ -21,6 +21,8 @@ import numpy as np
 from rosetta.common.contract_utils import register_decoder
 import os
 import cv2  
+import tempfile
+from pathlib import Path
 
 import pandas as pd
 
@@ -181,125 +183,110 @@ def decode_ros_image(
 
     return hwc_float
 
-timestamp_dict = {}
 
-prev_topic = None
-'''
-def _load_timestamp_map(csv_path):
-    """Carga el CSV de timestamps solo una vez por tópico."""
-    if csv_path not in timestamp_dict:
-        df = pd.read_csv(csv_path)
-        timestamp_dict[csv_path] = df
-        print("loaded new df")
-        print(df)
-        print("csv_path:", csv_path)
-    return timestamp_dict[csv_path]
+#from rosetta.common.foxglove_decoder import decode_foxglove_compressed_video
+#from foxglove_msgs.msg import CompressedVideo
+import av
+from sensor_msgs.msg import Image
+_decoder_state = {}
+codec_ctx = None
 
-def _find_closest_image(images_dir, ts, df, tolerance=0.1):
+def decode_foxglove_compressed_video(msg, topic, output_encoding='rgb8', warmup_frames=30):
     """
-    Busca la imagen cuyo timestamp esté más cerca de 'ts'.
-    tolerance solo es para informar
+    Decode foxglove_msgs/CompressedVideo into a sensor_msgs/Image message using PyAV.
     """
-    df["diff"] = np.abs(df["timestamp"] - ts)
-    closest = df.loc[df["diff"].idxmin()]
-    if closest["diff"] > tolerance:
-        print(f" No close image found for {ts:.6f}, closest diff={closest['diff']:.3f}s")
+    global codec_ctx
+    codec_name = getattr(msg, "format", "h264")
+
+    if topic not in _decoder_state:
+        try:
+            codec_ctx = av.codec.CodecContext.create(codec_name, 'r')
+            _decoder_state[topic] = {'codec_ctx': codec_ctx, 'frames_decoded': 0}
+            print(f"[FoxgloveDecoder] Initialized decoder for topic {topic}")
+        except Exception as e:
+            print(f"[FoxgloveDecoder] Failed to initialize decoder for {codec_name}: {e}")
+            return None
+
+    state = _decoder_state[topic]
+    codec_ctx = state['codec_ctx']
+    # Wrap raw bytes from msg.data as a PyAV packet
+    try:
+        packet = av.packet.Packet(bytes(msg.data))
+    except Exception as e:
+        print(f'Failed to create AV packet: {e}')
+        return
     
-    return os.path.join(images_dir, closest["image_name"])
-'''
-import pandas as pd
-import numpy as np
-import os
-from typing import Dict, Any
-
-# Diccionario para almacenar DataFrames ya cargados
-timestamp_dict: Dict[str, pd.DataFrame] = {}
-
-def _load_timestamp_map(csv_path: str) -> pd.DataFrame:
-    """Carga el CSV de timestamps, lo ordena y establece el índice. (O(n log n) solo en la carga)"""
-    global timestamp_dict
+    def create_dummy_image():
+        print(f"[FoxgloveDecoder] Skipping frame  (warming up)")
+        # Return a black dummy image of reasonable size (e.g., 480x640)
+        dummy = Image()
+        dummy.header.stamp = msg.timestamp
+        dummy.header.frame_id = msg.frame_id
+        dummy.height = 720
+        dummy.width = 1280
+        dummy.encoding = output_encoding
+        dummy.is_bigendian = 0
+        dummy.step = dummy.width * 3
+        dummy.data = (np.zeros((dummy.height, dummy.width, 3), dtype=np.uint8)).tobytes()
+        return dummy
     
-    if csv_path not in timestamp_dict:
-        # Lee el CSV
-        df = pd.read_csv(csv_path) 
-
-        df = df.set_index("timestamp")
-        
-        timestamp_dict[csv_path] = df
-        print(f"Loaded and indexed new dataframe from: {csv_path}")
-        
-    return timestamp_dict[csv_path]
-
-def _find_closest_image(images_dir: str, ts: float, df: pd.DataFrame, tolerance: float = 0.1) -> str:
-    """
-    Returns image path that has has the closest timestamp to 'ts'
-    """
-    idx = df.index.searchsorted(ts)
-       
-    # (index >= ts): idx if within bounds
-    if idx < len(df):
-        candidato_b = df.iloc[idx]
-        diff_b = np.abs(candidato_b.name - ts) 
-    else:
-        # Si idx es len(df), ts es mayor que todos los timestamps. No hay candidato posterior.
-        candidato_b = None
-        diff_b = float('inf')
-        
-    # Candidato Anterior (index < ts): Usamos idx - 1 si no está fuera de límites
-    if idx > 0:
-        candidato_a = df.iloc[idx - 1]
-        diff_a = np.abs(candidato_a.name - ts)
-    else:
-        candidato_a = None
-        diff_a = float('inf')
-
-    # 3. Seleccionar el candidato con la diferencia mínima
-    if diff_a <= diff_b:
-        closest = candidato_a
-    else:
-        closest = candidato_b
-
-    #if closest.name != ts:
-    #    print(closest.name, ts)
-    #    print(" No exact image found for {ts:.6f}")
-
-    image_path = os.path.join(images_dir, closest["image_name"])
+    try:
+        frames = codec_ctx.decode(packet)
+    except Exception as e:
+        dummy = create_dummy_image()
+        print(f'Decode error: {e}')
+        return dummy
     
-    return image_path
+
+    if not frames:
+        print("[FoxgloveDecoder] No frames decoded (maybe waiting for keyframe)")
+        dummy = create_dummy_image()
+        return dummy
+
+    # Usually only one frame per packet
+    frame = frames[0]
+    try:
+        img_rgb = frame.to_ndarray(format='rgb24')
+    except Exception as e:
+        print(f"[FoxgloveDecoder] Failed to convert frame: {e}")
+        return None
+
+    h, w, ch = img_rgb.shape
+    if ch != 3:
+        print(f"[FoxgloveDecoder] Unexpected channel count {ch}, expecting 3 (rgb24)")
+
+    ros_img = Image()
+    ros_img.header.stamp = msg.timestamp
+    ros_img.header.frame_id = msg.frame_id
+    ros_img.height = h
+    ros_img.width = w
+    ros_img.encoding = output_encoding
+    ros_img.is_bigendian = 0
+    ros_img.step = w * 3
+    ros_img.data = img_rgb.tobytes()
+
+    return ros_img
+
 
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):
-    global prev_topic
-    global _timestamp_map
-    """
-    Custome decoder for Compressed Images. Search image in image folder based on timestamp
-    """
-    topic = spec.topic.strip("/").replace("/", "_")
-
-    base_dir = "/workspace/data/monday_trimmed_dir/data_0/images"
-    images_dir = os.path.join(base_dir, topic, "images")
-    csv_path = os.path.join(base_dir, topic, "timestamps.csv")
+    """Foxglove CompressedVideo decoder: decode H.264 then use image decoder.
     
-    ts = msg.timestamp.sec + msg.timestamp.nanosec * 1e-9
+    This decoder:
+    1. Decodes the H.264 frame from the Foxglove message
+    2. Passes the resulting image to the standard image decoder (decode_ros_image)
+    3. Returns the same normalized float32 array as sensor_msgs/Image decoding
+    
+    This ensures consistent processing pipeline between Foxglove and standard ROS images.
+    """
+    # Decode H.264 to a minimal image-like message
+    # msg es un CompressedVideo que recibes del bag o suscripción
+    topic = spec.topic 
+    decoded_image = decode_foxglove_compressed_video(msg, topic, output_encoding='rgb8')
+    
+    normalized_image = decode_ros_image(decoded_image)
 
-    df = _load_timestamp_map(csv_path)  
-    # no puedo asumir que para cada timestamp va a haber una imagen
-
-    image_path = _find_closest_image(images_dir, ts, df)
-
-
-    frame = cv2.imread(image_path, cv2.IMREAD_COLOR)
-
-    if frame is None:
-        print("searching for image in df:", csv_path)
-        raise ValueError(f"Could not load image at {image_path}")
-
-    # 4️Convertir a RGB y normalizar [0,1]
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_norm = frame_rgb.astype(np.float32) / 255.0
-
-    return frame_norm
-
+    return normalized_image
 
 
 # ---------- Image decoders ----------

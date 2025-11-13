@@ -435,7 +435,38 @@ def resample_asof(
         while j + 1 < len(ts_ns) and ts_ns[j + 1] <= t:
             j += 1
         ok = j < len(vals) and ts_ns[j] <= t and (t - ts_ns[j]) <= tol_ns
-        out.append(vals[j] if ok else None)
+
+        tick_s = t / 1e9
+        msg_ts = ts_ns[j] / 1e9 if j < len(ts_ns) else None
+        delta_ns = (t - ts_ns[j]) if j < len(ts_ns) else None
+        delta_s = delta_ns / 1e9 if delta_ns is not None else None
+
+        if ok:
+            #print(
+            #    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
+            #    f"matched msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
+            #    f"Δt={delta_ns}ns ({delta_s:.6f}s) ✅"
+            #)
+            out.append(vals[j])
+        else: 
+            if j >= len(ts_ns):
+                print(
+                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
+                    f"no msg available (j={j}) ❌"
+                )
+            elif (t - ts_ns[j]) > tol_ns:
+                print(
+                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
+                    f"msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
+                    f"Δt={delta_ns}ns ({delta_s:.6f}s) > tol_ns={tol_ns} ❌"
+                )
+            else:
+                print(
+                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
+                    f"msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
+                    f"Invalid or missing data ❌"
+                )
+            return None
     return out
 
 
@@ -460,6 +491,7 @@ def resample(
     step_ns: int,
     tol_ms: int,
 ) -> List[Any]:
+    print(f"[RESAMPLE] policy={policy}, step_ns={step_ns}, tol_ms={tol_ms}")
     """Dispatch resampling policy: 'hold' | 'asof' | 'drop'."""
     if policy == "drop":
         return resample_drop(ts_ns, vals, ticks_ns, step_ns)
