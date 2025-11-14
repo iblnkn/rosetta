@@ -99,6 +99,7 @@ def decode_ros_image(
     Returns:
         np.ndarray: Shape (H, W, C) with dtype float32
     """
+    #print("decode ros image")
     h, w = int(msg.height), int(msg.width)
     enc = (getattr(msg, "encoding", None) or expected_encoding or "bgr8").lower()
     raw = np.frombuffer(msg.data, dtype=np.uint8)
@@ -160,6 +161,7 @@ def decode_ros_image(
 
     # --- Color paths (unchanged behavior) ---
     elif enc in ("rgb8", "bgr8"):
+        #print("reshaping")
         ch = 3
         row = raw.reshape(h, step)[:, : w * ch]
         arr = row.reshape(h, w, ch)
@@ -181,6 +183,7 @@ def decode_ros_image(
     # Normalize to [0,1] and keep HWC format for LeRobot compatibility
     hwc_float = hwc_rgb.astype(np.float32) / 255.0  # uint8 [0,255] -> float32 [0,1]
 
+    #print("returning hwc float")
     return hwc_float
 
 
@@ -227,6 +230,7 @@ def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_f
     codec_ctx = state['codec_ctx']
     prev_image = state['prev_image']
 
+    
     # Wrap raw bytes from msg.data as a PyAV packet
     try:
         packet = av.packet.Packet(bytes(msg.data))
@@ -252,6 +256,7 @@ def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_f
     frame = frames[0]
     try:
         img_rgb = frame.to_ndarray(format='rgb24')
+        #print("valid frame")
     except Exception as e:
         print(f"[FoxgloveDecoder] Failed to convert frame: {e}")
         return None
@@ -272,16 +277,6 @@ def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_f
 
     prev_image = ros_img
     return ros_img
-
-def cleanup_foxglove_decoders():
-    global _decoder_state
-    print("[FoxgloveDecoder] Cleaning up all video decoder contexts...")
-    for topic, state in _decoder_state.items():
-        # Eliminar la referencia al CodecContext para que Python pueda liberarlo.
-        del state['codec_ctx'] 
-        del state['prev_image']
-    _decoder_state = {}
-    print("[FoxgloveDecoder] Cleanup complete. Memory released.")
 
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):

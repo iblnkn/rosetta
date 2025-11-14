@@ -103,10 +103,13 @@ from rosetta.common.contract_utils import (
     zero_pad as make_zero_pad,  # alias to avoid name clash with dict var
 )
 
-# Import decoders to register them
-import rosetta.common.decoders as decoders # noqa: F401
-from rosetta.common.decoders import cleanup_foxglove_decoders
+from PIL import Image #Nuevo
+import tempfile #Nuevo
 
+# Import decoders to register them
+#import rosetta.common.decoders as decoders # noqa: F401
+#from rosetta.common.decoders import cleanup_foxglove_decoders
+import rosetta.common.decoders
 # ---------------------------------------------------------------------------
 
 
@@ -130,6 +133,8 @@ class _Stream:
     ros_type: str
     ts: List[int]
     val: List[Any]
+    is_image: bool = False  #Nuevo
+    temp_dir: Optional[Path] = None #Nuevo
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +153,20 @@ def _topic_type_map(reader: rosbag2_py.SequentialReader) -> Dict[str, str]:
     """Build a `{topic: type}` map from a rosbag2 reader."""
     return {t.name: t.type for t in reader.get_all_topics_and_types()}
 
+def _save_image_to_disk(img_array: np.ndarray, temp_dir: Path, idx: int)->str: #Nuevo
+    #print("I will save image to disk", idx)
+    filepath = temp_dir / f"img_{idx:08d}.npy"
+    np.save(filepath, img_array)
+    #print(f"saved image {idx} to disk in {filepath}")
+    return str(filepath)
+
+def _load_image_from_disk(filepath: str) -> np.ndarray:  #Nuevo
+    return np.load(filepath)
 
 def _plan_streams(
     specs: Iterable[Any],
     tmap: Dict[str, str],
+    temp_root: Path,
 ) -> Tuple[Dict[str, _Stream], Dict[str, List[str]]]:
     """Plan `_Stream` buffers for contract specs and build a topic dispatch index.
 
@@ -176,6 +191,7 @@ def _plan_streams(
     """
     streams: Dict[str, _Stream] = {}
     by_topic: Dict[str, List[str]] = {}
+    print("CReating stream for ", specs)
     for sv in specs:
         if sv.topic not in tmap:
             # Derive a human-readable kind for logging without assuming SpecView internals.
@@ -201,16 +217,29 @@ def _plan_streams(
         else:
             unique_key = sv.key
             
-        streams[unique_key] = _Stream(spec=sv, ros_type=rt, ts=[], val=[])
+        is_image = "observation.image" in sv.key
+
+        streams[unique_key] = _Stream(spec=sv, ros_type=rt, ts=[], val=[], is_image=is_image, temp_dir=None)
         by_topic.setdefault(sv.topic, []).append(unique_key)
-    if not streams:
-        raise RuntimeError("No contract topics found in bag.")
+
+        
+        if not streams:
+            raise RuntimeError("No contract topics found in bag.")
+        
+        if is_image:
+            temp_dir = temp_root / unique_key.replace(".","_").replace("/","_")
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            streams[unique_key].temp_dir = temp_dir
+            print(f"Image stream {unique_key} will use a temp storage {temp_dir}")
+
     return streams, by_topic
 
 
 # ---------------------------------------------------------------------------
 
+from memory_profiler import profile
 
+@profile
 def export_bags_to_lerobot(
     bag_dirs: List[Path],
     contract_path: Path,
@@ -224,6 +253,7 @@ def export_bags_to_lerobot(
     video_mb: int = 500,
     timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' | 'foxglove' | 
 ) -> None:
+
     """Convert bag directories into a LeRobot v3 dataset under `out_root`.
 
     Parameters
@@ -402,6 +432,8 @@ def export_bags_to_lerobot(
     for epi_idx, bag_dir in enumerate(bag_dirs):
         print(f"[Episode {epi_idx}] {bag_dir}")
 
+        temp_episode_dir = Path(tempfile.mkdtemp(prefix=f"lerobot_images_ep{epi_idx}_")) #Nuevo
+        #print(f"Using temporary image storage {temp_episode_dir}")
         try:
             meta = _read_yaml(bag_dir / "metadata.yaml")
             info = meta.get("rosbag2_bagfile_information") or {}
@@ -430,8 +462,8 @@ def export_bags_to_lerobot(
         tmap = _topic_type_map(reader)
         
         # Plan once - handle multiple observation.state specs and action specs
-        streams, by_topic = _plan_streams(specs, tmap)
-        
+        streams, by_topic = _plan_streams(specs, tmap, temp_episode_dir)
+        image_counters = {k: 0 for k, st in streams.items() if st.is_image}
         # Create consolidated observation.state stream if we have multiple state specs
         if state_specs:
             # Find all observation.state streams
@@ -472,6 +504,7 @@ def export_bags_to_lerobot(
                     if sv.stamp_src == "header":
                         ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
                     elif sv.stamp_src == "foxglove":
+                        #print("current is image", st.is_image, "for", sv.topic)
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
 
@@ -479,7 +512,15 @@ def export_bags_to_lerobot(
 
                 if val is not None:
                     st.ts.append(ts_sel)
-                    st.val.append(val)
+
+                    if st.is_image:
+                        #print(image_counters)
+                        img_idx = image_counters[key]
+                        filepath = _save_image_to_disk(val, st.temp_dir, img_idx)
+                        st.val.append(filepath)
+                        image_counters[key] +=1
+                    else: 
+                        st.val.append(val)
                     decoded_msgs += 1
 
         if decoded_msgs == 0:
@@ -524,7 +565,7 @@ def export_bags_to_lerobot(
         print(dur_ns)
         print("numero de ticks", n_ticks)
 
-        
+        '''
         import csv
         import os
         csv_dir = out_root / f"timestamps_episode_{epi_idx}"
@@ -540,10 +581,19 @@ def export_bags_to_lerobot(
                     f.write("index,timestamp_ns,value\n")
                     for i, (ts, val) in enumerate(zip(st.ts, st.val)):
                         f.write(f"{i},{ts / 1e9}\n")
-        
+        '''
+
+        from pympler import asizeof
+
+
         # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
         for key, st in streams.items():
+            #print(f"current size of key {key} is {len(st.val)}")
+            #print(f"ts:  {asizeof.asizeof(st.ts)/1024/1024:.2f} MB")
+            #print(f"val: {asizeof.asizeof(st.val)/1024/1024:.2f} MB")
+            #print(type(st.val[0]))
+            #print(st.is_image)
             if not st.ts:
                 resampled[key] = [None] * n_ticks
                 continue
@@ -659,7 +709,11 @@ def export_bags_to_lerobot(
                     continue
 
                 if dtype in ("video", "image"):
-                    arr = np.asarray(val)
+
+                    if isinstance(val, str):
+                        arr = _load_image_from_disk(val)
+                    else:
+                        arr = np.asarray(val)
                     # Ensure deterministic storage; lerobot loaders will map back to float [0,1]
                     if arr.dtype != np.uint8:
                         arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
