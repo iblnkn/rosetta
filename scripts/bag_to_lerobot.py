@@ -104,7 +104,8 @@ from rosetta.common.contract_utils import (
 )
 
 # Import decoders to register them
-import rosetta.common.decoders  # noqa: F401
+import rosetta.common.decoders as decoders # noqa: F401
+from rosetta.common.decoders import cleanup_foxglove_decoders
 
 # ---------------------------------------------------------------------------
 
@@ -216,12 +217,12 @@ def export_bags_to_lerobot(
     out_root: Path,
     repo_id: str = "rosbag_v30",
     use_videos: bool = True,
-    image_writer_threads: int = 4,
+    image_writer_threads: int = 6,
     image_writer_processes: int = 0,
     chunk_size: int = 1000,
     data_mb: int = 100,
     video_mb: int = 500,
-    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' | 'foxglove' | <agregar nueva opción>
+    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' | 'foxglove' | 
 ) -> None:
     """Convert bag directories into a LeRobot v3 dataset under `out_root`.
 
@@ -272,11 +273,12 @@ def export_bags_to_lerobot(
     """
     # Contract + specs
     contract = load_contract(contract_path)
-    fps = int(contract.rate_hz)
+    fps = contract.rate_hz
     if fps <= 0:
         raise ValueError("Contract rate_hz must be > 0")
     step_ns = int(round(1e9 / fps))
     specs = list(iter_specs(contract))
+    fps = int(fps)
 
     # Features (also detect first image key as anchor)
     features: Dict[str, Dict[str, Any]] = {}
@@ -426,8 +428,7 @@ def export_bags_to_lerobot(
             continue
 
         tmap = _topic_type_map(reader)
-        print(f"tmap: {tmap}")
-
+        
         # Plan once - handle multiple observation.state specs and action specs
         streams, by_topic = _plan_streams(specs, tmap)
         
@@ -483,6 +484,9 @@ def export_bags_to_lerobot(
 
         if decoded_msgs == 0:
             raise RuntimeError(f"No usable messages in {bag_dir} (none decoded).")
+        
+        print("finished decoding msgs")
+        #cleanup_foxglove_decoders()
 
         # Choose anchor + duration
         valid_ts = [
@@ -510,15 +514,17 @@ def export_bags_to_lerobot(
             print("Using duration from metadata")
         else:
             dur_ns = observed_dur_ns
-            print(
-                "Metadata duration disagrees with observed duration. Using observed duration"
-            )
+            print("Metadata duration disagrees with observed duration. Using observed duration")
+            print("Observed duration is", observed_dur_ns)
 
         # Ticks
+        print("num steps",step_ns )
         n_ticks = int(dur_ns // step_ns) + 1
         ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
+        print(dur_ns)
+        print("numero de ticks", n_ticks)
 
-
+        
         import csv
         import os
         csv_dir = out_root / f"timestamps_episode_{epi_idx}"
@@ -534,6 +540,7 @@ def export_bags_to_lerobot(
                     f.write("index,timestamp_ns,value\n")
                     for i, (ts, val) in enumerate(zip(st.ts, st.val)):
                         f.write(f"{i},{ts / 1e9}\n")
+        
         # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
         for key, st in streams.items():
@@ -545,14 +552,10 @@ def export_bags_to_lerobot(
             resampled[key] = resample(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
-
-
-
-        # 📂 Carpeta donde se guardarán los CSV por episodio
         
-        
-
+        '''
         print(f"🕒 Generando CSVs de timestamps para cada tópico en {csv_dir}")
+        
 
         for key, vals in resampled.items():
             # Nombre del archivo CSV basado en el nombre del tópico
@@ -579,12 +582,9 @@ def export_bags_to_lerobot(
                     used = False
 
                     if val is not None and len(ts_list) > 0:
-                        # Encuentra el timestamp más reciente <= tick
-                        j = np.searchsorted(ts_list, tick, side="right") - 1
-                        if 0 <= j < len(ts_list):
-                            msg_ts = ts_list[j]
-                            delta_ns = tick - msg_ts
-                            used = True
+                        msg_ts = ts_list[i]
+                        delta_ns = tick - msg_ts
+                        used = True
 
                     writer.writerow([
                         i,
@@ -595,7 +595,7 @@ def export_bags_to_lerobot(
                     ])
 
             print(f"✅ Guardado CSV para tópico: {key} → {csv_path.name}")
-
+        '''
 
         # Write frames
         for i in range(n_ticks):
@@ -720,7 +720,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument(
         "--no-videos", action="store_true", help="Store images instead of videos"
     )
-    ap.add_argument("--image-threads", type=int, default=4, help="Image writer threads")
+    ap.add_argument("--image-threads", type=int, default=6, help="Image writer threads")
     ap.add_argument(
         "--image-processes", type=int, default=0, help="Image writer processes"
     )

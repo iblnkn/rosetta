@@ -27,7 +27,7 @@ from rclpy.qos import (
 class AlignSpec:
     """Timestamp alignment/selection behavior for an observation stream.
 
-    strategy:  "hold" | "asof" | "drop"
+    strategy:  "hold" | "asof" | "drop" | "closest"
     tol_ms:    as-of tolerance in ms for 'asof' (ignored for others)
     stamp:     "receive" | "header"
     """
@@ -402,7 +402,6 @@ def decode_value(ros_type: str, msg, spec) -> Any:
 
 # ---------- Resampling (offline) ----------
 
-
 def resample_hold(
     ts_ns: np.ndarray, vals: List[Any], ticks_ns: np.ndarray
 ) -> List[Any]:
@@ -435,6 +434,22 @@ def resample_asof(
         while j + 1 < len(ts_ns) and ts_ns[j + 1] <= t:
             j += 1
         ok = j < len(vals) and ts_ns[j] <= t and (t - ts_ns[j]) <= tol_ns
+        out.append(vals[j] if ok else None)
+    return out
+
+
+def resample_asof_or_closest(
+    ts_ns: np.ndarray, vals: List[Any], ticks_ns: np.ndarray, tol_ns: int
+) -> List[Optional[Any]]:
+    """As-of: last value only if not older than tol_ns at the tick; else None."""
+    if tol_ns <= 0:
+        return resample_hold(ts_ns, vals, ticks_ns)
+    out: List[Optional[Any]] = []
+    j = 0
+    for t in ticks_ns:
+        while j + 1 < len(ts_ns) and ts_ns[j + 1] <= t:
+            j += 1
+        ok = j < len(vals) and ts_ns[j] <= t and (t - ts_ns[j]) <= tol_ns
 
         tick_s = t / 1e9
         msg_ts = ts_ns[j] / 1e9 if j < len(ts_ns) else None
@@ -442,31 +457,22 @@ def resample_asof(
         delta_s = delta_ns / 1e9 if delta_ns is not None else None
 
         if ok:
-            #print(
-            #    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
-            #    f"matched msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
-            #    f"Δt={delta_ns}ns ({delta_s:.6f}s) ✅"
-            #)
             out.append(vals[j])
-        else: 
-            if j >= len(ts_ns):
-                print(
-                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
-                    f"no msg available (j={j}) ❌"
-                )
-            elif (t - ts_ns[j]) > tol_ns:
-                print(
-                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
-                    f"msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
-                    f"Δt={delta_ns}ns ({delta_s:.6f}s) > tol_ns={tol_ns} ❌"
-                )
+        else: #find closest
+            i = np.searchsorted(ts_ns, t, side='right')
+            #print("se busca el valor mas cercano de : ", t)
+            if i == 0:
+                closest_idx = 0
+            elif i == len(ts_ns):
+                closest_idx = len(ts_ns) - 1
             else:
-                print(
-                    f"[RESAMPLE-ASOF] tick={t}ns ({tick_s:.6f}s) "
-                    f"msg_ts={ts_ns[j]}ns ({msg_ts:.6f}s) "
-                    f"Invalid or missing data ❌"
-                )
-            return None
+                diff_prev = t - ts_ns[i - 1]
+                diff_next = ts_ns[i] - t
+                closest_idx = i - 1 if diff_prev <= diff_next else i
+                #print("el de un lado es ", ts_ns[i - 1], "   el del otro lado es", ts_ns[i], "  closest", ts_ns[closest_idx])
+                
+
+            out.append(vals[closest_idx])
     return out
 
 
@@ -483,6 +489,7 @@ def resample_drop(
     return out
 
 
+
 def resample(
     policy: str,
     ts_ns: np.ndarray,
@@ -492,11 +499,13 @@ def resample(
     tol_ms: int,
 ) -> List[Any]:
     print(f"[RESAMPLE] policy={policy}, step_ns={step_ns}, tol_ms={tol_ms}")
-    """Dispatch resampling policy: 'hold' | 'asof' | 'drop'."""
+    """Dispatch resampling policy: 'hold' | 'asof' | 'drop' | 'closest'."""
     if policy == "drop":
         return resample_drop(ts_ns, vals, ticks_ns, step_ns)
     if policy == "asof":
         return resample_asof(ts_ns, vals, ticks_ns, max(0, int(tol_ms)) * 1_000_000)
+    if policy == "closest":
+        return resample_asof_or_closest(ts_ns, vals, ticks_ns, max(0, int(tol_ms)) * 1_000_000)
     return resample_hold(ts_ns, vals, ticks_ns)
 
 
@@ -525,6 +534,8 @@ class StreamBuffer:
         if self.policy == "drop":
             return self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
         if self.policy == "asof":
+            return self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
+        if self.policy == "closest":
             return self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
         if self.policy == "hold":
             return self.last_val

@@ -184,63 +184,68 @@ def decode_ros_image(
     return hwc_float
 
 
-#from rosetta.common.foxglove_decoder import decode_foxglove_compressed_video
-#from foxglove_msgs.msg import CompressedVideo
 import av
 from sensor_msgs.msg import Image
-_decoder_state = {}
-codec_ctx = None
 
-def decode_foxglove_compressed_video(msg, topic, output_encoding='rgb8', warmup_frames=30):
+_decoder_state = {}
+
+def create_dummy_image(msg, output_encoding='rgb8'):
+    print(f"[FoxgloveDecoder] Skipping frame  (warming up)")
+    # Return a black dummy image of reasonable size (e.g., 480x640)
+    dummy = Image()
+    dummy.header.stamp = msg.timestamp
+    dummy.header.frame_id = msg.frame_id
+    dummy.height = 720
+    dummy.width = 1280
+    dummy.encoding = output_encoding
+    dummy.is_bigendian = 0
+    dummy.step = dummy.width * 3
+    dummy.data = (np.zeros((dummy.height, dummy.width, 3), dtype=np.uint8)).tobytes()
+    return dummy
+
+def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_frames=30):
     """
     Decode foxglove_msgs/CompressedVideo into a sensor_msgs/Image message using PyAV.
     """
-    global codec_ctx
     codec_name = getattr(msg, "format", "h264")
+    topic = spec.topic
+    
 
     if topic not in _decoder_state:
         try:
             codec_ctx = av.codec.CodecContext.create(codec_name, 'r')
-            _decoder_state[topic] = {'codec_ctx': codec_ctx, 'frames_decoded': 0}
-            print(f"[FoxgloveDecoder] Initialized decoder for topic {topic}")
+            _decoder_state[topic] = {
+                'codec_ctx': codec_ctx, 
+                'prev_image': None,
+            }
+            print(f"[FoxgloveDecoder] Initialized decoder for topic {spec.topic}")
         except Exception as e:
             print(f"[FoxgloveDecoder] Failed to initialize decoder for {codec_name}: {e}")
             return None
 
     state = _decoder_state[topic]
     codec_ctx = state['codec_ctx']
+    prev_image = state['prev_image']
+
     # Wrap raw bytes from msg.data as a PyAV packet
     try:
         packet = av.packet.Packet(bytes(msg.data))
     except Exception as e:
         print(f'Failed to create AV packet: {e}')
-        return
-    
-    def create_dummy_image():
-        print(f"[FoxgloveDecoder] Skipping frame  (warming up)")
-        # Return a black dummy image of reasonable size (e.g., 480x640)
-        dummy = Image()
-        dummy.header.stamp = msg.timestamp
-        dummy.header.frame_id = msg.frame_id
-        dummy.height = 720
-        dummy.width = 1280
-        dummy.encoding = output_encoding
-        dummy.is_bigendian = 0
-        dummy.step = dummy.width * 3
-        dummy.data = (np.zeros((dummy.height, dummy.width, 3), dtype=np.uint8)).tobytes()
-        return dummy
+        return prev_image
     
     try:
         frames = codec_ctx.decode(packet)
     except Exception as e:
-        dummy = create_dummy_image()
+        #dummy = create_dummy_image(msg) if prev_image is None else prev_image
+        dummy = create_dummy_image(msg)
         print(f'Decode error: {e}')
         return dummy
     
 
     if not frames:
         print("[FoxgloveDecoder] No frames decoded (maybe waiting for keyframe)")
-        dummy = create_dummy_image()
+        dummy = create_dummy_image(msg)
         return dummy
 
     # Usually only one frame per packet
@@ -265,8 +270,18 @@ def decode_foxglove_compressed_video(msg, topic, output_encoding='rgb8', warmup_
     ros_img.step = w * 3
     ros_img.data = img_rgb.tobytes()
 
+    prev_image = ros_img
     return ros_img
 
+def cleanup_foxglove_decoders():
+    global _decoder_state
+    print("[FoxgloveDecoder] Cleaning up all video decoder contexts...")
+    for topic, state in _decoder_state.items():
+        # Eliminar la referencia al CodecContext para que Python pueda liberarlo.
+        del state['codec_ctx'] 
+        del state['prev_image']
+    _decoder_state = {}
+    print("[FoxgloveDecoder] Cleanup complete. Memory released.")
 
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):
@@ -279,10 +294,8 @@ def _dec_foxglove_image(msg, spec):
     
     This ensures consistent processing pipeline between Foxglove and standard ROS images.
     """
-    # Decode H.264 to a minimal image-like message
-    # msg es un CompressedVideo que recibes del bag o suscripción
-    topic = spec.topic 
-    decoded_image = decode_foxglove_compressed_video(msg, topic, output_encoding='rgb8')
+
+    decoded_image = decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8')
     
     normalized_image = decode_ros_image(decoded_image)
 
@@ -380,6 +393,22 @@ def _dec_imu(msg, spec):
         ]
     )
 
+@register_decoder("sensor_msgs/msg/NavSatFix")
+def _dec_navsatfix(msg, spec):
+    """NavSatFix decoder: try dotted names first, then default (lat, lon, alt)."""
+    if spec.names:
+        return _decode_via_names(msg, spec.names)
+
+    return np.asarray(
+        [
+            msg.latitude,
+            msg.longitude,
+            msg.altitude,
+        ],
+        dtype=np.float32,
+    )
+
+
 
 @register_decoder("nav_msgs/msg/Odometry")
 def _dec_odometry(msg, spec):
@@ -442,6 +471,25 @@ def _dec_multidof_command(msg, spec):
         else np.array([], dtype=np.float32)
     )
     return np.concatenate([values, values_dot])
+
+# ----- Motors -----
+
+@register_decoder("can_msgs/msg/MotorsRPM")
+def _dec_motors_rpm(msg, spec):
+    """MotorsRPM decoder: try dotted names first, then default (FR, RR, RL, FL)."""
+    
+    if spec.names:
+        return _decode_via_names(msg, spec.names)
+
+    return np.asarray(
+        [
+            msg.rpms_fr,
+            msg.rpms_rr,
+            msg.rpms_rl,
+            msg.rpms_fl,
+        ],
+        dtype=np.float32,
+    )
 
 
 # ---------- Generic fallback decoder ----------
