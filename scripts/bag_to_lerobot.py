@@ -105,6 +105,7 @@ from rosetta.common.contract_utils import (
 
 from PIL import Image #Nuevo
 import tempfile #Nuevo
+import os #Nuevo
 
 # Import decoders to register them
 #import rosetta.common.decoders as decoders # noqa: F401
@@ -647,6 +648,8 @@ def export_bags_to_lerobot(
             print(f"✅ Guardado CSV para tópico: {key} → {csv_path.name}")
         '''
 
+        safe_window = 5
+
         # Write frames
         for i in range(n_ticks):
             frame: Dict[str, Any] = {}
@@ -690,6 +693,7 @@ def export_bags_to_lerobot(
                         # Use zero padding if no action values available
                         frame[action_key] = zero_pad_map[action_key]
             
+            last_image_paths = {}
             # Process all other features
             for name in write_keys:
                 # Skip observation.state as it's handled above
@@ -711,13 +715,37 @@ def export_bags_to_lerobot(
                 if dtype in ("video", "image"):
 
                     if isinstance(val, str):
+                        temp_path = val
                         arr = _load_image_from_disk(val)
                     else:
+                        temp_path = None
                         arr = np.asarray(val)
                     # Ensure deterministic storage; lerobot loaders will map back to float [0,1]
                     if arr.dtype != np.uint8:
                         arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
                     frame[name] = arr
+
+                    # Registrar la ruta temporal
+                    if temp_path:
+                        last_image_paths.setdefault(name, []).append(temp_path)
+
+                        # Intentar borrar imágenes antiguas
+                        try:
+                            img_idx = int(os.path.basename(temp_path).split("_")[-1].split(".")[0])
+
+                            for old_path in list(last_image_paths[name]):
+                                old_idx = int(os.path.basename(old_path).split("_")[-1].split(".")[0])
+
+                                if old_idx < img_idx - safe_window:
+                                    try:
+                                        os.remove(old_path)
+                                    except FileNotFoundError:
+                                        pass
+                                    last_image_paths[name].remove(old_path)
+
+                        except Exception as e:
+                            print("Warning extracting idx:", e)
+
 
                 elif dtype in ("float32", "float64"):
                     tgt_dt = np.float32 if dtype == "float32" else np.float64
@@ -728,7 +756,7 @@ def export_bags_to_lerobot(
                         fixed[: min(exp, arr.shape[0])] = arr[: min(exp, arr.shape[0])]
                         arr = fixed
                     frame[name] = arr
-
+                    
                 elif dtype == "string":
                     frame[name] = str(val)
 
@@ -738,9 +766,27 @@ def export_bags_to_lerobot(
 
             # Episode-level operator prompt from bag metadata (kept for policy compatibility).
             # This is`` distinct from any per-frame task.* fields coming from ROS topics.
+            
             if prompt:
                 frame["task"] = prompt
+            
             ds.add_frame(frame)
+
+            if dtype in ("video", "image"):
+                # val is of the form /tmp/lerobot_images_ep0_2wmeil80/observation_image_main/img_00000000.npy
+                val = frame[name]
+                img_idx = val.extractindex
+                
+                for x in range ( img_idx - safe_window - 5, img_idx - safe_window):
+                    try: 
+                        filepath = val.createpath
+                        os.remove(filepath)
+                    except FileNotFoundError: 
+                        pass
+                else: 
+                    break
+        
+        
 
         ds.save_episode()
         print(

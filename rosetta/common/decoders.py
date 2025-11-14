@@ -181,8 +181,8 @@ def decode_ros_image(
         hwc_rgb = _nearest_resize_rgb(hwc_rgb, rh, rw)
 
     # Normalize to [0,1] and keep HWC format for LeRobot compatibility
-    hwc_float = hwc_rgb.astype(np.float32) / 255.0  # uint8 [0,255] -> float32 [0,1]
-
+    #hwc_float = hwc_rgb.astype(np.float32) / 255.0  # uint8 [0,255] -> float32 [0,1]
+    hwc_float = hwc_rgb.astype(np.uint8)
     #print("returning hwc float")
     return hwc_float
 
