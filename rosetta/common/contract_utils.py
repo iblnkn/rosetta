@@ -384,7 +384,11 @@ def stamp_from_header_ns(msg) -> Optional[int]:
     """Extract a monotonic-ish nanosecond timestamp from a ROS Header."""
     try:
         st = msg.header.stamp
-        return int(st.sec) * 1_000_000_000 + int(st.nanosec)
+        ts_ns = int(st.sec) * 1_000_000_000 + int(st.nanosec)
+        if ts_ns == 0:
+            print(f"[WARN] Zero timestamp detected in header, treating as invalid (falling back to bag time)")
+            return None
+        return ts_ns
     except (AttributeError, TypeError, ValueError):
         return None
 
