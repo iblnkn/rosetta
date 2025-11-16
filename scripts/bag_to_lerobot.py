@@ -609,8 +609,8 @@ def export_bags_to_lerobot(
 
             # Episode-level operator prompt from bag metadata (kept for policy compatibility).
             # This is`` distinct from any per-frame task.* fields coming from ROS topics.
-            if prompt:
-                frame["task"] = prompt
+            # LeRobot requires 'task' field in every frame, so always set it (empty string if no prompt).
+            frame["task"] = prompt if prompt else ""
             ds.add_frame(frame)
 
         ds.save_episode()
