@@ -5,7 +5,7 @@ Episode Recorder (ROS 2): stream-to-bag writer with action control.
 
 Overview
 --------
-`EpisodeRecorderServer` writes incoming ROS 2 messages directly to a rosbag2 
+`EpisodeRecorderServer` writes incoming ROS 2 messages directly to a rosbag2
 as they arrive (no alignment or caching). The set of topics,
 their types, QoS, and runtime parameters come from a "contract" file.
 
@@ -61,6 +61,7 @@ Notes
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 import traceback
@@ -94,6 +95,8 @@ FEEDBACK_PERIOD_S: float = 0.5
 METADATA_RETRIES: int = 20
 METADATA_RETRY_PERIOD_S: float = 0.1
 DEFAULT_QOS_DEPTH: int = 10
+
+ROS_DISTRO = os.environ.get("ROS_DISTRO", "")
 
 
 # ------------------------------ Dataclasses ----------------------------
@@ -367,9 +370,20 @@ class EpisodeRecorderServer(Node):
 
     def _register_topic(self, topic: str, type_str: str) -> None:
         """Register a topic with the active writer (idempotent per writer)."""
-        meta = rosbag2_py.TopicMetadata(
-            name=topic, type=type_str, serialization_format="cdr"
-        )
+        if ROS_DISTRO < "jazzy":
+            meta = rosbag2_py.TopicMetadata(
+                name=topic,
+                type=type_str,
+                serialization_format="cdr",
+            )
+        else:
+            # jazzy adds `id` field. Not sure what it does but all the examples use id=0.
+            meta = rosbag2_py.TopicMetadata(
+                id=0,
+                name=topic,
+                type=type_str,
+                serialization_format="cdr",
+            )
         assert self._ws.writer is not None
         self._ws.writer.create_topic(meta)
 
