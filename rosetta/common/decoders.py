@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 
+import av
+from sensor_msgs.msg import Image
 # ---------- Helper functions ----------
 
 
@@ -187,19 +189,24 @@ def decode_ros_image(
     return hwc_float
 
 
-import av
-from sensor_msgs.msg import Image
+
 
 _decoder_state = {}
 
-def create_dummy_image(msg, output_encoding='rgb8'):
+def create_dummy_image(msg, spec, output_encoding='rgb8'):
     print(f"[FoxgloveDecoder] Skipping frame  (warming up)")
     # Return a black dummy image of reasonable size (e.g., 480x640)
     dummy = Image()
     dummy.header.stamp = msg.timestamp
     dummy.header.frame_id = msg.frame_id
-    dummy.height = 360
-    dummy.width = 640
+
+    if spec.image_resize:
+        h, w = spec.image_resize
+    else:
+        h, w = 720, 1280  
+
+    dummy.height = int(h)
+    dummy.width = int(w)
     dummy.encoding = output_encoding
     dummy.is_bigendian = 0
     dummy.step = dummy.width * 3
@@ -242,14 +249,14 @@ def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_f
         frames = codec_ctx.decode(packet)
     except Exception as e:
         #dummy = create_dummy_image(msg) if prev_image is None else prev_image
-        dummy = create_dummy_image(msg)
+        dummy = create_dummy_image(msg, spec)
         print(f'Decode error: {e}')
         return dummy
     
 
     if not frames:
         print("[FoxgloveDecoder] No frames decoded (maybe waiting for keyframe)")
-        dummy = create_dummy_image(msg)
+        dummy = create_dummy_image(msg, spec)
         return dummy
 
     # Usually only one frame per packet

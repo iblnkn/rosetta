@@ -570,8 +570,9 @@ def export_bags_to_lerobot(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
         
-
-        safe_window = 5
+        last_image_paths = {k: [] for k, st in streams.items() if st.is_image}
+        safe_window = 10
+        active_images = {}
 
         # Write frames
         for i in range(n_ticks):
@@ -648,26 +649,20 @@ def export_bags_to_lerobot(
                         arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
                     frame[name] = arr
 
-                    # Registrar la ruta temporal
+                    # Clean up
                     if temp_path:
-                        last_image_paths.setdefault(name, []).append(temp_path)
+                        active_images.setdefault(name, []).append(temp_path)
 
-                        # Intentar borrar imágenes antiguas
-                        try:
-                            img_idx = int(os.path.basename(temp_path).split("_")[-1].split(".")[0])
-
-                            for old_path in list(last_image_paths[name]):
-                                old_idx = int(os.path.basename(old_path).split("_")[-1].split(".")[0])
-
-                                if old_idx < img_idx - safe_window:
-                                    try:
-                                        os.remove(old_path)
-                                    except FileNotFoundError:
-                                        pass
-                                    last_image_paths[name].remove(old_path)
-
-                        except Exception as e:
-                            print("Warning extracting idx:", e)
+                        idx = int(os.path.basename(temp_path).split("_")[-1].split(".")[0])
+                        # delete image from 0 to N - safe_window
+                        for old_path in list(active_images[name]):
+                            old_idx = int(os.path.basename(old_path).split("_")[-1].split(".")[0])
+                            if old_idx < idx - safe_window:
+                                try:
+                                    os.remove(old_path)
+                                except FileNotFoundError:
+                                    pass
+                                active_images[name].remove(old_path)
 
 
                 elif dtype in ("float32", "float64"):
@@ -696,21 +691,6 @@ def export_bags_to_lerobot(
             frame["task"] = prompt if prompt else ""
             
             ds.add_frame(frame)
-
-            if dtype in ("video", "image"):
-                # val is of the form /tmp/lerobot_images_ep0_2wmeil80/observation_image_main/img_00000000.npy
-                val = frame[name]
-                img_idx = val.extractindex
-                
-                for x in range ( img_idx - safe_window - 5, img_idx - safe_window):
-                    try: 
-                        filepath = val.createpath
-                        os.remove(filepath)
-                    except FileNotFoundError: 
-                        pass
-                else: 
-                    break
-        
         
 
         ds.save_episode()
