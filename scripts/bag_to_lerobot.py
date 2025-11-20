@@ -192,7 +192,6 @@ def _plan_streams(
     """
     streams: Dict[str, _Stream] = {}
     by_topic: Dict[str, List[str]] = {}
-    print("CReating stream for ", specs)
     for sv in specs:
         if sv.topic not in tmap:
             # Derive a human-readable kind for logging without assuming SpecView internals.
@@ -484,16 +483,20 @@ def export_bags_to_lerobot(
                 msg = deserialize_message(data, get_message(st.ros_type))
                 sv = st.spec
                 
+                
                 # Timestamp selection policy
-                #print("timestamp_source is", timestamp_source)
                 if timestamp_source == "receive":
                     ts_sel = int(bag_ns)
                 elif timestamp_source == "header":
-                    ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
-
+                    if sv.stamp_src == "foxglove": #for compressed videos
+                        time = msg.timestamp
+                        ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
+                    else: 
+                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                        # int(bag_ns) is used for /motion_control/speed_controller/output_cmd because it does not have header
                 else:  # 'contract' (per-spec stamp_src)
                     if sv.stamp_src == "header":
-                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                        ts_sel = stamp_from_header_ns(msg) 
                     elif sv.stamp_src == "foxglove": #for compressed videos
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
@@ -511,11 +514,12 @@ def export_bags_to_lerobot(
                     else: 
                         st.val.append(val)
                     decoded_msgs += 1
-
+                else: 
+                    print("not valid", st.ros_type)
         if decoded_msgs == 0:
             raise RuntimeError(f"No usable messages in {bag_dir} (none decoded).")
         
-        print("finished decoding msgs")
+        print("Finished decoding msgs")
         #cleanup_foxglove_decoders()
 
         # Choose anchor + duration
@@ -548,39 +552,15 @@ def export_bags_to_lerobot(
             print("Observed duration is", observed_dur_ns)
 
         # Ticks
-        print("num steps",step_ns )
         n_ticks = int(dur_ns // step_ns) + 1
         ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
-        print(dur_ns)
-        print("numero de ticks", n_ticks)
-
-        '''
-        import csv
-        import os
-        csv_dir = out_root / f"timestamps_episode_{epi_idx}"
-        os.makedirs(csv_dir, exist_ok=True)
-        for key, st in streams.items():
-            # Crear nombre seguro para cada tópico
-            safe_key = key.replace("/", "_").replace(".", "_")
-            csv_path = csv_dir / f"{safe_key}_raw.csv"
-
-            # Guardar los datos originales antes del resample
-            if st.ts and st.val:
-                with open(csv_path, "w") as f:
-                    f.write("index,timestamp_ns,value\n")
-                    for i, (ts, val) in enumerate(zip(st.ts, st.val)):
-                        f.write(f"{i},{ts / 1e9}\n")
-        '''
+        #print(dur_ns)
+        #print("numero de ticks", n_ticks)
 
 
         # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
         for key, st in streams.items():
-            #print(f"current size of key {key} is {len(st.val)}")
-            #print(f"ts:  {asizeof.asizeof(st.ts)/1024/1024:.2f} MB")
-            #print(f"val: {asizeof.asizeof(st.val)/1024/1024:.2f} MB")
-            #print(type(st.val[0]))
-            #print(st.is_image)
             if not st.ts:
                 resampled[key] = [None] * n_ticks
                 continue
@@ -590,49 +570,6 @@ def export_bags_to_lerobot(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
         
-        '''
-        print(f"🕒 Generando CSVs de timestamps para cada tópico en {csv_dir}")
-        
-
-        for key, vals in resampled.items():
-            # Nombre del archivo CSV basado en el nombre del tópico
-            safe_key = key.replace("/", "_").replace(".", "_")
-            csv_path = csv_dir / f"{safe_key}.csv"
-
-            # Obtener timestamps originales del tópico
-            ts_list = np.asarray(streams[key].ts, dtype=np.int64)
-
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "tick_index",
-                    "tick_s",
-                    "msg_ts_s",
-                    "delta_s",
-                    "used_value"
-                ])
-
-                for i, tick in enumerate(ticks_ns):
-                    val = vals[i]
-                    msg_ts = None
-                    delta_ns = None
-                    used = False
-
-                    if val is not None and len(ts_list) > 0:
-                        msg_ts = ts_list[i]
-                        delta_ns = tick - msg_ts
-                        used = True
-
-                    writer.writerow([
-                        i,
-                        tick / 1e9,
-                        (msg_ts / 1e9) if msg_ts is not None else "",
-                        (delta_ns / 1e9) if delta_ns is not None else "",
-                        used,
-                    ])
-
-            print(f"✅ Guardado CSV para tópico: {key} → {csv_path.name}")
-        '''
 
         safe_window = 5
 

@@ -1,6 +1,7 @@
 name: rover_diff_drive
 version: 1
 
+
 robot_type: rover
 rate_hz: 10  
 max_duration_s: 120.0
@@ -16,17 +17,17 @@ observations:
     topic: /camera/color/foxglove
     type: foxglove_msgs/msg/CompressedVideo
     image: 
-      resize: [720,1280]
+      resize: [360,640]
     align: {strategy: closest, stamp: foxglove, tol_ms: 0}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
-  - key: observation.image.left
-    topic: /video_mapping/left/foxglove
-    type: foxglove_msgs/msg/CompressedVideo
-    image: 
-      resize: [720,1280]
-    align: {strategy: closest, stamp: foxglove, tol_ms: 0}
-    qos: {reliability: best_effort, history: keep_last, depth: 10}
+#  - key: observation.image.left
+#    topic: /video_mapping/left/foxglove
+#    type: foxglove_msgs/msg/CompressedVideo
+#    image: 
+#      resize: [720,1280]
+#    align: {strategy: closest, stamp: foxglove, tol_ms: 0}
+#    qos: {reliability: best_effort, history: keep_last, depth: 10}
 
   - key: observation.state.imu
     topic: /imu/data_abs_heading
