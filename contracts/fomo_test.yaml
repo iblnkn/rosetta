@@ -43,7 +43,7 @@ observations:
 
   - key: observation.state.odometry
     topic: /odometry/local
-    type: nav_msgs/msg/Odometry
+    type: nav_msgs/msg/Odometry 
     selector:
       names: [
         pose.pose.position.x, pose.pose.position.y, pose.pose.position.z,
@@ -58,15 +58,15 @@ observations:
 actions:
   - key: action
     publish:
-      topic: /motion_control/speed_controller/output_cmd
-      type: geometry_msgs/msg/Twist
+      topic: /motion_control/speed_controller/output_cmd  
+      type: geometry_msgs/msg/TwistStamped
       layout: flat
       qos: {reliability: best_effort, history: keep_last, depth: 10}
       strategy:
         mode: nearest
         tolerance_ms: 500
     selector:
-      names: [linear.x, linear.y, linear.z]  # forward & rotation speeds
+      names: [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
     from_tensor:
       clamp: [-2.0, 2.0]
     safety_behavior: zeros

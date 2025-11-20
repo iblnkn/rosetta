@@ -492,7 +492,10 @@ def export_bags_to_lerobot(
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
                     else: 
-                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
+                        ts_sel = stamp_from_header_ns(msg) 
+                    
+                    if ts_sel is None:
+                        print(topic)
                         # int(bag_ns) is used for /motion_control/speed_controller/output_cmd because it does not have header
                 else:  # 'contract' (per-spec stamp_src)
                     if sv.stamp_src == "header":
@@ -500,6 +503,7 @@ def export_bags_to_lerobot(
                     elif sv.stamp_src == "foxglove": #for compressed videos
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
+                
 
                 val = decode_value(st.ros_type, msg, sv)
 
