@@ -4,11 +4,11 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 # Cargar dataset local
 dataset = LeRobotDataset(
-    repo_id="yaisa5ramriez/monday_test",
-    root="/workspace/data/monday_trimmed_dir/outrosetta3",
+    repo_id="yaisa5ramriez/monday_new",
+    root="/workspace/data/test_cams/closest_tes6",
 )
 
 dataset.push_to_hub(
-    repo_id="yaisa5ramriez/monday_test",
+    repo_id="yaisa5ramriez/monday_new",
     private=False
 )

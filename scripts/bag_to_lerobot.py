@@ -238,9 +238,6 @@ def _plan_streams(
 
 # ---------------------------------------------------------------------------
 
-from memory_profiler import profile
-
-@profile
 def export_bags_to_lerobot(
     bag_dirs: List[Path],
     contract_path: Path,
@@ -304,12 +301,11 @@ def export_bags_to_lerobot(
     """
     # Contract + specs
     contract = load_contract(contract_path)
-    fps = contract.rate_hz
+    fps = int(contract.rate_hz)
     if fps <= 0:
         raise ValueError("Contract rate_hz must be > 0")
     step_ns = int(round(1e9 / fps))
     specs = list(iter_specs(contract))
-    fps = int(fps)
 
     # Features (also detect first image key as anchor)
     features: Dict[str, Dict[str, Any]] = {}
@@ -494,18 +490,11 @@ def export_bags_to_lerobot(
                     ts_sel = int(bag_ns)
                 elif timestamp_source == "header":
                     ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
-                elif timestamp_source == "foxglove":
-                    if sv.ros_type == "foxglove_msgs/msg/CompressedVideo":
-                        time = msg.timestamp
-                        ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
-                    else:
-                        ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
-                    
+
                 else:  # 'contract' (per-spec stamp_src)
                     if sv.stamp_src == "header":
                         ts_sel = stamp_from_header_ns(msg) or int(bag_ns)
-                    elif sv.stamp_src == "foxglove":
-                        #print("current is image", st.is_image, "for", sv.topic)
+                    elif sv.stamp_src == "foxglove": #for compressed videos
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
 
@@ -515,7 +504,6 @@ def export_bags_to_lerobot(
                     st.ts.append(ts_sel)
 
                     if st.is_image:
-                        #print(image_counters)
                         img_idx = image_counters[key]
                         filepath = _save_image_to_disk(val, st.temp_dir, img_idx)
                         st.val.append(filepath)
@@ -583,8 +571,6 @@ def export_bags_to_lerobot(
                     for i, (ts, val) in enumerate(zip(st.ts, st.val)):
                         f.write(f"{i},{ts / 1e9}\n")
         '''
-
-        from pympler import asizeof
 
 
         # Resample onto ticks
@@ -767,8 +753,10 @@ def export_bags_to_lerobot(
             # Episode-level operator prompt from bag metadata (kept for policy compatibility).
             # This is`` distinct from any per-frame task.* fields coming from ROS topics.
             
-            if prompt:
-                frame["task"] = prompt
+            #if prompt:
+            #    frame["task"] = prompt
+            # LeRobot requires 'task' field in every frame, so always set it (empty string if no prompt).
+            frame["task"] = prompt if prompt else ""
             
             ds.add_frame(frame)
 

@@ -438,43 +438,6 @@ def resample_asof(
     return out
 
 
-def resample_asof_or_closest(
-    ts_ns: np.ndarray, vals: List[Any], ticks_ns: np.ndarray, tol_ns: int
-) -> List[Optional[Any]]:
-    """As-of: last value only if not older than tol_ns at the tick; else None."""
-    if tol_ns <= 0:
-        return resample_hold(ts_ns, vals, ticks_ns)
-    out: List[Optional[Any]] = []
-    j = 0
-    for t in ticks_ns:
-        while j + 1 < len(ts_ns) and ts_ns[j + 1] <= t:
-            j += 1
-        ok = j < len(vals) and ts_ns[j] <= t and (t - ts_ns[j]) <= tol_ns
-
-        tick_s = t / 1e9
-        msg_ts = ts_ns[j] / 1e9 if j < len(ts_ns) else None
-        delta_ns = (t - ts_ns[j]) if j < len(ts_ns) else None
-        delta_s = delta_ns / 1e9 if delta_ns is not None else None
-
-        if ok:
-            out.append(vals[j])
-        else: #find closest
-            i = np.searchsorted(ts_ns, t, side='right')
-            #print("se busca el valor mas cercano de : ", t)
-            if i == 0:
-                closest_idx = 0
-            elif i == len(ts_ns):
-                closest_idx = len(ts_ns) - 1
-            else:
-                diff_prev = t - ts_ns[i - 1]
-                diff_next = ts_ns[i] - t
-                closest_idx = i - 1 if diff_prev <= diff_next else i
-                #print("el de un lado es ", ts_ns[i - 1], "   el del otro lado es", ts_ns[i], "  closest", ts_ns[closest_idx])
-                
-
-            out.append(vals[closest_idx])
-    return out
-
 
 def resample_drop(
     ts_ns: np.ndarray, vals: List[Any], ticks_ns: np.ndarray, step_ns: int
@@ -488,7 +451,33 @@ def resample_drop(
         out.append(vals[j] if (j >= 0 and ts_ns[j] > t - step_ns) else None)
     return out
 
+def resample_closest(ts_ns: np.ndarray, vals: List[Any], ticks_ns: np.ndarray) -> List[Any]:
+    """
+    For each tick in `ticks_ns`, return the value in `vals` whose timestamp in `ts_ns`
+    is closest to the tick. Always returns a value (never None).
+    """
+    out: List[Any] = []
+    n = len(ts_ns)
 
+    for t in ticks_ns:
+        # i is the first index where ts_ns[i] > t
+        i = np.searchsorted(ts_ns, t, side='right')
+
+        if i == 0:
+            # All timestamps are to the right → closest is the first
+            closest_idx = 0
+        elif i == n:
+            # All timestamps are to the left → closest is the last
+            closest_idx = n - 1
+        else:
+            # There is a timestamp on both sides → pick the closest one
+            prev_diff = t - ts_ns[i - 1]
+            next_diff = ts_ns[i] - t
+            closest_idx = i - 1 if prev_diff <= next_diff else i
+
+        out.append(vals[closest_idx])
+
+    return out
 
 def resample(
     policy: str,
@@ -505,7 +494,7 @@ def resample(
     if policy == "asof":
         return resample_asof(ts_ns, vals, ticks_ns, max(0, int(tol_ms)) * 1_000_000)
     if policy == "closest":
-        return resample_asof_or_closest(ts_ns, vals, ticks_ns, max(0, int(tol_ms)) * 1_000_000)
+        return resample_closest(ts_ns, vals, ticks_ns)
     return resample_hold(ts_ns, vals, ticks_ns)
 
 
