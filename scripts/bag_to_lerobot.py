@@ -494,11 +494,11 @@ def export_bags_to_lerobot(
                         print("No timestamp found for topic", topic)
                         
                 else:  # 'contract' (per-spec stamp_src)
-                    if sv.stamp_src == "header":
-                        ts_sel = stamp_from_header_ns(msg) 
-                    elif sv.stamp_src == "foxglove": #for compressed videos
+                    if sv.stamp_src == "foxglove": #for compressed videos
                         time = msg.timestamp
                         ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
+                    else:
+                        ts_sel = stamp_from_header_ns(msg) 
                 
 
                 val = decode_value(st.ros_type, msg, sv)

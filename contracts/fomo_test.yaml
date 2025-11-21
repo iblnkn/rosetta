@@ -3,7 +3,7 @@ version: 1
 
 
 robot_type: rover
-rate_hz: 10.0 s
+rate_hz: 10.0 
 max_duration_s: 120.0
 
 metadata:
