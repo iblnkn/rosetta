@@ -155,10 +155,8 @@ def _topic_type_map(reader: rosbag2_py.SequentialReader) -> Dict[str, str]:
     return {t.name: t.type for t in reader.get_all_topics_and_types()}
 
 def _save_image_to_disk(img_array: np.ndarray, temp_dir: Path, idx: int)->str: #Nuevo
-    #print("I will save image to disk", idx)
     filepath = temp_dir / f"img_{idx:08d}.npy"
     np.save(filepath, img_array)
-    #print(f"saved image {idx} to disk in {filepath}")
     return str(filepath)
 
 def _load_image_from_disk(filepath: str) -> np.ndarray:  #Nuevo
@@ -429,7 +427,6 @@ def export_bags_to_lerobot(
         print(f"[Episode {epi_idx}] {bag_dir}")
 
         temp_episode_dir = Path(tempfile.mkdtemp(prefix=f"lerobot_images_ep{epi_idx}_")) #Nuevo
-        #print(f"Using temporary image storage {temp_episode_dir}")
         try:
             meta = _read_yaml(bag_dir / "metadata.yaml")
             info = meta.get("rosbag2_bagfile_information") or {}
@@ -468,8 +465,7 @@ def export_bags_to_lerobot(
                 # Create a consolidated stream that will concatenate the data
                 # We'll handle this in the frame processing
                 pass
-        print(f"streams: {streams}")
-
+        
         # Counters for light diagnostics
         decoded_msgs = 0
 
@@ -495,8 +491,8 @@ def export_bags_to_lerobot(
                         ts_sel = stamp_from_header_ns(msg) 
                     
                     if ts_sel is None:
-                        print(topic)
-                        # int(bag_ns) is used for /motion_control/speed_controller/output_cmd because it does not have header
+                        print("No timestamp found for topic", topic)
+                        
                 else:  # 'contract' (per-spec stamp_src)
                     if sv.stamp_src == "header":
                         ts_sel = stamp_from_header_ns(msg) 
@@ -524,8 +520,7 @@ def export_bags_to_lerobot(
             raise RuntimeError(f"No usable messages in {bag_dir} (none decoded).")
         
         print("Finished decoding msgs")
-        #cleanup_foxglove_decoders()
-
+        
         # Choose anchor + duration
         valid_ts = [
             np.asarray(st.ts, dtype=np.int64) for st in streams.values() if st.ts
@@ -558,9 +553,7 @@ def export_bags_to_lerobot(
         # Ticks
         n_ticks = int(dur_ns // step_ns) + 1
         ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
-        #print(dur_ns)
-        #print("numero de ticks", n_ticks)
-
+        
 
         # Resample onto ticks
         resampled: Dict[str, List[Any]] = {}
@@ -621,7 +614,6 @@ def export_bags_to_lerobot(
                         # Use zero padding if no action values available
                         frame[action_key] = zero_pad_map[action_key]
             
-            last_image_paths = {}
             # Process all other features
             for name in write_keys:
                 # Skip observation.state as it's handled above
