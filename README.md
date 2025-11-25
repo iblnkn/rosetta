@@ -7,23 +7,18 @@
 
 ## Install & Build
 
-### Prerequisites
-
-- **ROS 2 Humble** (desktop install recommended)
-- **System Python 3.10** (match the system interpreter used to build ROS binaries)
-- **rosdep** for runtime ROS deps
-
-> ROS binaries are compiled against the system Python. If you use a virtualenv, base it on the **system interpreter**, and don’t use conda for ROS 2 binaries. See ROS docs: “Using Python Packages with ROS 2”.
-
 #### Create workspace + venv (system Python)
 
 ```bash
+# Create a venv exclusive for this tool. The .gitignore for the venv is inside rosetta 
 
-# venv from the system interpreter (ROS 2 binary-compatible)
+cd /workspace/rover/ros2/src/fomo/src/rosetta
+
 python3.10 -m venv ./venv
 touch ./venv/COLCON_IGNORE
 source ./venv/bin/activate
 
+#The venv es requiered because lerobot installs a version of torch and torchvision different from the one we use
 pip install -r requirements.txt
 
 # Source ROS and build
@@ -35,6 +30,8 @@ Verify after install (optional): `which lerobot-train` to confirm CLI is on `PAT
 
 
 ### How to run
+
+To test the tool you need a rosbag with its corresponding metadata.yaml file. Make sure they are both stored in the same folder. 
 
 Single episode: 
 
@@ -49,33 +46,14 @@ Each bag folder must have an mcap file with its metadata file. In case you trimm
 
 ## Contracts
 
-A **contract** is a small YAML that declares which topics, message types, fields, rates, and timing rules a policy consumes and what it publishes. rosetta uses the same contract to:
+A **contract** is a small YAML that declares which topics, message types, fields, rates, and timing rules a policy consumes and what it publishes. The current state of the contract should allow you to record datasets.
 
 Important considerations: 
 - All cameras of type foxglove_msgs/msg/CompressedVideo must have stamp: foxglove 
-- Make sure to define the correct image size in the contract
+- Make sure to define the correct image size in the contract. For instance, resize: [720,1280]
 - Rate_hz is interpreted as an int
 
 ---
-
-### Notable options when running 
-
-* `--timestamp {contract,bag,header}` — choose the time base before resampling.
-* `--no-videos` — write PNG images instead of MP4.
-* `--image-threads / --image-processes` — tune I/O parallelism.
-* `--chunk-size --data-mb --video-mb` — size the parquet/video chunks.
-
-Depth images are converted to normalized float in H×W×3 (for LeRobot compatibility) while preserving REP-117 special values (`NaN`, `±Inf`).
-
----
-
-## Contract file
-
-See `share/rosetta/contracts/fomo_test.yaml`. Highlights:
-
-* **observations** — list of streams (RGB, depth, state). Each specifies topic, type, optional `selector.names` for extracting scalars, `image.resize`, and an `align` policy (`hold`/`asof`/`drop`) with `stamp: header|receive|foxglove`.
-* **actions** — what to publish, e.g., `geometry_msgs/Twist` to `/cmd_vel`, with `selector.names` (e.g., `[linear.x, angular.z]`), `from_tensor.clamp`, QoS, and a publish strategy.
-* **rate_hz / max_duration_s** — contract rate and episode timeout used across nodes.
 
 ## Tasks
 

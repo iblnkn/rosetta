@@ -17,7 +17,7 @@ observations:
     topic: /camera/color/foxglove
     type: foxglove_msgs/msg/CompressedVideo
     image: 
-      resize: [720,1280]
+      resize: [360,640]
     align: {strategy: closest, stamp: foxglove, tol_ms: 0}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -25,7 +25,7 @@ observations:
     topic: /video_mapping/left/foxglove
     type: foxglove_msgs/msg/CompressedVideo
     image: 
-      resize: [720,1280]
+      resize: [360,640]
     align: {strategy: closest, stamp: foxglove, tol_ms: 0}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -33,7 +33,7 @@ observations:
     topic: /video_mapping/right/foxglove
     type: foxglove_msgs/msg/CompressedVideo
     image: 
-      resize: [720,1280]
+      resize: [360,640]
     align: {strategy: closest, stamp: foxglove, tol_ms: 0}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -41,7 +41,7 @@ observations:
     topic: /video_mapping/rear/foxglove
     type: foxglove_msgs/msg/CompressedVideo
     image: 
-      resize: [720,1280]
+      resize: [360,640]
     align: {strategy: closest, stamp: foxglove, tol_ms: 0}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
