@@ -29,7 +29,7 @@ observations:
 #    align: {strategy: closest, stamp: foxglove, tol_ms: 0}
 #    qos: {reliability: best_effort, history: keep_last, depth: 10}
 
-  - key: observation.state.imu
+  - key: observation.state
     topic: /imu/data_abs_heading
     type: sensor_msgs/msg/Imu
     selector:
@@ -41,15 +41,14 @@ observations:
     align: {strategy: hold, stamp: header, tol_ms: 100}
     qos: {reliability: best_effort, history: keep_last, depth: 50}
 
-  - key: observation.state.odometry
+  - key: observation.state
     topic: /odometry/local
     type: nav_msgs/msg/Odometry 
     selector:
       names: [
         pose.pose.position.x, pose.pose.position.y, pose.pose.position.z,
         pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w,
-        twist.twist.linear.x, twist.twist.linear.y, twist.twist.linear.z,
-        twist.twist.angular.x, twist.twist.angular.y, twist.twist.angular.z
+        twist.twist.linear.x, twist.twist.angular.z
       ]
     align: {strategy: hold, stamp: header, tol_ms: 150}
     qos: {reliability: best_effort, history: keep_last, depth: 50}
@@ -66,7 +65,8 @@ actions:
         mode: nearest
         tolerance_ms: 500
     selector:
-      names: [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
+      names: [twist.linear.x, twist.angular.z]
+      #names: [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z] 
     from_tensor:
       clamp: [-2.0, 2.0]
     safety_behavior: zeros

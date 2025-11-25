@@ -211,7 +211,8 @@ def _plan_streams(
         elif sv.is_action:
             # For action specs, we need to check if there are multiple specs with the same key
             # This will be handled later in the consolidation logic
-            unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+            #unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
+            unique_key = sv.key
         else:
             unique_key = sv.key
             
@@ -502,6 +503,7 @@ def export_bags_to_lerobot(
                 
 
                 val = decode_value(st.ros_type, msg, sv)
+               
 
                 if val is not None:
                     st.ts.append(ts_sel)
@@ -566,15 +568,16 @@ def export_bags_to_lerobot(
             resampled[key] = resample(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
-        
-        last_image_paths = {k: [] for k, st in streams.items() if st.is_image}
+            
         safe_window = 10
         active_images = {}
 
+        print("Resampling done")
         # Write frames
         for i in range(n_ticks):
             frame: Dict[str, Any] = {}
             
+
             # Handle consolidated observation.state by concatenating multiple state streams first
             if "observation.state" in features and state_specs:
                 # Concatenate all observation.state values from different topics
@@ -621,7 +624,7 @@ def export_bags_to_lerobot(
                     continue
                 
                 # Skip consolidated actions as they're handled above
-                if name in action_specs_by_key and len(action_specs_by_key[name]) > 1: #TODO: I think this can just be if name == "action"
+                if name in action_specs_by_key and len(action_specs_by_key[name]) > 1: 
                     continue
                     
                 ft = features[name]

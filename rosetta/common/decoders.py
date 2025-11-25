@@ -457,23 +457,13 @@ def _dec_twist(msg, spec):
 @register_decoder("geometry_msgs/msg/TwistStamped")
 def _dec_twist_stamped(msg, spec):
     """
-    TwistStamped decoder: Extrae los 6 valores de velocidad (linear y angular) 
-    del campo 'twist'. El 'header' se maneja por separado para el resampling.
+    TwistStamped decoder.
     """
-    # 1. Manejar la decodificación personalizada si se especifican dotted names
     if spec.names:
-        # Aquí, 'msg' es el mensaje TwistStamped completo
-        # La función _decode_via_names debe ser capaz de manejar paths como 
-        # 'twist.linear.x'
         return _decode_via_names(msg, spec.names)
 
-    # 2. Decodificación por defecto: Concatenar los 6 valores (linear + angular)
-    #    accediendo al campo 'twist' del mensaje.
-    
-    # Referencia al mensaje Twist incrustado
     twist_msg = msg.twist
 
-    # Concatenar velocidades lineales (x, y, z) y angulares (x, y, z)
     return np.concatenate(
         [
             np.asarray([twist_msg.linear.x, twist_msg.linear.y, twist_msg.linear.z], dtype=np.float32),
