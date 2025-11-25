@@ -50,7 +50,7 @@ observations:
         pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w,
         twist.twist.linear.x, twist.twist.angular.z
       ]
-    align: {strategy: hold, stamp: header, tol_ms: 150}
+    align: {strategy: closest, stamp: header, tol_ms: 150}
     qos: {reliability: best_effort, history: keep_last, depth: 50}
 
 
@@ -62,8 +62,8 @@ actions:
       layout: flat
       qos: {reliability: best_effort, history: keep_last, depth: 10}
       strategy:
-        mode: nearest
-        tolerance_ms: 500
+        mode: nearest  # 'fifo' | 'nearest' - nearest selects action closest to current time
+        tolerance_ms: 500  
     selector:
       names: [twist.linear.x, twist.angular.z]
       #names: [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z] 
