@@ -103,14 +103,16 @@ from rosetta.common.contract_utils import (
     zero_pad as make_zero_pad,  # alias to avoid name clash with dict var
 )
 
-from PIL import Image #Nuevo
-import tempfile #Nuevo
-import os #Nuevo
+from PIL import Image 
+import tempfile 
+import os 
 
-# Import decoders to register them
-#import rosetta.common.decoders as decoders # noqa: F401
-#from rosetta.common.decoders import cleanup_foxglove_decoders
+from pathlib import Path
+
 import rosetta.common.decoders
+
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -576,13 +578,13 @@ def export_bags_to_lerobot(
             resampled[key] = resample(
                 pol, ts, st.val, ticks_ns, step_ns, st.spec.asof_tol_ms
             )
-            print('key to resample', key)
             
         safe_window = 10
         active_images = {}
 
         print("Resampling done")
         # Write frames
+
         for i in range(n_ticks):
             frame: Dict[str, Any] = {}
             
@@ -645,7 +647,7 @@ def export_bags_to_lerobot(
                     frame[name] = zero_pad_map[name]
                     continue
 
-                if dtype in ("video", "image"):
+                if dtype in ("video", "image"):  #No guardar imagenes en lerobot
 
                     if isinstance(val, str):
                         temp_path = val
@@ -672,7 +674,7 @@ def export_bags_to_lerobot(
                                 except FileNotFoundError:
                                     pass
                                 active_images[name].remove(old_path)
-
+                    
 
                 elif dtype in ("float32", "float64"):
                     tgt_dt = np.float32 if dtype == "float32" else np.float64
@@ -698,9 +700,9 @@ def export_bags_to_lerobot(
             #    frame["task"] = prompt
             # LeRobot requires 'task' field in every frame, so always set it (empty string if no prompt).
             frame["task"] = prompt if prompt else ""
+
             
             ds.add_frame(frame)
-        
 
         ds.save_episode()
         print(
