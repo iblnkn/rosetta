@@ -17,17 +17,16 @@ Supported message types:
 
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
-
 from rosetta.common.contract_utils import register_decoder
 import os
 import cv2  
 import tempfile
 from pathlib import Path
-
 import pandas as pd
-
 import av
 from sensor_msgs.msg import Image
+
+
 # ---------- Helper functions ----------
 
 
@@ -203,7 +202,7 @@ def create_dummy_image(msg, spec, output_encoding='rgb8'):
     if spec.image_resize:
         h, w = spec.image_resize
     else:
-        h, w = 720, 1280  
+        h, w = 360, 640  
 
     dummy.height = int(h)
     dummy.width = int(w)
@@ -285,16 +284,61 @@ def decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8', warmup_f
     prev_image = ros_img
     return ros_img
 
+
+def decode_sensor_compressed_image_png(msg, spec):
+    """
+    Decodes sensor_msgs/msg/CompressedImage stored as PNG frames, as a sensor_msgs/msg/Image.
+    """ 
+    compressed_data = np.frombuffer(msg.data, np.uint8)  #Data into numpy array
+
+    try:
+        cv_img = cv2.imdecode(compressed_data, cv2.IMREAD_COLOR) #Decode png. IMREAD_COLOR decodes in 3 channels BGR
+    except Exception as e:
+        print(f"[Decoder error] cv2.imdecode failed: {e}")
+        return None
+
+    if cv_img is None:
+       print("[Decoder error] cv2.imdecode is None. Non valid depth image.")
+       return None
+
+    img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB) #convert BGR to RGB
+    
+    h, w, channels = img_rgb.shape
+
+
+    ros_img = Image()
+    ros_img.header.stamp = msg.header.stamp
+    ros_img.height = h
+    ros_img.width = w
+    ros_img.encoding = "rgb8" 
+    ros_img.step = w * channels 
+    ros_img.data = img_rgb.tobytes()
+    
+    return ros_img
+    
+@register_decoder("sensor_msgs/msg/CompressedImage")
+def _dec_compressed_Image(msg,spec):
+    """ CompressedImage decoder: decode png frames, then use image decoder.
+    
+    1. Decodes the png frames using cv2
+    2. Passes the resulting image to the standard image decoder (decode_ros_image)
+    3. Returns the same normalized uint8 array as sensor_msgs/Image decoding
+    
+    """
+    decoded_image = decode_sensor_compressed_image_png(msg, spec)
+    
+    normalized_image = decode_ros_image(decoded_image)
+
+    return normalized_image
+
 @register_decoder("foxglove_msgs/msg/CompressedVideo")
 def _dec_foxglove_image(msg, spec):
     """Foxglove CompressedVideo decoder: decode H.264 then use image decoder.
     
-    This decoder:
     1. Decodes the H.264 frame from the Foxglove message
     2. Passes the resulting image to the standard image decoder (decode_ros_image)
-    3. Returns the same normalized float32 array as sensor_msgs/Image decoding
+    3. Returns the same normalized uint8 array as sensor_msgs/Image decoding
     
-    This ensures consistent processing pipeline between Foxglove and standard ROS images.
     """
 
     decoded_image = decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8')

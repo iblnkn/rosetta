@@ -313,8 +313,7 @@ def export_bags_to_lerobot(
     state_specs = []  # Track multiple observation.state specs
     action_specs_by_key: Dict[str, List[Any]] = {}  # Track multiple action specs by key
     
-    print("Creo action_specs_by_key", action_specs_by_key)
-    print("specs are", specs)
+    #print("specs are", specs)
     for sv in specs:
         # Handle multiple observation.state specs
         if sv.key == "observation.state":
@@ -324,11 +323,9 @@ def export_bags_to_lerobot(
             
         # Handle action specs
         if sv.is_action:
-            print("sv is an action")
             if sv.key not in action_specs_by_key:
                 action_specs_by_key[sv.key] = []
             action_specs_by_key[sv.key].append(sv)
-            print("current state of action_specs_by_key is", action_specs_by_key)
             # Don't add to features yet - we'll consolidate them
             continue
             
@@ -368,7 +365,6 @@ def export_bags_to_lerobot(
     
     # Consolidate multiple action specs with the same key into a single feature
     for action_key, action_specs in action_specs_by_key.items():
-        print(action_key)
         if len(action_specs) > 1:
             # Multiple specs with same key - consolidate them
             all_names = []
@@ -383,13 +379,11 @@ def export_bags_to_lerobot(
                 "names": all_names
             }
         else:
-            print("We have a single action")
             # Single spec - use it as-is
             sv = action_specs[0]
             k, ft, _ = feature_from_spec(sv, use_videos)
             features[k] = ft
-            print("features is now", features)
-    
+            
     # Mark depth videos in features metadata before dataset creation
     for key, feature in features.items():
         if key.endswith(".depth") and feature.get("dtype") == "video":
@@ -430,7 +424,6 @@ def export_bags_to_lerobot(
         for k, ft in features.items()
         if ft["dtype"] in ("video", "image", "float32", "float64", "string")
     ]
-    print("write keys is", write_keys)
     shapes = {k: tuple(features[k]["shape"]) for k in write_keys}
 
     # Episodes
