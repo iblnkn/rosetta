@@ -18,11 +18,7 @@ Supported message types:
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from rosetta.common.contract_utils import register_decoder
-import os
 import cv2  
-import tempfile
-from pathlib import Path
-import pandas as pd
 import av
 from sensor_msgs.msg import Image
 
@@ -100,7 +96,7 @@ def decode_ros_image(
     Returns:
         np.ndarray: Shape (H, W, C) with dtype float32
     """
-    #print("decode ros image")
+    
     h, w = int(msg.height), int(msg.width)
     enc = (getattr(msg, "encoding", None) or expected_encoding or "bgr8").lower()
     raw = np.frombuffer(msg.data, dtype=np.uint8)
@@ -148,8 +144,7 @@ def decode_ros_image(
 
     # --- Grayscale 8-bit ---
     elif enc in ("mono8", "8uc1", "uint8"):
-        if not step:
-            step = max(w, 1)
+        if not step: step = max(w, 1)
         arr = raw.reshape(h, step)[:, :w].reshape(h, w)
         # keep intensity in [0,255] -> normalize to [0,1] float for vision models
         hwc = (arr.astype(np.float32) / 255.0)[..., None]  # HxWx1
@@ -162,7 +157,6 @@ def decode_ros_image(
 
     # --- Color paths (unchanged behavior) ---
     elif enc in ("rgb8", "bgr8"):
-        #print("reshaping")
         ch = 3
         row = raw.reshape(h, step)[:, : w * ch]
         arr = row.reshape(h, w, ch)
@@ -184,10 +178,8 @@ def decode_ros_image(
     # Normalize to [0,1] and keep HWC format for LeRobot compatibility
     #hwc_float = hwc_rgb.astype(np.float32) / 255.0  # uint8 [0,255] -> float32 [0,1]
     hwc_float = hwc_rgb.astype(np.uint8)
-    #print("returning hwc float")
+    
     return hwc_float
-
-
 
 
 _decoder_state = {}
@@ -409,35 +401,11 @@ def _dec_imu(msg, spec):
     if spec.names:
         return _decode_via_names(msg, spec.names)
     # Default: return orientation quaternion + angular velocity + linear acceleration
-    return np.concatenate(
-        [
-            np.asarray(
-                [
-                    msg.orientation.x,
-                    msg.orientation.y,
-                    msg.orientation.z,
-                    msg.orientation.w,
-                ],
-                dtype=np.float32,
-            ),
-            np.asarray(
-                [
-                    msg.angular_velocity.x,
-                    msg.angular_velocity.y,
-                    msg.angular_velocity.z,
-                ],
-                dtype=np.float32,
-            ),
-            np.asarray(
-                [
-                    msg.linear_acceleration.x,
-                    msg.linear_acceleration.y,
-                    msg.linear_acceleration.z,
-                ],
-                dtype=np.float32,
-            ),
-        ]
-    )
+    return np.concatenate([
+        np.asarray([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w], dtype=np.float32),
+        np.asarray([msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], dtype=np.float32),
+        np.asarray([msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], dtype=np.float32)
+    ])
 
 @register_decoder("sensor_msgs/msg/NavSatFix")
 def _dec_navsatfix(msg, spec):
@@ -462,27 +430,10 @@ def _dec_odometry(msg, spec):
     if spec.names:
         return _decode_via_names(msg, spec.names)
     # Default: return position + orientation quaternion
-    return np.concatenate(
-        [
-            np.asarray(
-                [
-                    msg.pose.pose.position.x,
-                    msg.pose.pose.position.y,
-                    msg.pose.pose.position.z,
-                ],
-                dtype=np.float32,
-            ),
-            np.asarray(
-                [
-                    msg.pose.pose.orientation.x,
-                    msg.pose.pose.orientation.y,
-                    msg.pose.pose.orientation.z,
-                    msg.pose.pose.orientation.w,
-                ],
-                dtype=np.float32,
-            ),
-        ]
-    )
+    return np.concatenate([
+        np.asarray([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z], dtype=np.float32),
+        np.asarray([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w], dtype=np.float32)
+    ])
 
 
 @register_decoder("geometry_msgs/msg/Twist")
@@ -491,12 +442,10 @@ def _dec_twist(msg, spec):
     if spec.names:
         return _decode_via_names(msg, spec.names)
     # Default: return linear and angular velocities
-    return np.concatenate(
-        [
-            np.asarray([msg.linear.x, msg.linear.y, msg.linear.z], dtype=np.float32),
-            np.asarray([msg.angular.x, msg.angular.y, msg.angular.z], dtype=np.float32),
-        ]
-    )
+    return np.concatenate([
+        np.asarray([msg.linear.x, msg.linear.y, msg.linear.z], dtype=np.float32),
+        np.asarray([msg.angular.x, msg.angular.y, msg.angular.z], dtype=np.float32)
+    ])
 
 @register_decoder("geometry_msgs/msg/TwistStamped")
 def _dec_twist_stamped(msg, spec):
@@ -520,18 +469,10 @@ def _dec_multidof_command(msg, spec):
     """MultiDOFCommand decoder: try dotted names first, then use default behavior."""
     if spec.names:
         return _decode_via_names(msg, spec.names)
-
+    
     # Default: return values and values_dot concatenated
-    values = (
-        np.asarray(msg.values, dtype=np.float32)
-        if msg.values
-        else np.array([], dtype=np.float32)
-    )
-    values_dot = (
-        np.asarray(msg.values_dot, dtype=np.float32)
-        if msg.values_dot
-        else np.array([], dtype=np.float32)
-    )
+    values = np.asarray(msg.values, dtype=np.float32) if msg.values else np.array([], dtype=np.float32)
+    values_dot = np.asarray(msg.values_dot, dtype=np.float32) if msg.values_dot else np.array([], dtype=np.float32)
     return np.concatenate([values, values_dot])
 
 # ----- Motors -----
@@ -563,11 +504,7 @@ def _decode_via_names(msg, names: List[str]) -> Optional[np.ndarray]:
         return None
 
     # Special handling for MultiDOFCommand messages
-    if (
-        hasattr(msg, "dof_names")
-        and hasattr(msg, "values")
-        and hasattr(msg, "values_dot")
-    ):
+    if hasattr(msg, 'dof_names') and hasattr(msg, 'values') and hasattr(msg, 'values_dot'):
         return _decode_multidof_via_names(msg, names)
 
     out: List[float] = []

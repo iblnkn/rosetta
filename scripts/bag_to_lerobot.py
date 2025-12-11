@@ -85,7 +85,9 @@ import yaml
 import rosbag2_py
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
-
+import tempfile 
+import os 
+from pathlib import Path
 # ---- LeRobot
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -102,15 +104,7 @@ from rosetta.common.contract_utils import (
     stamp_from_header_ns,
     zero_pad as make_zero_pad,  # alias to avoid name clash with dict var
 )
-
-from PIL import Image 
-import tempfile 
-import os 
-
-from pathlib import Path
-
 import rosetta.common.decoders
-
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +208,6 @@ def _plan_streams(
             # For action specs, we need to check if there are multiple specs with the same key
             # This will be handled later in the consolidation logic
             unique_key = f"{sv.key}_{sv.topic.replace('/', '_')}"
-            #unique_key = sv.key
         else:
             unique_key = sv.key
             
@@ -249,7 +242,7 @@ def export_bags_to_lerobot(
     chunk_size: int = 1000,
     data_mb: int = 100,
     video_mb: int = 500,
-    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' | 'foxglove' | 
+    timestamp_source: str = "contract",  # 'contract' | 'receive' | 'header' |
 ) -> None:
 
     """Convert bag directories into a LeRobot v3 dataset under `out_root`.
@@ -278,13 +271,11 @@ def export_bags_to_lerobot(
         Target data file size in MB per chunk.
     video_mb : int, default 500
         Target video file size in MB per chunk.
-    timestamp_source : {"contract","receive","header","foxglove"}, default "contract"
+    timestamp_source : {"contract","receive","header"}, default "contract"
         Timestamp selection policy per decoded message:
-        - "contract": Use bag time, unless spec.stamp_src == "header"
-                      and a valid header stamp exists.
+        - "contract": Use bag time, unless spec.stamp_src == "header" or spec.stamp_src == "foxglove"
         - "receive":  Always use bag receive time.
         - "header":   Prefer header stamp; fall back to bag receive time.
-        - "foxglove": Use timestamp from Foxglove CompressedVideo messages.
 
     Raises
     ------
@@ -488,15 +479,7 @@ def export_bags_to_lerobot(
                 if timestamp_source == "receive":
                     ts_sel = int(bag_ns)
                 elif timestamp_source == "header":
-                    if sv.stamp_src == "foxglove": #for compressed videos
-                        time = msg.timestamp
-                        ts_sel = int(time.sec) * 1_000_000_000 + int(time.nanosec)
-                    else: 
-                        ts_sel = stamp_from_header_ns(msg) 
-                    
-                    if ts_sel is None:
-                        print("No timestamp found for topic", topic)
-                        
+                    ts_sel = stamp_from_header_ns(msg) or int(bag_ns)    
                 else:  # 'contract' (per-spec stamp_src)
                     if sv.stamp_src == "foxglove": #for compressed videos
                         time = msg.timestamp
@@ -552,9 +535,9 @@ def export_bags_to_lerobot(
             print("Using duration from metadata")
         else:
             dur_ns = observed_dur_ns
-            print("Metadata duration disagrees with observed duration. Using observed duration")
-            print("Observed duration is", observed_dur_ns)
-
+            print(
+                "Metadata duration disagrees with observed duration. Using observed duration"
+            )
         # Ticks
         n_ticks = int(dur_ns // step_ns) + 1
         ticks_ns = start_ns + np.arange(n_ticks, dtype=np.int64) * step_ns
@@ -640,7 +623,7 @@ def export_bags_to_lerobot(
                     frame[name] = zero_pad_map[name]
                     continue
 
-                if dtype in ("video", "image"):  #No guardar imagenes en lerobot
+                if dtype in ("video", "image"): 
 
                     if isinstance(val, str):
                         temp_path = val
@@ -733,11 +716,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--video-mb", type=int, default=500)
     ap.add_argument(
         "--timestamp",
-        choices=("contract", "bag", "header", "foxglove"),
+        choices=("contract", "bag", "header"),
         default="contract",
         help=(
             "Which time base to use when resampling: "
-            "'contract' (per-spec), 'bag' (receive), 'header' (message header), or 'foxglove' (Foxglove message timestamp)."
+            "'contract' (per-spec), 'bag' (receive), or 'header' (message header)."
         ),
     )
     return ap.parse_args()
