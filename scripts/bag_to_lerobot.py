@@ -240,6 +240,84 @@ def _plan_streams(
     return streams, by_topic
 
 
+def _detect_image_shapes_from_bag(
+    bag_dir: Path,
+    specs: List[Any],
+) -> Dict[str, Tuple[int, int, int]]:
+    """Pre-scan a bag to detect actual image shapes.
+    
+    Parameters
+    ----------
+    bag_dir : Path
+        Path to the bag directory to scan.
+    specs : list
+        List of SpecView objects from the contract.
+        
+    Returns
+    -------
+    dict[str, tuple[int, int, int]]
+        Mapping from feature key to detected (H, W, C) shape.
+    """
+    detected_shapes: Dict[str, Tuple[int, int, int]] = {}
+    
+    # Find image specs
+    image_specs = [sv for sv in specs if sv.image_resize is not None]
+    if not image_specs:
+        return detected_shapes
+    
+    # Build topic -> spec mapping
+    topic_to_spec: Dict[str, Any] = {}
+    for sv in image_specs:
+        topic_to_spec[sv.topic] = sv
+    
+    try:
+        meta = _read_yaml(bag_dir / "metadata.yaml")
+        info = meta.get("rosbag2_bagfile_information") or {}
+        storage = info.get("storage_identifier") or "mcap"
+        
+        reader = rosbag2_py.SequentialReader()
+        reader.open(
+            rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage),
+            rosbag2_py.ConverterOptions(
+                input_serialization_format="cdr",
+                output_serialization_format="cdr",
+            ),
+        )
+        
+        tmap = _topic_type_map(reader)
+        topics_found = set()
+        
+        # Scan until we've found one image from each topic
+        while reader.has_next() and len(topics_found) < len(topic_to_spec):
+            topic, data, _ = reader.read_next()
+            
+            if topic not in topic_to_spec or topic in topics_found:
+                continue
+                
+            sv = topic_to_spec[topic]
+            ros_type = sv.ros_type or tmap.get(topic)
+            if not ros_type:
+                continue
+                
+            try:
+                msg = deserialize_message(data, get_message(ros_type))
+                val = decode_value(ros_type, msg, sv)
+                
+                if val is not None and isinstance(val, np.ndarray) and len(val.shape) == 3:
+                    h, w, c = val.shape
+                    detected_shapes[sv.key] = (h, w, c)
+                    topics_found.add(topic)
+                    print(f"[Auto-detect] {sv.key}: detected shape ({h}, {w}, {c})")
+            except Exception as e:
+                print(f"[WARN] Could not decode {topic} for shape detection: {e}")
+                continue
+                
+    except Exception as e:
+        print(f"[WARN] Could not pre-scan bag for image shapes: {e}")
+    
+    return detected_shapes
+
+
 # ---------------------------------------------------------------------------
 
 def export_bags_to_lerobot(
@@ -309,6 +387,14 @@ def export_bags_to_lerobot(
     step_ns = int(round(1e9 / fps))
     specs = list(iter_specs(contract))
 
+    # Pre-scan first bag to detect actual image shapes
+    detected_shapes: Dict[str, Tuple[int, int, int]] = {}
+    if bag_dirs:
+        print("[Auto-detect] Scanning first bag to detect image shapes...")
+        detected_shapes = _detect_image_shapes_from_bag(bag_dirs[0], specs)
+        if detected_shapes:
+            print(f"[Auto-detect] Detected shapes for {len(detected_shapes)} image streams")
+
     # Features (also detect first image key as anchor)
     features: Dict[str, Dict[str, Any]] = {}
     primary_image_key: Optional[str] = None
@@ -347,6 +433,15 @@ def export_bags_to_lerobot(
                 # Update the shape to reflect 3 channels
                 ft["shape"] = list(ft["shape"])
                 ft["shape"][-1] = 3
+            
+            # Override shape with detected shape if available (for images)
+            if is_img and k in detected_shapes:
+                detected_h, detected_w, detected_c = detected_shapes[k]
+                contract_shape = tuple(ft["shape"])
+                if contract_shape != (detected_h, detected_w, detected_c):
+                    print(f"[Auto-detect] {k}: overriding contract shape {contract_shape} -> ({detected_h}, {detected_w}, {detected_c})")
+                    ft["shape"] = (detected_h, detected_w, detected_c)
+            
             features[k] = ft
         if is_img and primary_image_key is None:
             primary_image_key = sv.key

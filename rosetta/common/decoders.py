@@ -319,7 +319,8 @@ def _dec_compressed_Image(msg,spec):
     """
     decoded_image = decode_sensor_compressed_image_png(msg, spec)
     
-    normalized_image = decode_ros_image(decoded_image)
+    # Pass resize_hw from spec to apply any configured resize
+    normalized_image = decode_ros_image(decoded_image, spec.image_encoding, spec.image_resize)
 
     return normalized_image
 
@@ -335,7 +336,8 @@ def _dec_foxglove_image(msg, spec):
 
     decoded_image = decode_foxglove_compressed_video(msg, spec, output_encoding='rgb8')
     
-    normalized_image = decode_ros_image(decoded_image)
+    # Pass resize_hw from spec to apply any configured resize
+    normalized_image = decode_ros_image(decoded_image, spec.image_encoding, spec.image_resize)
 
     return normalized_image
 
