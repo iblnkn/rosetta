@@ -32,16 +32,27 @@ Command-line usage
 Convert a single bag:
 
     $ python bag_to_lerobot.py \\
-        --bag /path/to/bag_dir \\
-        --contract /path/to/contract.yaml \\
-        --out /path/to/out_root
+        --bag /path/to/my_bag \\
+        --contract /path/to/contract.yaml
+    
+    # Output: out_lerobot/my_bag/
 
-Convert multiple bags:
+Convert multiple bags from a splits folder (containing split0, split1, ...):
 
     $ python bag_to_lerobot.py \\
-        --bags /bag/epi1 /bag/epi2 \\
+        --bags /path/to/session_folder \\
+        --contract /path/to/contract.yaml
+    
+    # Output: out_lerobot/session_folder/
+
+Custom output root:
+
+    $ python bag_to_lerobot.py \\
+        --bags /path/to/session_folder \\
         --contract /path/to/contract.yaml \\
-        --out /path/to/out_root
+        --out /custom/output/root
+    
+    # Output: /custom/output/root/session_folder/
 
 Options of note:
 
@@ -700,9 +711,9 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser("ROS2 bag → LeRobot v3 (using rosetta.common.*)")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--bag", help="Path to a single bag directory (episode)")
-    g.add_argument("--bags", nargs="+", help="Paths to multiple bag directories")
+    g.add_argument("--bags", help="Path to folder containing split0, split1, ... subfolders")
     ap.add_argument("--contract", required=True, help="Path to YAML contract")
-    ap.add_argument("--out", required=True, help="Output dataset root")
+    ap.add_argument("--out", default="out_lerobot", help="Output root directory (default: out_lerobot)")
     ap.add_argument("--repo-id", default="rosbag_v30", help="repo_id metadata")
     ap.add_argument(
         "--no-videos", action="store_true", help="Store images instead of videos"
@@ -726,14 +737,75 @@ def parse_args() -> argparse.Namespace:
     return ap.parse_args()
 
 
+def _discover_split_folders(parent_dir: Path) -> List[Path]:
+    """Discover split folders (split0, split1, ...) in the given directory.
+    
+    Parameters
+    ----------
+    parent_dir : Path
+        Parent directory containing split* subfolders.
+        
+    Returns
+    -------
+    list[Path]
+        Sorted list of split folder paths.
+        
+    Raises
+    ------
+    ValueError
+        If no split folders are found.
+    """
+    import re
+    
+    split_pattern = re.compile(r'^split(\d+)$')
+    splits = []
+    
+    for child in parent_dir.iterdir():
+        if child.is_dir():
+            match = split_pattern.match(child.name)
+            if match:
+                split_num = int(match.group(1))
+                splits.append((split_num, child))
+    
+    if not splits:
+        raise ValueError(f"No split folders (split0, split1, ...) found in {parent_dir}")
+    
+    # Sort by split number
+    splits.sort(key=lambda x: x[0])
+    sorted_paths = [p for _, p in splits]
+    
+    print(f"[Splits] Found {len(sorted_paths)} splits in {parent_dir}:")
+    for p in sorted_paths:
+        print(f"  - {p.name}")
+    
+    return sorted_paths
+
+
 def main() -> None:
     """CLI entry point for batch conversion of ROS 2 bags to LeRobot."""
     args = parse_args()
-    bag_dirs = [Path(args.bag)] if args.bag else [Path(p) for p in args.bags]
+    
+    if args.bag:
+        input_path = Path(args.bag)
+        bag_dirs = [input_path]
+    else:
+        # Discover split folders from the provided directory
+        input_path = Path(args.bags)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Splits folder not found: {input_path}")
+        bag_dirs = _discover_split_folders(input_path)
+    
+    # Build output path: out_root/input_folder_name
+    out_root = Path(args.out)
+    input_folder_name = input_path.name
+    final_out_path = out_root / input_folder_name
+    
+    print(f"[Output] Dataset will be saved to: {final_out_path}")
+    
     export_bags_to_lerobot(
         bag_dirs=bag_dirs,
         contract_path=Path(args.contract),
-        out_root=Path(args.out),
+        out_root=final_out_path,
         repo_id=args.repo_id,
         use_videos=not args.no_videos,
         image_writer_threads=args.image_threads,
