@@ -538,7 +538,7 @@ def export_bags_to_lerobot(
             prompt = ""
             cd = info.get("custom_data")
             if isinstance(cd, dict):
-                prompt = cd.get("lerobot.operator_prompt", prompt) or prompt
+                prompt = cd.get("prompt", prompt) or prompt   #value in custom data: prompt
 
             # Reader
             reader = rosbag2_py.SequentialReader()
@@ -681,9 +681,14 @@ def export_bags_to_lerobot(
                     if stream_val is not None:
                         val_array = np.asarray(stream_val, dtype=np.float32).reshape(-1)
                         state_values.append(val_array)
+                    else:
+                        # Use zero padding for missing topics to maintain expected shape
+                        expected_size = len(sv.names)
+                        zero_pad = np.zeros((expected_size,), dtype=np.float32)
+                        state_values.append(zero_pad)
                 
                 if state_values:
-                    # Concatenate all state values
+                    # Concatenate all state values (including zero-padded ones)
                     concatenated_state = np.concatenate(state_values)
                     frame["observation.state"] = concatenated_state
                 else:
