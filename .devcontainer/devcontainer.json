@@ -1,0 +1,32 @@
+{
+  "name": "ACT Rosetta - CUDA 12.8",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "act-rosetta",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  },
+  
+  "forwardPorts": [],
+  // "postCreateCommand": "python3 --version && nvidia-smi",
+  
+  "remoteEnv": {
+    "NVIDIA_VISIBLE_DEVICES": "all",
+    "NVIDIA_DRIVER_CAPABILITIES": "compute,utility"
+  },
+  
+  "mounts": [
+    "source=/tmp,target=/tmp,type=bind"
+  ]
+}
+

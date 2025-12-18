@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  act-rosetta:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    container_name: act-rosetta
+    image: act-rosetta:latest
+    # runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - ..:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # - /tmp:/tmp
+    ports:
+      - "80:80"
+    stdin_open: true
+    tty: true
+    shm_size: '8gb'
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
