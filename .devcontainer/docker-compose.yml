@@ -1,21 +1,33 @@
 version: '3.8'
 
 services:
-  act-rosetta:
+  rosetta:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
-    container_name: act-rosetta
-    image: act-rosetta:latest
-    # runtime: nvidia
+    container_name: rosetta
+    image: rosetta:latest
+
+    user: "ada"
+    network_mode: host
+    expose:
+      - 443
+      - 80
+      - 4567
+
+    init: true
+    privileged: true
+    
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - DISPLAY=${DISPLAY:-:0}
+      - QT_X11_NO_MITSHM=1
     volumes:
       - ..:/workspace
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # - /tmp:/tmp
+      # Mount local gcloud config to container
+      - ${HOME}/.config/gcloud:/home/ada/.config/gcloud
     ports:
       - "80:80"
     stdin_open: true

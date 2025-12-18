@@ -1,7 +1,7 @@
 {
-  "name": "ACT Rosetta - CUDA 12.8",
+  "name": "Rosetta - CUDA 12.6",
   "dockerComposeFile": "docker-compose.yml",
-  "service": "act-rosetta",
+  "service": "rosetta",
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
   

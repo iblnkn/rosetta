@@ -1,8 +1,8 @@
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+FROM nvidia/cuda:12.6.3-cudnn-devel-ubuntu22.04
 
 # Metadata labels
 LABEL maintainer="charlielito"
-LABEL description="Development container with CUDA 12.8, Python, and PyTorch (RTX 5090 compatible)"
+LABEL description="Development container with CUDA 12.6.3, Python, and PyTorch (RTX 5090 compatible)"
 
 # Or your actual UID, GID on Linux if not the default 1000
 ARG USERNAME=ada
@@ -12,7 +12,7 @@ ARG USER_GID=$USER_UID
 # Set environment variables
 # Suppress TensorFlow warnings for cleaner output (TF_CPP_MIN_LOG_LEVEL: 0=all, 1=no INFO, 2=no INFO/WARN, 3=no INFO/WARN/ERROR)
 ENV DEBIAN_FRONTEND=noninteractive \
-    CUDA_VERSION=12.8 \
+    CUDA_VERSION=12.6.3 \
     CUDNN_VERSION=9 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -55,17 +55,6 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && apt-get autoremove && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
 
-
-# -----------------------------------------------------------------------------
-# Install PyTorch
-RUN pip install --upgrade pip && \
-    pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128 && \
-    pip install --pre torchvision --index-url https://download.pytorch.org/whl/nightly/cu128 && \
-    pip install --pre torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 && \
-    # Clean up
-    apt-get autoremove && apt-get clean -y && \
-    rm -rf /var/lib/apt/lists/*
-
 # -----------------------------------------------------------------------------
 # setting up ROS2 stuff
 ENV ROS_DISTRO=humble
@@ -102,17 +91,33 @@ RUN apt update && apt install -y \
     ros-${ROS_DISTRO}-rviz2 \
     ros-${ROS_DISTRO}-geographic-msgs \
     ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
+    ros-${ROS_DISTRO}-rosbag2-storage-mcap \
+    ros-${ROS_DISTRO}-foxglove-msgs\
     && echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc \
     && apt-get autoremove && apt-get clean -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install colcon build tools
-RUN apt update && apt install -y python3-colcon-common-extensions \
+RUN apt update && apt install -y python3-colcon-common-extensions rsync \
+    && pip install rosdep \
     && apt-get autoremove && apt-get clean -y && \
     rm -rf /var/lib/apt/lists/*
 
+# ENV PATH=/home/ada/.local/bin:$PATH
+# export PATH=/home/ada/.local/bin:$PATH
+
 # Add ROS2 sourcing to user's .bashrc (not root's, since container runs as $USERNAME)
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /home/$USERNAME/.bashrc
+
+
+# -----------------------------------------------------------------------------
+# Install PyTorch
+RUN pip install --upgrade pip && \
+    # --ignore-installed to avoid error with sympy package
+    pip install torch==2.7.1 torchvision==0.22.1 --ignore-installed --index-url https://download.pytorch.org/whl/cu126  && \
+    # Clean up
+    apt-get autoremove && apt-get clean -y && \
+    rm -rf /var/lib/apt/lists/*
 
 # -----------------------------------------------------------------------------
 # Install rosboard_client dependencies
@@ -125,6 +130,10 @@ RUN pip install \
     simplejpeg~=1.6.3 \
     twisted~=23.10.0 \
     "setuptools>=61.0, <70.0.0"
+
+# Without the constraints of torch, lerobot tries to download another torch version -.- no cuda support
+COPY constraints.txt constraints.txt
+RUN pip install -c constraints.txt lerobot==0.4.2
 
 # -----------------------------------------------------------------------------
 # Set working directory
