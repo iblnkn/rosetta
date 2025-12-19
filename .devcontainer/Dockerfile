@@ -135,6 +135,13 @@ RUN pip install \
 COPY constraints.txt constraints.txt
 RUN pip install -c constraints.txt lerobot==0.4.2
 
+# For some reason numpy2 is not compatible with ros cv_bridge
+RUN pip uninstall numpy
+# To be able to colcon build --symlink-install our packages we need setuptools 71.0.0 since with 80.0.0 we had problems
+RUN pip install 'numpy>=1.22.4,<2' setuptools==71.0.0
+
+# apt install ros-{ROS_DISTRO}-rclpy-message-converter
+
 # -----------------------------------------------------------------------------
 # Set working directory
 WORKDIR /workspace

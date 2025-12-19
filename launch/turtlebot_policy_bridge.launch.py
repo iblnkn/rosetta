@@ -7,7 +7,8 @@ import os
 
 def generate_launch_description():
     share = get_package_share_directory('rosetta')
-    contract = os.path.join(share, 'contracts', 'turtlebot.yaml')
+    # contract = os.path.join(share, 'contracts', 'fomo_test.yaml')
+    contract = os.path.join(share, 'contracts', 'fomo_test2.yaml')
     log_level_arg = DeclareLaunchArgument(
             'log_level',
             default_value='info',  # Default log level
@@ -24,7 +25,8 @@ def generate_launch_description():
             emulate_tty=True,
             parameters=[
                 {'contract_path': contract},
-                {'policy_path': 'iblnk/act-turtlebot3_demo'},
+                # {'policy_path': 'robot-com/kiwibot_test'},
+                {'policy_path': 'robot-com/kiwibot_test_maincam'},
                 {'use_sim_time': True},
                 #TODO add inference specific parameters here
             ],

@@ -156,7 +156,7 @@ def decode_ros_image(
         return hwc_3ch.astype(np.float32)
 
     # --- Color paths (unchanged behavior) ---
-    elif enc in ("rgb8", "bgr8"):
+    elif enc in ("rgb8", "bgr8", '8uc3'):
         ch = 3
         row = raw.reshape(h, step)[:, : w * ch]
         arr = row.reshape(h, w, ch)
