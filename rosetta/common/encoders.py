@@ -10,6 +10,7 @@ the @register_encoder decorator and called via encode_value() in processing_util
 
 Supported message types:
 - geometry_msgs/msg/Twist: Convert to Twist messages for robot control
+- geometry_msgs/msg/TwistStamped: Convert to TwistStamped messages for robot control with timestamp
 - std_msgs/msg/Float32MultiArray: Convert to Float32MultiArray messages
 - std_msgs/msg/Int32MultiArray: Convert to Int32MultiArray messages
 """
@@ -94,6 +95,42 @@ def _enc_twist(
         msg.angular.x = float(arr[4])
     if len(arr) >= 6:
         msg.angular.y = float(arr[5])
+
+    return msg
+
+
+@register_encoder("geometry_msgs/msg/TwistStamped")
+def _enc_twist_stamped(
+    names: List[str], action_vec: Sequence[float], clamp: Optional[Tuple[float, float]]
+):
+    """TwistStamped encoder with sensible defaults when names are absent."""
+    if names:
+        return _encode_via_dotted_paths(
+            "geometry_msgs/msg/TwistStamped", names, action_vec, clamp
+        )
+
+    # Default mapping when no names specified
+    msg_cls = get_message("geometry_msgs/msg/TwistStamped")
+    msg = msg_cls()
+
+    # Apply clamping if specified
+    arr = np.asarray(action_vec, dtype=np.float32).reshape(-1)
+    if clamp:
+        arr = np.clip(arr, clamp[0], clamp[1])
+
+    # Map to twist fields (linear.x, linear.y, linear.z, angular.x, angular.y, angular.z)
+    if len(arr) >= 1:
+        msg.twist.linear.x = float(arr[0])
+    if len(arr) >= 2:
+        msg.twist.angular.z = float(arr[1])  # Common pattern: linear.x, angular.z
+    if len(arr) >= 3:
+        msg.twist.linear.y = float(arr[2])
+    if len(arr) >= 4:
+        msg.twist.linear.z = float(arr[3])
+    if len(arr) >= 5:
+        msg.twist.angular.x = float(arr[4])
+    if len(arr) >= 6:
+        msg.twist.angular.y = float(arr[5])
 
     return msg
 
