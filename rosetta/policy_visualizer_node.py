@@ -281,17 +281,17 @@ class PolicyVisualizer(Node):
         
         # Normalize angular velocity to angle
         # angular_z = 0 should point straight up (90 degrees from horizontal)
-        # angular_z < 0 should point left (> 90 degrees)
-        # angular_z > 0 should point right (< 90 degrees)
+        # angular_z > 0 should point left (> 90 degrees)
+        # angular_z < 0 should point right (< 90 degrees)
         normalized = angular_z / self.angular_max
         normalized = np.clip(normalized, -1.0, 1.0)
         
         # Convert to angle (in radians)
         # 0 angular -> 90 degrees (pi/2)
-        # positive angular (right turn) -> angle < 90 degrees
-        # negative angular (left turn) -> angle > 90 degrees
+        # positive angular (left turn) -> angle > 90 degrees
+        # negative angular (right turn) -> angle < 90 degrees
         angle_offset = normalized * (np.pi / 3)  # +/- 60 degrees range
-        angle_rad = (np.pi / 2) - angle_offset  # Subtract because positive angular means turn right
+        angle_rad = (np.pi / 2) + angle_offset  # Add because positive angular means turn left
         
         # Calculate end point of indicator line
         end_x = int(indicator_center_x + indicator_length * np.cos(angle_rad))
@@ -316,9 +316,9 @@ class PolicyVisualizer(Node):
         )
         
         # Choose color based on direction
-        if angular_z < -0.05:
+        if angular_z > 0.05:
             color = (0, 165, 255)  # Orange for left
-        elif angular_z > 0.05:
+        elif angular_z < -0.05:
             color = (255, 0, 255)  # Magenta for right
         else:
             color = (0, 255, 255)  # Yellow for straight
@@ -353,7 +353,7 @@ class PolicyVisualizer(Node):
         )
         
         # Draw text with value
-        text = f"{angular_z:.4f}"
+        text = f"{angular_z:.2f}"
         text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
         text_x = indicator_center_x - text_size[0] // 2
         text_y = indicator_base_y + 30
