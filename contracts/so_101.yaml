@@ -1,0 +1,49 @@
+robot_type: so_101
+
+fps: 30
+max_duration_s: 90.0
+
+observations:
+  - key: observation.images.right
+    topic: /front_camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image:
+      resize: [512, 512]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
+  
+  - key: observation.images.top
+    topic: /top_camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image:
+      resize: [512, 512]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
+
+  - key: observation.images.wrist.right
+    topic: /wrist_camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image:
+      resize: [512, 512]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
+
+  - key: observation.state
+    topic: /follower_arm/joint_states
+    type: sensor_msgs/msg/JointState
+    selector:
+      names: [position.shoulder_pan, position.shoulder_lift, position.elbow, position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 50}
+
+actions:
+  - key: action
+    publish:
+      topic: /leader_arm/joint_states  # Follower arm subscribes here
+      type: sensor_msgs/msg/JointState
+      qos: {reliability: best_effort, history: keep_last, depth: 10}
+    selector:
+      names: [position.shoulder_pan, position.shoulder_lift, position.elbow, position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+
+recording:
+  storage: mcap

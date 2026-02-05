@@ -1,0 +1,59 @@
+# Rosetta Client Node Parameters (LeRobot Policy Inference)
+# This file is the source of truth for node configuration.
+#
+# Usage:
+#   ros2 launch rosetta rosetta_client_launch.py
+#
+# Override parameters at launch:
+#   ros2 launch rosetta rosetta_client_launch.py \
+#       --ros-args -p pretrained_name_or_path:=/path/to/model
+
+rosetta_client:
+  ros__parameters:
+    # Path to trained model (local path or HuggingFace repo_id)
+    pretrained_name_or_path: "/workspaces/rosetta_ws/models/act/act_pen_in_cup/050000/pretrained_model"
+
+    # LeRobot policy server address (host:port)
+    server_address: "127.0.0.1:8080"
+
+    # Policy architecture type
+    # Options: "act", "smolvla", "diffusion", "tdmpc", "vqbet", "pi0", "pi05"
+    policy_type: "act"
+
+    # Device for policy inference: "cuda", "cpu", "mps", or specific like "cuda:0"
+    policy_device: "cuda"
+
+    # Note: fps is defined in the contract (single source of truth)
+
+    # Number of actions to request per inference chunk
+    # Controls how often must_go=True triggers (when queue empties).
+    # Server filters most non-must_go observations via similarity check (atol=1).
+    # At 30Hz: actions_per_chunk=50 → ~1.67s between inferences
+    #          actions_per_chunk=10 → ~0.33s between inferences
+    actions_per_chunk: 30
+
+    # Threshold for when to request new action chunk (0.0 - 1.0)
+    # Controls when client SENDS observations to server.
+    # Server may still FILTER them via _obs_sanity_checks (similarity + timestep).
+    # Only must_go=True observations bypass filtering entirely.
+    chunk_size_threshold: 0.95
+
+    # How to aggregate overlapping action chunks
+    # Options: "weighted_average" (0.3*old + 0.7*new), "latest_only" (new only),
+    #          "average" (0.5*old + 0.5*new), "conservative" (0.7*old + 0.3*new)
+    aggregate_fn_name: "weighted_average"
+
+    # Rate at which to publish execution feedback (Hz)
+    feedback_rate_hz: 2.0
+
+    # Launch local policy server automatically (set false if using remote server)
+    launch_local_server: true
+
+    # Observation similarity filtering tolerance (L2 norm of joint state difference).
+    # The policy server filters observations that are "too similar" to the last one.
+    # Problem: Default threshold (1.0) assumes joint states change by >1.0 between
+    # frames. For many robot configurations this causes observations to be skipped frequently. 
+    # - Set to -1.0: DISABLE filtering (recommended for most robots)
+    # - Set to positive value: filter observations within this L2 tolerance
+    # Note: Requires LeRobot version with obs_similarity_atol support.
+    obs_similarity_atol: -1.0
