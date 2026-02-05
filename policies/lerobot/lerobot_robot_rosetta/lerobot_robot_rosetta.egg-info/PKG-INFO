@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: lerobot_robot_rosetta
+Version: 0.1.0
+Summary: LeRobot Robot plugin for Rosetta - bridges ROS2 topics to LeRobot Robot interface.
+Author: Isaac Blankenau
+Author-email: isaac.blankenau@gmail.com
+Maintainer: Isaac Blankenau
+Maintainer-email: isaac.blankenau@gmail.com
+License: Apache-2.0
+Keywords: ros2,lerobot,robotics,rosetta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Topic :: Software Development
+Classifier: Topic :: Scientific/Engineering
+Requires-Dist: setuptools
+Requires-Dist: numpy
+Requires-Dist: lerobot
+Requires-Dist: rclpy
+Requires-Dist: rosetta
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: keywords
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: requires-dist
+Dynamic: summary
