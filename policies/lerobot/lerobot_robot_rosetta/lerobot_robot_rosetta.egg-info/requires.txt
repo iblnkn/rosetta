@@ -1,5 +1,0 @@
-setuptools
-numpy
-lerobot
-rclpy
-rosetta
