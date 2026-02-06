@@ -496,23 +496,140 @@ class EpisodeRecorderNode(LifecycleNode):
         writer = rosbag2_py.SequentialWriter()
         writer.open(storage_options, converter_options)
 
+        # Helper to convert QoS info into the offered_qos_profiles string
+        def _serialize_offered_qos(q: QoSProfile | int) -> str:
+            # Emit a Humble-compatible YAML mapping string as a single
+            # string value. Use numeric enum values when available and
+            # sensible defaults otherwise. This format matches what
+            # rosbag2_player expects on ROS 2 Humble.
+            # Example output begins with '- ' to represent a single-item list
+            # containing the qos mapping.
+            try:
+                from rclpy.qos import (
+                    DurabilityPolicy,
+                    ReliabilityPolicy,
+                    HistoryPolicy,
+                    LivelinessPolicy,
+                )
+            except Exception:
+                DurabilityPolicy = None
+                ReliabilityPolicy = None
+                HistoryPolicy = None
+                LivelinessPolicy = None
+
+            # Numeric defaults matching typical RMW sentinel values
+            MAX_SEC = 2147483647
+            MAX_NSEC = 4294967295
+
+            durability_num = 1
+            reliability_num = 1
+            history_num = 3
+            depth_num = 0
+            liveliness_num = 1
+
+            # Extract values from QoSProfile object when possible
+            if isinstance(q, QoSProfile):
+                try:
+                    # depth
+                    depth_num = int(getattr(q, "depth", 0) or 0)
+                except Exception:
+                    depth_num = 0
+
+                try:
+                    # durability -> numeric
+                    if DurabilityPolicy is not None:
+                        durability_num = int(getattr(q.durability, "value", q.durability))
+                    else:
+                        # Fallback by name
+                        d = getattr(q, "durability", None)
+                        if d is not None and str(d).lower().find("transient") >= 0:
+                            durability_num = 2
+                        else:
+                            durability_num = 1
+                except Exception:
+                    durability_num = 1
+
+                try:
+                    # reliability
+                    if ReliabilityPolicy is not None:
+                        reliability_num = int(getattr(q.reliability, "value", q.reliability))
+                    else:
+                        r = getattr(q, "reliability", None)
+                        if r is not None and str(r).lower().find("reliab") >= 0:
+                            reliability_num = 2
+                        else:
+                            reliability_num = 1
+                except Exception:
+                    reliability_num = 1
+
+                try:
+                    # history
+                    if HistoryPolicy is not None:
+                        history_num = int(getattr(q.history, "value", q.history))
+                    else:
+                        h = getattr(q, "history", None)
+                        if h is not None and str(h).lower().find("keep_all") >= 0:
+                            history_num = 2
+                        else:
+                            history_num = 1
+                except Exception:
+                    history_num = 1
+
+                try:
+                    liveliness_num = int(getattr(q, "liveliness", 1) or 1)
+                except Exception:
+                    liveliness_num = 1
+
+            elif isinstance(q, int):
+                # Only depth provided by older contract; assume keep_last
+                depth_num = int(q)
+                history_num = 1
+
+            # Build the Humble-style single-string mapping, prefixed with '- '
+            # rosbag2_player requires all fields including deadline/lifespan/liveliness
+            lines = [
+                f"- history: {history_num}",
+                f"  depth: {depth_num}",
+                f"  reliability: {reliability_num}",
+                f"  durability: {durability_num}",
+                f"  deadline:",
+                f"    sec: {MAX_SEC}",
+                f"    nsec: {MAX_NSEC}",
+                f"  lifespan:",
+                f"    sec: {MAX_SEC}",
+                f"    nsec: {MAX_NSEC}",
+                f"  liveliness: {liveliness_num}",
+                f"  liveliness_lease_duration:",
+                f"    sec: {MAX_SEC}",
+                f"    nsec: {MAX_NSEC}",
+                f"  avoid_ros_namespace_conventions: false",
+            ]
+            return "\n".join(lines)
+        
+
         # Register all topics
-        for idx, (topic, type_str, _) in enumerate(self._topics):
+        for idx, (topic, type_str, qos) in enumerate(self._topics):
             # Use positional args for TopicMetadata to be compatible with
             # different rosbag2_py bindings (some are strict about kwargs
             # or have slightly different signatures). The expected
             # signature is TopicMetadata(name, type, serialization_format,
-            # offered_qos_profiles='').
-            topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr")
+            # offered_qos_profiles=''). We populate offered_qos_profiles with
+            # a small JSON blob when the QoS was provided so playback can
+            # recreate transient_local/reliable publishers.
+            offered = _serialize_offered_qos(qos)
+            topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
             writer.create_topic(topic_info)
 
         with self._writer_lock:
             self._writer = writer
 
+
     def _close_writer(self) -> None:
-        """Close the writer."""
+        """Close the writer and finalize the bag file."""
         with self._writer_lock:
-            self._writer = None  # SequentialWriter closes on del
+            if self._writer is not None:
+                self._writer.close()  # Explicitly close to finalize MCAP indices
+            self._writer = None
 
     def _write_metadata(self, bag_dir: Path, prompt: str) -> None:
         """
