@@ -443,12 +443,12 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Register all topics
         for idx, (topic, type_str, _) in enumerate(self._topics):
-            topic_info = rosbag2_py.TopicMetadata(
-                id=idx,
-                name=topic,
-                type=type_str,
-                serialization_format="cdr",
-            )
+            # Use positional args for TopicMetadata to be compatible with
+            # different rosbag2_py bindings (some are strict about kwargs
+            # or have slightly different signatures). The expected
+            # signature is TopicMetadata(name, type, serialization_format,
+            # offered_qos_profiles='').
+            topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr")
             writer.create_topic(topic_info)
 
         with self._writer_lock:
