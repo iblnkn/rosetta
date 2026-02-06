@@ -272,6 +272,19 @@ class EpisodeRecorderNode(LifecycleNode):
             qos = qos_profile_from_dict(adj.qos) or 10
             topics.append((adj.topic, adj.type, qos))
 
+        # If node is running with simulation time enabled, record the /clock
+        # topic so playback can drive sim time. Use a safe get in case the
+        # parameter wasn't declared by the launcher.
+        try:
+            use_sim = bool(self.get_parameter("use_sim_time").value)
+        except Exception:
+            use_sim = False
+
+        if use_sim:
+            # Use the standard ROS2 clock message type. QoS depth 10 is a
+            # reasonable default for clock topic traffic.
+            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10))
+
         return topics
 
     def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int):
