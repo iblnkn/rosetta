@@ -1,10 +1,13 @@
 # Goal
-string prompt
+string prompt                    # Description of this demonstration episode
 ---
 # Result
-bool success
-string message
+bool success                     # Whether recording completed successfully
+string message                   # Error details or success info
+string bag_path                  # Path to the recorded rosbag
+int32 messages_written           # Total messages captured
 ---
 # Feedback
-int32 seconds_remaining
-string feedback_message
+int32 seconds_remaining          # Time until auto-stop (from max_duration param)
+int32 messages_written           # Messages captured so far (confirms data flow)
+string status                    # Current state: "recording", etc.
