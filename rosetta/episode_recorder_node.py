@@ -83,7 +83,7 @@ class EpisodeRecorderNode(LifecycleNode):
     """
 
     def __init__(self):
-        super().__init__("episode_recorder", enable_logger_service=True)
+        super().__init__("episode_recorder")
 
         # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
