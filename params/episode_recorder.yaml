@@ -1,0 +1,24 @@
+# Episode Recorder Node Parameters
+# Usage:
+#   ros2 launch rosetta episode_recorder_launch.py
+#   Or with custom params:
+#   ros2 run rosetta episode_recorder_node --ros-args \
+#       --params-file /path/to/episode_recorder.yaml \
+#       -p contract_path:=/path/to/contract.yaml
+
+episode_recorder:
+  ros__parameters:
+    # Where to store recorded bag files
+    bag_base_dir: "/workspaces/rosetta_ws/datasets/bags"
+
+    # Rosbag storage format: "mcap" (recommended) or "sqlite3"
+    storage_id: "mcap"
+
+    # Default max episode duration in seconds (can be overridden per-episode)
+    default_max_duration: 300.0
+
+    # Rate at which to publish recording feedback (Hz)
+    feedback_rate_hz: 2.0
+
+    # Default QoS queue depth for topic subscriptions
+    default_qos_depth: 10
