@@ -45,6 +45,7 @@ from rclpy.serialization import serialize_message
 import rosbag2_py
 import yaml
 from rcl_interfaces.msg import ParameterDescriptor
+from std_srvs.srv import Trigger
 from rosidl_runtime_py.utilities import get_message
 from rosetta_interfaces.action import RecordEpisode
 
@@ -160,6 +161,17 @@ class EpisodeRecorderNode(LifecycleNode):
             execute_callback=self._execute,
             goal_callback=self._on_goal,
             cancel_callback=self._on_cancel,
+            callback_group=self._cbg,
+        )
+
+        # Service to allow external callers to cancel an active recording
+        # Useful for users who can't (or don't want to) interact with the
+        # action protocol directly. This sets the internal stop event and
+        # attempts to transition the current goal to the canceled state.
+        self._cancel_service = self.create_service(
+            Trigger,
+            "~/cancel_recording",
+            self._on_cancel_service,
             callback_group=self._cbg,
         )
 
@@ -331,6 +343,36 @@ class EpisodeRecorderNode(LifecycleNode):
         self.get_logger().info("Received cancel request")
         self._stop_event.set()
         return CancelResponse.ACCEPT
+
+    def _on_cancel_service(self, request, response):
+        """Handle external Trigger service call to cancel recording.
+
+        Sets the internal stop event and attempts to transition the active
+        goal to the canceled state. Returns a Trigger response indicating
+        whether a recording was active when the call arrived.
+        """
+        if not self._is_recording:
+            response.success = False
+            response.message = "No active recording"
+            return response
+
+        self.get_logger().info("cancel_recording service called: stopping recording")
+        # Signal the recording loop to stop
+        self._stop_event.set()
+
+        # Try to move the action goal to canceled if present
+        if self._goal_handle is not None:
+            try:
+                # If the executor/loop is inside _execute, calling canceled()
+                # here will transition the goal state. The execute loop also
+                # checks is_cancel_requested and will perform its own cleanup.
+                self._goal_handle.canceled()
+            except Exception as e:
+                self.get_logger().debug(f"Failed to cancel goal handle: {e}")
+
+        response.success = True
+        response.message = "Cancel requested"
+        return response
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Execute recording episode."""
