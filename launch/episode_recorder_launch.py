@@ -53,6 +53,12 @@ def generate_launch_description():
     # Declare launch arguments
     # Defaults come from params file - launch args override when provided
     launch_description = [
+        # Params file path
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to parameter YAML file'
+        ),
         # Contract path - deployment-specific
         DeclareLaunchArgument(
             'contract_path',
@@ -119,8 +125,8 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            # Load defaults from params file
-            default_params,
+            # Load defaults from params file (can be overridden via params_file argument)
+            LaunchConfiguration('params_file'),
             # Launch argument overrides (later values take precedence)
             {
                 'contract_path': LaunchConfiguration('contract_path'),
