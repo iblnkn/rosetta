@@ -33,6 +33,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from collections import deque
+from typing import Optional
 
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -66,6 +68,8 @@ BAG_PROMPT_KEY = "lerobot.operator_prompt"
 # Metadata file retry settings (internal implementation detail)
 METADATA_RETRY_COUNT = 10
 METADATA_RETRY_DELAY_SEC = 0.1
+# Maximum serialized bytes to buffer for a retained message (4 MiB)
+MAX_BUFFER_BYTES = 4 * 1024 * 1024
 
 
 class EpisodeRecorderNode(LifecycleNode):
@@ -122,6 +126,10 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event = threading.Event()
         self._goal_handle = None
         self._cbg = ReentrantCallbackGroup()
+        # Buffers for TRANSIENT_LOCAL messages (like /tf_static)
+        # Each buffer is a deque limited by QoS history depth
+        self._buffers: dict[str, deque] = {}
+        self._buffer_lock = threading.Lock()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -280,7 +288,7 @@ class EpisodeRecorderNode(LifecycleNode):
             topics.append((task.topic, task.type, qos))
 
         # Adjunct topics (record-only, no key mapping)
-        for adj in self._contract.adjunct:
+        for adj in self._contract.adjunct or []:
             qos = qos_profile_from_dict(adj.qos) or 10
             topics.append((adj.topic, adj.type, qos))
 
@@ -302,16 +310,68 @@ class EpisodeRecorderNode(LifecycleNode):
     def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
+        
+        # Helper to extract header timestamp (used for buffering and deduplication)
+        def get_header_stamp_ns(msg: Any) -> Optional[int]:
+            """Extract header.stamp as nanoseconds, or None if not present."""
+            try:
+                # Try msg.header first (most common)
+                hdr = getattr(msg, "header", None)
+                if hdr is not None and hasattr(hdr, "stamp"):
+                    ts = hdr.stamp
+                    return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+                # Try msg.transforms[0].header for TFMessage
+                if hasattr(msg, "transforms") and len(getattr(msg, "transforms", [])) > 0:
+                    fh = getattr(msg.transforms[0], "header", None)
+                    if fh is not None and hasattr(fh, "stamp"):
+                        ts = fh.stamp
+                        return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+            except Exception:
+                pass
+            return None
 
         def callback(msg: Any, _topic: str = topic) -> None:
+            timestamp_ns = self.get_clock().now().nanoseconds
+            # Buffer TRANSIENT_LOCAL messages when not recording
             if not self._is_recording:
+                # Check if this topic has TRANSIENT_LOCAL durability
+                is_transient_local = False
+                history_depth = 1
+                
+                if isinstance(qos, QoSProfile):
+                    try:
+                        from rclpy.qos import DurabilityPolicy
+                        is_transient_local = (qos.durability == DurabilityPolicy.TRANSIENT_LOCAL)
+                        history_depth = int(getattr(qos, "depth", 1) or 1)
+                    except Exception:
+                        pass
+                elif isinstance(qos, int):
+                    history_depth = int(qos)
+
+                if is_transient_local:
+                    try:
+                        serialized = serialize_message(msg)
+                        if len(serialized) <= MAX_BUFFER_BYTES:
+                            header_stamp = get_header_stamp_ns(msg)
+                            
+                            with self._buffer_lock:
+                                if _topic not in self._buffers:
+                                    self._buffers[_topic] = deque()
+                                self._buffers[_topic].append((serialized, timestamp_ns, header_stamp))
+                                # Enforce history depth limit
+                                while len(self._buffers[_topic]) > history_depth:
+                                    self._buffers[_topic].popleft()
+                    except Exception:
+                        pass  # Best-effort buffering
                 return
 
+            # Write live message to bag
             with self._writer_lock:
                 if self._writer is None:
                     return
                 try:
-                    timestamp_ns = self.get_clock().now().nanoseconds
+                    # Use receive time as bag timestamp (standard rosbag2 behavior)
+                    # The header.stamp inside the message is preserved for TF lookups
                     self._writer.write(
                         _topic,
                         serialize_message(msg),
@@ -377,7 +437,6 @@ class EpisodeRecorderNode(LifecycleNode):
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Execute recording episode."""
         self._goal_handle = goal_handle
-        self._is_recording = True
         self._stop_event.clear()  # Reset for new recording
         self._messages_written = 0
 
@@ -392,8 +451,12 @@ class EpisodeRecorderNode(LifecycleNode):
         self.get_logger().info(f"Recording: {bag_dir}, max={max_duration}s")
 
         try:
-            # Open writer and register topics
+            # Open writer and register topics BEFORE setting _is_recording
+            # This allows _open_writer to flush buffered TRANSIENT_LOCAL messages
             self._open_writer(bag_dir)
+            
+            # NOW set recording flag so live messages start being written
+            self._is_recording = True
 
             # Recording loop with feedback
             start_time = time.time()
@@ -620,9 +683,29 @@ class EpisodeRecorderNode(LifecycleNode):
             topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
             writer.create_topic(topic_info)
 
+        # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
         with self._writer_lock:
             self._writer = writer
 
+            # Flush buffered messages at bag start.
+            # TRANSIENT_LOCAL messages (like /tf_static) are written at t=0
+            # so they're available immediately when the bag is played back.
+            # All buffered messages get the same timestamp because they're latched -
+            # the bag player will re-publish them as TRANSIENT_LOCAL regardless.
+            bag_start_ns = self.get_clock().now().nanoseconds
+
+            with self._buffer_lock:
+                for topic, buffer in self._buffers.items():
+                    for serialized, _, _ in buffer:
+                        # Write at bag start. The header.stamp inside the serialized
+                        # message is preserved (often 0 for static TFs).
+                        writer.write(topic, serialized, bag_start_ns)
+                        self._messages_written += 1
+                    
+                    if buffer:
+                        self.get_logger().info(
+                            f"Flushed {len(buffer)} buffered messages for {topic}"
+                        )
 
     def _close_writer(self) -> None:
         """Close the writer and finalize the bag file."""
