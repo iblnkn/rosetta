@@ -33,6 +33,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from collections import deque
+from typing import Optional
 
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -45,6 +47,7 @@ from rclpy.serialization import serialize_message
 import rosbag2_py
 import yaml
 from rcl_interfaces.msg import ParameterDescriptor
+from std_srvs.srv import Trigger
 from rosidl_runtime_py.utilities import get_message
 from rosetta_interfaces.action import RecordEpisode
 
@@ -65,6 +68,8 @@ BAG_PROMPT_KEY = "lerobot.operator_prompt"
 # Metadata file retry settings (internal implementation detail)
 METADATA_RETRY_COUNT = 10
 METADATA_RETRY_DELAY_SEC = 0.1
+# Maximum serialized bytes to buffer for a retained message (4 MiB)
+MAX_BUFFER_BYTES = 4 * 1024 * 1024
 
 
 class EpisodeRecorderNode(LifecycleNode):
@@ -121,6 +126,10 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event = threading.Event()
         self._goal_handle = None
         self._cbg = ReentrantCallbackGroup()
+        # Buffers for TRANSIENT_LOCAL messages (like /tf_static)
+        # Each buffer is a deque limited by QoS history depth
+        self._buffers: dict[str, deque] = {}
+        self._buffer_lock = threading.Lock()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -160,6 +169,17 @@ class EpisodeRecorderNode(LifecycleNode):
             execute_callback=self._execute,
             goal_callback=self._on_goal,
             cancel_callback=self._on_cancel,
+            callback_group=self._cbg,
+        )
+
+        # Service to allow external callers to cancel an active recording
+        # Useful for users who can't (or don't want to) interact with the
+        # action protocol directly. This sets the internal stop event and
+        # attempts to transition the current goal to the canceled state.
+        self._cancel_service = self.create_service(
+            Trigger,
+            "~/cancel_recording",
+            self._on_cancel_service,
             callback_group=self._cbg,
         )
 
@@ -268,25 +288,90 @@ class EpisodeRecorderNode(LifecycleNode):
             topics.append((task.topic, task.type, qos))
 
         # Adjunct topics (record-only, no key mapping)
-        for adj in self._contract.adjunct:
+        for adj in self._contract.adjunct or []:
             qos = qos_profile_from_dict(adj.qos) or 10
             topics.append((adj.topic, adj.type, qos))
+
+        # If node is running with simulation time enabled, record the /clock
+        # topic so playback can drive sim time. Use a safe get in case the
+        # parameter wasn't declared by the launcher.
+        try:
+            use_sim = bool(self.get_parameter("use_sim_time").value)
+        except Exception:
+            use_sim = False
+
+        if use_sim:
+            # Use the standard ROS2 clock message type. QoS depth 10 is a
+            # reasonable default for clock topic traffic.
+            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10))
 
         return topics
 
     def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
+        
+        # Helper to extract header timestamp (used for buffering and deduplication)
+        def get_header_stamp_ns(msg: Any) -> Optional[int]:
+            """Extract header.stamp as nanoseconds, or None if not present."""
+            try:
+                # Try msg.header first (most common)
+                hdr = getattr(msg, "header", None)
+                if hdr is not None and hasattr(hdr, "stamp"):
+                    ts = hdr.stamp
+                    return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+                # Try msg.transforms[0].header for TFMessage
+                if hasattr(msg, "transforms") and len(getattr(msg, "transforms", [])) > 0:
+                    fh = getattr(msg.transforms[0], "header", None)
+                    if fh is not None and hasattr(fh, "stamp"):
+                        ts = fh.stamp
+                        return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+            except Exception:
+                pass
+            return None
 
         def callback(msg: Any, _topic: str = topic) -> None:
+            timestamp_ns = self.get_clock().now().nanoseconds
+            # Buffer TRANSIENT_LOCAL messages when not recording
             if not self._is_recording:
+                # Check if this topic has TRANSIENT_LOCAL durability
+                is_transient_local = False
+                history_depth = 1
+                
+                if isinstance(qos, QoSProfile):
+                    try:
+                        from rclpy.qos import DurabilityPolicy
+                        is_transient_local = (qos.durability == DurabilityPolicy.TRANSIENT_LOCAL)
+                        history_depth = int(getattr(qos, "depth", 1) or 1)
+                    except Exception:
+                        pass
+                elif isinstance(qos, int):
+                    history_depth = int(qos)
+
+                if is_transient_local:
+                    try:
+                        serialized = serialize_message(msg)
+                        if len(serialized) <= MAX_BUFFER_BYTES:
+                            header_stamp = get_header_stamp_ns(msg)
+                            
+                            with self._buffer_lock:
+                                if _topic not in self._buffers:
+                                    self._buffers[_topic] = deque()
+                                self._buffers[_topic].append((serialized, timestamp_ns, header_stamp))
+                                # Enforce history depth limit
+                                while len(self._buffers[_topic]) > history_depth:
+                                    self._buffers[_topic].popleft()
+                    except Exception:
+                        pass  # Best-effort buffering
                 return
 
+            # Write live message to bag
             with self._writer_lock:
                 if self._writer is None:
                     return
                 try:
-                    timestamp_ns = self.get_clock().now().nanoseconds
+                    # Use receive time as bag timestamp (standard rosbag2 behavior)
+                    # The header.stamp inside the message is preserved for TF lookups
                     self._writer.write(
                         _topic,
                         serialize_message(msg),
@@ -319,10 +404,39 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event.set()
         return CancelResponse.ACCEPT
 
+    def _on_cancel_service(self, request, response):
+        """Handle external Trigger service call to cancel recording.
+
+        Sets the internal stop event and attempts to transition the active
+        goal to the canceled state. Returns a Trigger response indicating
+        whether a recording was active when the call arrived.
+        """
+        if not self._is_recording:
+            response.success = False
+            response.message = "No active recording"
+            return response
+
+        self.get_logger().info("cancel_recording service called: stopping recording")
+        # Signal the recording loop to stop
+        self._stop_event.set()
+
+        # Try to move the action goal to canceled if present
+        if self._goal_handle is not None:
+            try:
+                # If the executor/loop is inside _execute, calling canceled()
+                # here will transition the goal state. The execute loop also
+                # checks is_cancel_requested and will perform its own cleanup.
+                self._goal_handle.canceled()
+            except Exception as e:
+                self.get_logger().debug(f"Failed to cancel goal handle: {e}")
+
+        response.success = True
+        response.message = "Cancel requested"
+        return response
+
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Execute recording episode."""
         self._goal_handle = goal_handle
-        self._is_recording = True
         self._stop_event.clear()  # Reset for new recording
         self._messages_written = 0
 
@@ -337,8 +451,12 @@ class EpisodeRecorderNode(LifecycleNode):
         self.get_logger().info(f"Recording: {bag_dir}, max={max_duration}s")
 
         try:
-            # Open writer and register topics
+            # Open writer and register topics BEFORE setting _is_recording
+            # This allows _open_writer to flush buffered TRANSIENT_LOCAL messages
             self._open_writer(bag_dir)
+            
+            # NOW set recording flag so live messages start being written
+            self._is_recording = True
 
             # Recording loop with feedback
             start_time = time.time()
@@ -441,23 +559,104 @@ class EpisodeRecorderNode(LifecycleNode):
         writer = rosbag2_py.SequentialWriter()
         writer.open(storage_options, converter_options)
 
+        # Helper to convert QoS info into the offered_qos_profiles string
+        def _serialize_offered_qos(q: QoSProfile | int) -> str:
+            # Emit a Jazzy-compatible YAML mapping string using
+            # human-readable enum names (e.g. "keep_last", "reliable").
+            # Unspecified durations use sec: 0, nsec: 0.
+            # Output begins with '- ' to represent a single-item list.
+
+            # Defaults matching standard ROS 2 QoS
+            history = "keep_last"
+            depth = 0
+            reliability = "reliable"
+            durability = "volatile"
+            liveliness = "automatic"
+
+            if isinstance(q, QoSProfile):
+                try:
+                    depth = int(getattr(q, "depth", 0) or 0)
+                except Exception:
+                    pass
+                try:
+                    history = q.history.name.lower()
+                except Exception:
+                    pass
+                try:
+                    reliability = q.reliability.name.lower()
+                except Exception:
+                    pass
+                try:
+                    durability = q.durability.name.lower()
+                except Exception:
+                    pass
+                try:
+                    liveliness = q.liveliness.name.lower()
+                except Exception:
+                    pass
+            elif isinstance(q, int):
+                depth = int(q)
+
+            lines = [
+                f"- history: {history}",
+                f"  depth: {depth}",
+                f"  reliability: {reliability}",
+                f"  durability: {durability}",
+                f"  deadline:",
+                f"    sec: 0",
+                f"    nsec: 0",
+                f"  lifespan:",
+                f"    sec: 0",
+                f"    nsec: 0",
+                f"  liveliness: {liveliness}",
+                f"  liveliness_lease_duration:",
+                f"    sec: 0",
+                f"    nsec: 0",
+                f"  avoid_ros_namespace_conventions: false",
+            ]
+            return "\n".join(lines)
+        
+
         # Register all topics
-        for idx, (topic, type_str, _) in enumerate(self._topics):
-            topic_info = rosbag2_py.TopicMetadata(
-                id=idx,
-                name=topic,
-                type=type_str,
-                serialization_format="cdr",
-            )
+        for idx, (topic, type_str, qos) in enumerate(self._topics):
+            # TopicMetadata(name, type, serialization_format,
+            # offered_qos_profiles). We populate offered_qos_profiles
+            # with a Jazzy-compatible YAML string so playback can
+            # recreate the correct QoS (e.g. transient_local/reliable).
+            offered = _serialize_offered_qos(qos)
+            topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
             writer.create_topic(topic_info)
 
+        # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
         with self._writer_lock:
             self._writer = writer
 
+            # Flush buffered messages at bag start.
+            # TRANSIENT_LOCAL messages (like /tf_static) are written at t=0
+            # so they're available immediately when the bag is played back.
+            # All buffered messages get the same timestamp because they're latched -
+            # the bag player will re-publish them as TRANSIENT_LOCAL regardless.
+            bag_start_ns = self.get_clock().now().nanoseconds
+
+            with self._buffer_lock:
+                for topic, buffer in self._buffers.items():
+                    for serialized, _, _ in buffer:
+                        # Write at bag start. The header.stamp inside the serialized
+                        # message is preserved (often 0 for static TFs).
+                        writer.write(topic, serialized, bag_start_ns)
+                        self._messages_written += 1
+                    
+                    if buffer:
+                        self.get_logger().info(
+                            f"Flushed {len(buffer)} buffered messages for {topic}"
+                        )
+
     def _close_writer(self) -> None:
-        """Close the writer."""
+        """Close the writer and finalize the bag file."""
         with self._writer_lock:
-            self._writer = None  # SequentialWriter closes on del
+            if self._writer is not None:
+                self._writer.close()  # Explicitly close to finalize MCAP indices
+            self._writer = None
 
     def _write_metadata(self, bag_dir: Path, prompt: str) -> None:
         """
