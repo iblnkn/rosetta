@@ -47,10 +47,18 @@ def generate_launch_description():
     share = get_package_share_directory('rosetta')
     default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
     default_params = os.path.join(share, 'params', 'episode_recorder.yaml')
+    default_bag_base_dir = '/workspaces/rosetta_ws/datasets/bags'
+    default_use_sim_time = 'false'
 
     # Declare launch arguments
     # Defaults come from params file - launch args override when provided
     launch_description = [
+        # Params file path
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to parameter YAML file'
+        ),
         # Contract path - deployment-specific
         DeclareLaunchArgument(
             'contract_path',
@@ -60,7 +68,7 @@ def generate_launch_description():
         # Node parameters (defaults from params/episode_recorder.yaml)
         DeclareLaunchArgument(
             'bag_base_dir',
-            default_value='/workspaces/rosetta_ws/datasets/bags',
+            default_value=default_bag_base_dir,
             description='Directory for rosbag output'
         ),
         DeclareLaunchArgument(
@@ -96,6 +104,11 @@ def generate_launch_description():
             description='Whether to auto-configure the node on startup'
         ),
         DeclareLaunchArgument(
+            'use_sim_time',
+            default_value=default_use_sim_time,
+            description='Run node with simulated time (pass to use_sim_time param)'
+        ),
+        DeclareLaunchArgument(
             'activate',
             default_value='true',
             description='Whether to auto-activate the node on startup (requires configure:=true)'
@@ -112,8 +125,8 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            # Load defaults from params file
-            default_params,
+            # Load defaults from params file (can be overridden via params_file argument)
+            LaunchConfiguration('params_file'),
             # Launch argument overrides (later values take precedence)
             {
                 'contract_path': LaunchConfiguration('contract_path'),
@@ -122,6 +135,7 @@ def generate_launch_description():
                 'default_max_duration': LaunchConfiguration('default_max_duration'),
                 'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
                 'default_qos_depth': LaunchConfiguration('default_qos_depth'),
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
