@@ -83,7 +83,7 @@ class EpisodeRecorderNode(LifecycleNode):
     """
 
     def __init__(self):
-        super().__init__("episode_recorder")
+        super().__init__("episode_recorder", enable_logger_service=True)
 
         # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
@@ -561,110 +561,57 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Helper to convert QoS info into the offered_qos_profiles string
         def _serialize_offered_qos(q: QoSProfile | int) -> str:
-            # Emit a Humble-compatible YAML mapping string as a single
-            # string value. Use numeric enum values when available and
-            # sensible defaults otherwise. This format matches what
-            # rosbag2_player expects on ROS 2 Humble.
-            # Example output begins with '- ' to represent a single-item list
-            # containing the qos mapping.
-            try:
-                from rclpy.qos import (
-                    DurabilityPolicy,
-                    ReliabilityPolicy,
-                    HistoryPolicy,
-                    LivelinessPolicy,
-                )
-            except Exception:
-                DurabilityPolicy = None
-                ReliabilityPolicy = None
-                HistoryPolicy = None
-                LivelinessPolicy = None
+            # Emit a Jazzy-compatible YAML mapping string using
+            # human-readable enum names (e.g. "keep_last", "reliable").
+            # Unspecified durations use sec: 0, nsec: 0.
+            # Output begins with '- ' to represent a single-item list.
 
-            # Numeric defaults matching typical RMW sentinel values
-            MAX_SEC = 2147483647
-            MAX_NSEC = 4294967295
+            # Defaults matching standard ROS 2 QoS
+            history = "keep_last"
+            depth = 0
+            reliability = "reliable"
+            durability = "volatile"
+            liveliness = "automatic"
 
-            durability_num = 1
-            reliability_num = 1
-            history_num = 3
-            depth_num = 0
-            liveliness_num = 1
-
-            # Extract values from QoSProfile object when possible
             if isinstance(q, QoSProfile):
                 try:
-                    # depth
-                    depth_num = int(getattr(q, "depth", 0) or 0)
+                    depth = int(getattr(q, "depth", 0) or 0)
                 except Exception:
-                    depth_num = 0
-
+                    pass
                 try:
-                    # durability -> numeric
-                    if DurabilityPolicy is not None:
-                        durability_num = int(getattr(q.durability, "value", q.durability))
-                    else:
-                        # Fallback by name
-                        d = getattr(q, "durability", None)
-                        if d is not None and str(d).lower().find("transient") >= 0:
-                            durability_num = 2
-                        else:
-                            durability_num = 1
+                    history = q.history.name.lower()
                 except Exception:
-                    durability_num = 1
-
+                    pass
                 try:
-                    # reliability
-                    if ReliabilityPolicy is not None:
-                        reliability_num = int(getattr(q.reliability, "value", q.reliability))
-                    else:
-                        r = getattr(q, "reliability", None)
-                        if r is not None and str(r).lower().find("reliab") >= 0:
-                            reliability_num = 2
-                        else:
-                            reliability_num = 1
+                    reliability = q.reliability.name.lower()
                 except Exception:
-                    reliability_num = 1
-
+                    pass
                 try:
-                    # history
-                    if HistoryPolicy is not None:
-                        history_num = int(getattr(q.history, "value", q.history))
-                    else:
-                        h = getattr(q, "history", None)
-                        if h is not None and str(h).lower().find("keep_all") >= 0:
-                            history_num = 2
-                        else:
-                            history_num = 1
+                    durability = q.durability.name.lower()
                 except Exception:
-                    history_num = 1
-
+                    pass
                 try:
-                    liveliness_num = int(getattr(q, "liveliness", 1) or 1)
+                    liveliness = q.liveliness.name.lower()
                 except Exception:
-                    liveliness_num = 1
-
+                    pass
             elif isinstance(q, int):
-                # Only depth provided by older contract; assume keep_last
-                depth_num = int(q)
-                history_num = 1
+                depth = int(q)
 
-            # Build the Humble-style single-string mapping, prefixed with '- '
-            # rosbag2_player requires all fields including deadline/lifespan/liveliness
             lines = [
-                f"- history: {history_num}",
-                f"  depth: {depth_num}",
-                f"  reliability: {reliability_num}",
-                f"  durability: {durability_num}",
+                f"- history: {history}",
+                f"  depth: {depth}",
+                f"  reliability: {reliability}",
+                f"  durability: {durability}",
                 f"  deadline:",
-                f"    sec: {MAX_SEC}",
-                f"    nsec: {MAX_NSEC}",
+                f"    sec: 0",
+                f"    nsec: 0",
                 f"  lifespan:",
-                f"    sec: {MAX_SEC}",
-                f"    nsec: {MAX_NSEC}",
-                f"  liveliness: {liveliness_num}",
+                f"    sec: 0",
+                f"    nsec: 0",
+                f"  liveliness: {liveliness}",
                 f"  liveliness_lease_duration:",
-                f"    sec: {MAX_SEC}",
-                f"    nsec: {MAX_NSEC}",
+                f"    sec: 0",
+                f"    nsec: 0",
                 f"  avoid_ros_namespace_conventions: false",
             ]
             return "\n".join(lines)
@@ -672,13 +619,10 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Register all topics
         for idx, (topic, type_str, qos) in enumerate(self._topics):
-            # Use positional args for TopicMetadata to be compatible with
-            # different rosbag2_py bindings (some are strict about kwargs
-            # or have slightly different signatures). The expected
-            # signature is TopicMetadata(name, type, serialization_format,
-            # offered_qos_profiles=''). We populate offered_qos_profiles with
-            # a small JSON blob when the QoS was provided so playback can
-            # recreate transient_local/reliable publishers.
+            # TopicMetadata(name, type, serialization_format,
+            # offered_qos_profiles). We populate offered_qos_profiles
+            # with a Jazzy-compatible YAML string so playback can
+            # recreate the correct QoS (e.g. transient_local/reliable).
             offered = _serialize_offered_qos(qos)
             topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
             writer.create_topic(topic_info)
