@@ -30,6 +30,7 @@
   - [Actions](#actions)
   - [Teleop](#teleop)
   - [Tasks, Rewards, and Signals](#tasks-rewards-and-signals)
+  - [Adjunct Topics](#adjunct-topics)
   - [Selector Syntax](#selector-syntax)
   - [Alignment Strategies](#alignment-strategies)
   - [Supported Message Types](#supported-message-types)
@@ -154,11 +155,11 @@ ros2 action send_goal /rosetta_client/run_policy \
 
 ### What is LeRobot?
 
-[LeRobot](https://github.com/huggingface/lerobot) is Hugging Face's open-source framework for [robot learning](https://huggingface.co/spaces/lerobot/robot-learning-tutorial). It provides a unified interface for recording demonstrations, training policies (ACT, Diffusion Policy, VLAs like SmolVLA and Pi0), and deploying them on hardware. LeRobot defines a standard dataset format (v3) built on Parquet files and MP4 videos, with a growing ecosystem of community-contributed datasets and models on the [Hugging Face Hub](https://huggingface.co/datasets?other=LeRobot).
+[LeRobot](https://github.com/huggingface/lerobot) is Hugging Face's open-source framework for [robot learning](https://huggingface.co/spaces/lerobot/robot-learning-tutorial). It provides tools for recording demonstrations, training policies (ACT, Diffusion Policy, VLAs like SmolVLA and Pi0), and deploying them on hardware. LeRobot defines a standard dataset format (v3) built on Parquet files and MP4 videos, with a growing ecosystem of community-contributed datasets and models on the [Hugging Face Hub](https://huggingface.co/datasets?other=LeRobot).
 
 ### What is Rosetta?
 
-Rosetta is a set of ROS2 packages and tools to bring state-of-the-art robot learning capabilites to the ROS 2 community. Specifically leveraging LeRobot for training and inference.
+Rosetta is a set of ROS2 packages and tools to bring state-of-the-art robot learning capabilites to the ROS 2 community. Specifically, Rosetta leverages LeRobot for training and inference.
 
 ## Architecture
 
@@ -654,6 +655,24 @@ signals:
 ```
 
 For VLA policies, the `task` string can also be provided via the `prompt` argument when recording or running a policy, so you don't need a ROS2 topic for it.
+
+### Adjunct Topics
+
+Adjunct topics are recorded to the bag file but have no LeRobot feature mapping. Use them for data you want preserved alongside your demonstrations but that isn't part of the training dataset: diagnostics, TF trees, debug streams, extra sensors.
+
+```yaml
+adjunct:
+  - topic: /tf
+    type: tf2_msgs/msg/TFMessage
+
+  - topic: /diagnostics
+    type: diagnostic_msgs/msg/DiagnosticArray
+
+  - topic: /imu/raw
+    type: sensor_msgs/msg/Imu
+```
+
+Because the bag preserves this data, you can always add a contract mapping for these topics later and re-run `port_bags.py` without re-recording.
 
 ### Selector Syntax
 
