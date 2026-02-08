@@ -500,6 +500,8 @@ ros2 action send_goal /rosetta_client/run_policy \
 | `feedback_rate_hz` | `2.0` | Execution feedback publish rate |
 | `launch_local_server` | `true` | Auto-start policy server subprocess |
 | `obs_similarity_atol` | `-1.0` | Observation filtering tolerance (-1.0 to disable)* |
+| `robot_type` | `rosetta` | LeRobot robot type (see [Using Native LeRobot Robots](#using-native-lerobot-robots)) |
+| `robot_config` | *(empty)* | Robot config JSON for non-rosetta types |
 | `log_level` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `configure` | `true` | Auto-configure on startup |
 | `activate` | `true` | Auto-activate on startup |
@@ -523,6 +525,28 @@ lerobot-record --robot.type=rosetta --robot.config_path=contract.yaml
 ```
 
 See [Imitation Learning on Real Robots](https://huggingface.co/docs/lerobot/il_robots) for LeRobot's native deployment workflow. The `rosetta_client_node` adds ROS2 action-based lifecycle management on top of this, which is convenient if your workflow is already ROS2-centric.
+
+### Using Native LeRobot Robots
+
+The `rosetta_client_node` also works with native LeRobot robots (SO-101, Koch, etc.) without the full Rosetta ROS2 pipeline. Set `robot_type` to any [registered LeRobot robot type](https://huggingface.co/docs/lerobot/robots) and pass the robot-specific configuration as a JSON string via `robot_config`.
+
+```bash
+# SO-101 arm with a camera
+ros2 launch rosetta rosetta_client_launch.py \
+    robot_type:=so101_follower \
+    robot_config:='{"port": "/dev/ttyACM1", "cameras": {"front": {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}}' \
+    pretrained_name_or_path:=my-org/my-policy
+```
+
+```bash
+# Koch arm, no camera
+ros2 launch rosetta rosetta_client_launch.py \
+    robot_type:=koch_follower \
+    robot_config:='{"port": "/dev/ttyACM0"}' \
+    pretrained_name_or_path:=my-org/my-policy
+```
+
+The `robot_config` JSON mirrors LeRobot's CLI pattern (`--robot.port=...`, `--robot.cameras="{...}"`). Any field accepted by the robot's config dataclass can be set here. When `robot_type` is not `rosetta`, `contract_path` is ignored.
 
 ---
 

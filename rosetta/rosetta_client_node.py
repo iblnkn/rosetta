@@ -44,8 +44,6 @@ from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from rosetta_interfaces.action import RunPolicy
 
-from lerobot_robot_rosetta import RosettaConfig
-
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
 SERVER_STOP_TIMEOUT_SEC = 5.0
@@ -105,6 +103,20 @@ class RosettaClientNode(LifecycleNode):
             "obs_similarity_atol", 1.0,
             ParameterDescriptor(description="L2 norm tolerance for observation similarity (-1.0 to disable)")
         )
+        self.declare_parameter(
+            "robot_type", "rosetta",
+            ParameterDescriptor(
+                description="LeRobot robot type (rosetta, so101_follower, koch_follower, etc.)",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
+            "robot_config", "",
+            ParameterDescriptor(
+                description='Robot config JSON for non-rosetta types (e.g. \'{"port": "/dev/ttyACM1"}\')',
+                read_only=True,
+            )
+        )
 
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
@@ -123,13 +135,38 @@ class RosettaClientNode(LifecycleNode):
         """Validate parameters and create action server."""
         self._contract_path = self.get_parameter("contract_path").value
         self._pretrained = self.get_parameter("pretrained_name_or_path").value
+        robot_type = self.get_parameter("robot_type").value
+        robot_config_str = self.get_parameter("robot_config").value
 
-        if not self._contract_path:
-            self.get_logger().error("contract_path parameter required")
-            return TransitionCallbackReturn.FAILURE
         if not self._pretrained:
             self.get_logger().error("pretrained_name_or_path parameter required")
             return TransitionCallbackReturn.FAILURE
+
+        # Validate robot-type-specific parameters
+        if robot_type == "rosetta":
+            if not self._contract_path:
+                self.get_logger().error(
+                    "contract_path parameter required when robot_type is 'rosetta'"
+                )
+                return TransitionCallbackReturn.FAILURE
+            if robot_config_str:
+                self.get_logger().warning(
+                    "robot_config is ignored when robot_type is 'rosetta' — "
+                    "robot configuration comes from the contract file"
+                )
+        else:
+            if not robot_config_str:
+                self.get_logger().error(
+                    f"robot_config parameter required when robot_type is '{robot_type}'. "
+                    f"Set it to a JSON string with robot-specific settings, e.g. "
+                    f"'{{\"port\": \"/dev/ttyACM1\"}}'"
+                )
+                return TransitionCallbackReturn.FAILURE
+            if self._contract_path:
+                self.get_logger().warning(
+                    "contract_path is ignored when robot_type is not 'rosetta' — "
+                    "robot configuration comes from robot_config parameter"
+                )
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -359,13 +396,67 @@ class RosettaClientNode(LifecycleNode):
             feedback.status = "executing"
             goal_handle.publish_feedback(feedback)
 
+    def _load_robot_config(self, robot_type: str):
+        """Instantiate a LeRobot RobotConfig from type name and JSON config string.
+
+        LeRobot uses draccus ChoiceRegistry for config resolution. The registry
+        is populated by @register_subclass decorators that fire at import time.
+        We must import config modules before calling get_choice_class. We import
+        only the lightweight config modules (not __init__.py) to avoid pulling in
+        hardware drivers for robots we don't need.
+        """
+        import importlib
+        import json
+        import pkgutil
+
+        import lerobot.cameras
+        import lerobot.robots
+        from lerobot.cameras.configs import CameraConfig
+        from lerobot.robots.config import RobotConfig
+
+        # Import config modules to populate the ChoiceRegistry.
+        # Convention: config_{pkg} or configuration_{pkg} (pure dataclasses,
+        # no hardware deps). Both prefixes are tried to handle inconsistencies.
+        for parent in (lerobot.robots, lerobot.cameras):
+            for _, pkg_name, ispkg in pkgutil.iter_modules(parent.__path__, parent.__name__ + "."):
+                if not ispkg:
+                    continue
+                short = pkg_name.rsplit(".", 1)[-1]
+                for prefix in ("config_", "configuration_"):
+                    try:
+                        importlib.import_module(f"{pkg_name}.{prefix}{short}")
+                        break
+                    except ImportError:
+                        pass
+
+        # Also discover third-party plugins (e.g. lerobot_robot_*)
+        from lerobot.utils.import_utils import register_third_party_plugins
+        register_third_party_plugins()
+
+        config_str = self.get_parameter("robot_config").value
+        kwargs = json.loads(config_str)
+        kwargs.setdefault("id", robot_type)
+
+        # Resolve nested camera configs (CameraConfig is also a ChoiceRegistry)
+        if "cameras" in kwargs:
+            for name, cam_dict in kwargs["cameras"].items():
+                if isinstance(cam_dict, dict):
+                    cam_type = cam_dict.pop("type")
+                    cam_cls = CameraConfig.get_choice_class(cam_type)
+                    kwargs["cameras"][name] = cam_cls(**cam_dict)
+
+        config_cls = RobotConfig.get_choice_class(robot_type)
+        return config_cls(**kwargs)
+
     def _build_config(self, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters."""
-        robot_config = RosettaConfig(
-            id="rosetta",
-            config_path=self._contract_path,
-        )
-        fps = robot_config.fps
+        robot_type = self.get_parameter("robot_type").value
+
+        if robot_type == "rosetta":
+            from lerobot_robot_rosetta import RosettaConfig
+            robot_config = RosettaConfig(id="rosetta", config_path=self._contract_path)
+        else:
+            robot_config = self._load_robot_config(robot_type)
 
         config_kwargs = dict(
             robot=robot_config,
@@ -374,11 +465,17 @@ class RosettaClientNode(LifecycleNode):
             pretrained_name_or_path=self._pretrained,
             policy_device=self.get_parameter("policy_device").value,
             task=task,
-            fps=fps,
             actions_per_chunk=self.get_parameter("actions_per_chunk").value,
             chunk_size_threshold=self.get_parameter("chunk_size_threshold").value,
             aggregate_fn_name=self.get_parameter("aggregate_fn_name").value,
         )
+
+        # Pass fps from robot config if available (e.g. RosettaConfig reads it from
+        # the contract). Native LeRobot robots don't carry fps — RobotClientConfig
+        # defaults to 30.
+        robot_fps = getattr(robot_config, "fps", None)
+        if robot_fps:
+            config_kwargs["fps"] = robot_fps
 
         # obs_similarity_atol: controls observation filtering in the policy server.
         # LeRobot's default similarity filtering (atol=1.0) skips observations where

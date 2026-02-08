@@ -57,3 +57,14 @@ rosetta_client:
     # - Set to positive value: filter observations within this L2 tolerance
     # Note: Requires LeRobot version with obs_similarity_atol support.
     obs_similarity_atol: -1.0
+
+    # LeRobot robot type
+    # "rosetta" for contract-based ROS2 robots (default)
+    # "so101_follower", "koch_follower", etc. for native LeRobot hardware
+    robot_type: "rosetta"
+
+    # Robot config as JSON (required for non-rosetta robot types, ignored for rosetta)
+    # Mirrors LeRobot CLI pattern: --robot.port=... --robot.cameras="{...}"
+    # Example: '{"port": "/dev/ttyACM1"}'
+    # With cameras: '{"port": "/dev/ttyACM1", "cameras": {"front": {"type": "opencv", "index_or_path": 0, "width": 640, "height": 480, "fps": 30}}}'
+    robot_config: ""

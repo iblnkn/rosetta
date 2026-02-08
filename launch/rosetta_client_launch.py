@@ -115,6 +115,16 @@ def generate_launch_description():
             default_value='-1.0',
             description='Observation filtering tolerance (-1.0 to disable)'
         ),
+        DeclareLaunchArgument(
+            'robot_type',
+            default_value='rosetta',
+            description='LeRobot robot type: rosetta, so101_follower, koch_follower, etc.'
+        ),
+        DeclareLaunchArgument(
+            'robot_config',
+            default_value='',
+            description='Robot config as JSON string (required for non-rosetta robot types)'
+        ),
         # Log level
         DeclareLaunchArgument(
             'log_level',
@@ -159,6 +169,8 @@ def generate_launch_description():
                 'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
                 'launch_local_server': LaunchConfiguration('launch_local_server'),
                 'obs_similarity_atol': LaunchConfiguration('obs_similarity_atol'),
+                'robot_type': LaunchConfiguration('robot_type'),
+                'robot_config': LaunchConfiguration('robot_config'),
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
