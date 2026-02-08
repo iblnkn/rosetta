@@ -275,20 +275,34 @@ class EpisodeRecorderNode(LifecycleNode):
         - Observation and action topics (from iter_specs)
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
+
+        Topics are deduplicated by name so each ROS2 topic is only
+        subscribed to (and written to the bag) once, even when the
+        contract references the same topic in multiple specs.
         """
+        seen: set[str] = set()
         topics: list[tuple[str, str, QoSProfile | int]] = []
 
         for spec in iter_specs(self._contract):
+            if spec.topic in seen:
+                continue
+            seen.add(spec.topic)
             qos = qos_profile_from_dict(spec.qos) or 10
             topics.append((spec.topic, spec.msg_type, qos))
 
         # Task topics
         for task in self._contract.tasks or []:
+            if task.topic in seen:
+                continue
+            seen.add(task.topic)
             qos = qos_profile_from_dict(task.qos) or 10
             topics.append((task.topic, task.type, qos))
 
         # Adjunct topics (record-only, no key mapping)
         for adj in self._contract.adjunct or []:
+            if adj.topic in seen:
+                continue
+            seen.add(adj.topic)
             qos = qos_profile_from_dict(adj.qos) or 10
             topics.append((adj.topic, adj.type, qos))
 
