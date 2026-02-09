@@ -616,15 +616,25 @@ class EpisodeRecorderNode(LifecycleNode):
             ]
             return "\n".join(lines)
         
-
         # Register all topics
-        for idx, (topic, type_str, qos) in enumerate(self._topics):
+        # Go back and fix for "offered" latter
+        ################################################################
+        # for idx, (topic, type_str, qos) in enumerate(self._topics):
             # TopicMetadata(name, type, serialization_format,
             # offered_qos_profiles). We populate offered_qos_profiles
             # with a Jazzy-compatible YAML string so playback can
             # recreate the correct QoS (e.g. transient_local/reliable).
-            offered = _serialize_offered_qos(qos)
-            topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
+        #    offered = _serialize_offered_qos(qos)
+        #    topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
+        #    writer.create_topic(topic_info)
+        ################################################################
+        for idx, (topic, type_str, _) in enumerate(self._topics):
+            topic_info = rosbag2_py.TopicMetadata(
+                id=idx,
+                name=topic,
+                type=type_str,
+                serialization_format="cdr",
+            )
             writer.create_topic(topic_info)
 
         # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
