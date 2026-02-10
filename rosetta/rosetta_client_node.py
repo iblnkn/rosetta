@@ -57,7 +57,7 @@ class RosettaClientNode(LifecycleNode):
     """ROS2 Lifecycle Action Server wrapping LeRobot's RobotClient for policy inference."""
 
     def __init__(self):
-        super().__init__("rosetta_client", enable_logger_service=True)
+        super().__init__("rosetta_client")
 
         # Parameters with descriptors for introspection (ros2 param describe)
         # Read-only parameters are set once at startup and cannot be changed
@@ -362,8 +362,9 @@ class RosettaClientNode(LifecycleNode):
     def _build_config(self, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters."""
         robot_config = RosettaConfig(
-            id="rosetta",
             config_path=self._contract_path,
+            # id is auto-populated from contract's robot_type (vortex_ctl)
+            use_sim_time=self.get_parameter("use_sim_time").value,
         )
         fps = robot_config.fps
 
