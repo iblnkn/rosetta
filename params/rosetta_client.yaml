@@ -11,7 +11,7 @@
 rosetta_client:
   ros__parameters:
     # Path to trained model (local path or HuggingFace repo_id)
-    pretrained_name_or_path: "/workspaces/rosetta_ws/models/act/act_pen_in_cup/050000/pretrained_model"
+    pretrained_name_or_path: "iblnk/act-turtlebot3_demo"
 
     # LeRobot policy server address (host:port)
     server_address: "127.0.0.1:8080"

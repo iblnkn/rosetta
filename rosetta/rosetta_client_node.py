@@ -130,6 +130,15 @@ class RosettaClientNode(LifecycleNode):
         if not self._pretrained:
             self.get_logger().error("pretrained_name_or_path parameter required")
             return TransitionCallbackReturn.FAILURE
+        # Distinguish local paths from HF repo IDs (e.g. "user/model").
+        # Local paths start with /, ./, or ../
+        _looks_local = self._pretrained.startswith(('/', './', '../'))
+        if _looks_local and not os.path.isdir(self._pretrained):
+            self.get_logger().error(
+                f"Local model path does not exist: {self._pretrained}. "
+                "Use a HuggingFace repo ID (e.g. 'user/model') or a valid local directory."
+            )
+            return TransitionCallbackReturn.FAILURE
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
