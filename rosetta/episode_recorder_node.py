@@ -559,81 +559,74 @@ class EpisodeRecorderNode(LifecycleNode):
         writer = rosbag2_py.SequentialWriter()
         writer.open(storage_options, converter_options)
 
-        # Helper to convert QoS info into the offered_qos_profiles string
-        def _serialize_offered_qos(q: QoSProfile | int) -> str:
-            # Emit a Jazzy-compatible YAML mapping string using
-            # human-readable enum names (e.g. "keep_last", "reliable").
-            # Unspecified durations use sec: 0, nsec: 0.
-            # Output begins with '- ' to represent a single-item list.
+        def _qos_to_rosbag2(q: QoSProfile | int) -> rosbag2_py._storage.QoS:
+            """Convert an rclpy QoSProfile (or int depth) to a rosbag2_py QoS."""
+            from rosbag2_py._storage import (
+                QoS as Rosbag2QoS,
+                Duration as Rosbag2Duration,
+                rmw_qos_history_policy_t,
+                rmw_qos_reliability_policy_t,
+                rmw_qos_durability_policy_t,
+                rmw_qos_liveliness_policy_t,
+            )
 
-            # Defaults matching standard ROS 2 QoS
-            history = "keep_last"
-            depth = 0
-            reliability = "reliable"
-            durability = "volatile"
-            liveliness = "automatic"
+            if isinstance(q, int):
+                return Rosbag2QoS(q).reliable()
 
-            if isinstance(q, QoSProfile):
-                try:
-                    depth = int(getattr(q, "depth", 0) or 0)
-                except Exception:
-                    pass
-                try:
-                    history = q.history.name.lower()
-                except Exception:
-                    pass
-                try:
-                    reliability = q.reliability.name.lower()
-                except Exception:
-                    pass
-                try:
-                    durability = q.durability.name.lower()
-                except Exception:
-                    pass
-                try:
-                    liveliness = q.liveliness.name.lower()
-                except Exception:
-                    pass
-            elif isinstance(q, int):
-                depth = int(q)
+            depth = int(getattr(q, "depth", 0) or 0)
+            bag_qos = Rosbag2QoS(depth)
 
-            lines = [
-                f"- history: {history}",
-                f"  depth: {depth}",
-                f"  reliability: {reliability}",
-                f"  durability: {durability}",
-                f"  deadline:",
-                f"    sec: 0",
-                f"    nsec: 0",
-                f"  lifespan:",
-                f"    sec: 0",
-                f"    nsec: 0",
-                f"  liveliness: {liveliness}",
-                f"  liveliness_lease_duration:",
-                f"    sec: 0",
-                f"    nsec: 0",
-                f"  avoid_ros_namespace_conventions: false",
-            ]
-            return "\n".join(lines)
-        
-        # Register all topics
-        # Go back and fix for "offered" latter
-        ################################################################
-        # for idx, (topic, type_str, qos) in enumerate(self._topics):
-            # TopicMetadata(name, type, serialization_format,
-            # offered_qos_profiles). We populate offered_qos_profiles
-            # with a Jazzy-compatible YAML string so playback can
-            # recreate the correct QoS (e.g. transient_local/reliable).
-        #    offered = _serialize_offered_qos(qos)
-        #    topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
-        #    writer.create_topic(topic_info)
-        ################################################################
-        for idx, (topic, type_str, _) in enumerate(self._topics):
+            history_map = {
+                "KEEP_LAST": rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
+                "KEEP_ALL": rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_ALL,
+            }
+            bag_qos = bag_qos.history(
+                history_map.get(q.history.name, rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_LAST)
+            )
+
+            rel_map = {
+                "RELIABLE": rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_RELIABLE,
+                "BEST_EFFORT": rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
+            }
+            bag_qos = bag_qos.reliability(
+                rel_map.get(q.reliability.name, rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_RELIABLE)
+            )
+
+            dur_map = {
+                "TRANSIENT_LOCAL": rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
+                "VOLATILE": rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_VOLATILE,
+            }
+            bag_qos = bag_qos.durability(
+                dur_map.get(q.durability.name, rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_VOLATILE)
+            )
+
+            live_map = {
+                "AUTOMATIC": rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_AUTOMATIC,
+                "MANUAL_BY_TOPIC": rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC,
+            }
+            bag_qos = bag_qos.liveliness(
+                live_map.get(q.liveliness.name, rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_AUTOMATIC)
+            )
+
+            def _dur(rclpy_dur) -> Rosbag2Duration:
+                ns = int(getattr(rclpy_dur, "nanoseconds", 0) or 0)
+                return Rosbag2Duration(ns // 1_000_000_000, ns % 1_000_000_000)
+
+            bag_qos = bag_qos.deadline(_dur(q.deadline))
+            bag_qos = bag_qos.lifespan(_dur(q.lifespan))
+            bag_qos = bag_qos.liveliness_lease_duration(_dur(q.liveliness_lease_duration))
+
+            return bag_qos
+
+        # Register all topics with QoS so playback recreates the correct
+        # QoS settings (e.g. transient_local/reliable).
+        for idx, (topic, type_str, qos) in enumerate(self._topics):
             topic_info = rosbag2_py.TopicMetadata(
                 id=idx,
                 name=topic,
                 type=type_str,
                 serialization_format="cdr",
+                offered_qos_profiles=[_qos_to_rosbag2(qos)],
             )
             writer.create_topic(topic_info)
 
