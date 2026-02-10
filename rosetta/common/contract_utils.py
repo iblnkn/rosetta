@@ -75,7 +75,7 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
 
     # Numeric types (float32, float64, int32, int64, bool)
     n = len(spec.names) if spec.names else 1
-    names = {"axes": list(spec.names)} if spec.names else None
+    names = list(spec.names) if spec.names else None
     return {"dtype": dtype, "shape": (n,), "names": names}
 
 
