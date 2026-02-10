@@ -179,7 +179,7 @@ def _build_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
             features[key] = {
                 "dtype": dtype,
                 "shape": (n,),
-                "names": {"axes": all_names} if all_names else None,
+                "names": all_names if all_names else None,
             }
 
     # Frame boundary markers
