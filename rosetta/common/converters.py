@@ -179,6 +179,10 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
     Checks for a custom decoder on the spec first, then falls back to the
     global registry.
 
+    When ``spec.unit_conversion == "rad2deg"`` the ROS message contains radians
+    but the dataset (and therefore the policy) expects degrees, so the decoded
+    numeric array is converted from radians to degrees.
+
     Args:
         msg: ROS message instance
         spec: Stream spec with msg_type and optional decoder path
@@ -192,13 +196,19 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
     # Check for custom decoder (experimental)
     if hasattr(spec, "decoder") and spec.decoder:
         fn = load_converter(spec.decoder)
-        return fn(msg, spec)
+        val = fn(msg, spec)
+    else:
+        # Fall back to registry
+        fn = DECODERS.get(spec.msg_type)
+        if not fn:
+            raise ValueError(f"No decoder registered for message type: {spec.msg_type}")
+        val = fn(msg, spec)
 
-    # Fall back to registry
-    fn = DECODERS.get(spec.msg_type)
-    if not fn:
-        raise ValueError(f"No decoder registered for message type: {spec.msg_type}")
-    return fn(msg, spec)
+    # Apply unit conversion: ROS (radians) -> dataset (degrees)
+    if getattr(spec, "unit_conversion", None) == "rad2deg" and isinstance(val, np.ndarray):
+        val = np.rad2deg(val)
+
+    return val
 
 
 def encode_value(
@@ -211,6 +221,10 @@ def encode_value(
     Checks for a custom encoder on the spec first, then falls back to the
     global registry.
 
+    When ``spec.unit_conversion == "rad2deg"`` the dataset stores degrees but
+    ROS expects radians, so the **inverse** conversion (deg → rad) is applied
+    before encoding.
+
     Args:
         spec: Action stream spec with msg_type, names, clamp, and optional encoder path
         action_vec: Flat array of action values
@@ -222,6 +236,10 @@ def encode_value(
     Raises:
         ValueError: If no encoder found for message type
     """
+    # Apply inverse unit conversion: dataset (degrees) -> ROS (radians)
+    if getattr(spec, "unit_conversion", None) == "rad2deg":
+        action_vec = np.deg2rad(action_vec)
+
     # Check for custom encoder (experimental)
     if hasattr(spec, "encoder") and spec.encoder:
         fn = load_converter(spec.encoder)

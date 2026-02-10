@@ -359,6 +359,7 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             dtype=dtype,
             qos=o.qos,
             decoder=o.decoder,
+            unit_conversion=o.unit_conversion,
         )
         items.append((o.topic, kwargs, o))
 
@@ -397,6 +398,7 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
             qos=a.publish_qos,
             decoder=a.decoder,
             encoder=a.encoder,
+            unit_conversion=a.unit_conversion,
         )
         items.append((a.publish_topic, kwargs, a))
 
@@ -434,6 +436,7 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
                 qos=o.qos,
                 namespace=None,
                 decoder=o.decoder,
+                unit_conversion=o.unit_conversion,
             )
 
 
@@ -489,6 +492,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             dtype=dtype,
             qos=o.qos,
             decoder=o.decoder,
+            unit_conversion=o.unit_conversion,
         )
         items.append((o.topic, kwargs, o))
 
@@ -521,6 +525,7 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
             qos=a.publish_qos,
             decoder=a.decoder,
             encoder=a.encoder,
+            unit_conversion=a.unit_conversion,
         )
         items.append((a.publish_topic, kwargs, a))
 
