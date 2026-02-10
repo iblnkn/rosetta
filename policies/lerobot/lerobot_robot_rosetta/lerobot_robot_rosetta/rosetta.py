@@ -476,7 +476,14 @@ class Rosetta(Robot):
             rclpy.init()
             self._owns_rclpy = True
 
-        self._node = _RosettaLifecycleNode(f"rosetta_{self.config.id}", self._config)
+        self._node = _RosettaLifecycleNode(
+            f"rosetta_{self.config.id}", self._config,
+            # Ignore global CLI args (e.g. __node:= remap from the launch system)
+            # so this internal node keeps its own name and services separate from
+            # the launch-managed lifecycle node. Side-effect: --log-level from the
+            # launch CLI won't apply to this node (it uses the default level).
+            use_global_arguments=False,
+        )
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
 
