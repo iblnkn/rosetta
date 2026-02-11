@@ -139,11 +139,15 @@ def stamp_from_header_ns(msg) -> int | None:
     except (TypeError, ValueError, AttributeError):
         return None
 
-    ns = sec * 1_000_000_000 + nsec
-    return ns if ns > 0 else None
+    # Accept timestamps >= 0 (simulation starts at time 0)
+    # Only reject if both sec and nanosec are 0 (uninitialized)
+    if sec == 0 and nsec == 0:
+        return None
+    
+    return sec * 1_000_000_000 + nsec
 
 
-def get_message_timestamp_ns(msg, spec: "ObservationStreamSpec", fallback_ns: int) -> int:
+def get_message_timestamp_ns(msg, spec: "ObservationStreamSpec", fallback_ns: int) -> tuple[int, bool]:
     """Extract timestamp from message based on spec configuration.
 
     Args:
@@ -152,10 +156,11 @@ def get_message_timestamp_ns(msg, spec: "ObservationStreamSpec", fallback_ns: in
         fallback_ns: Fallback timestamp if header unavailable
 
     Returns:
-        Timestamp in nanoseconds.
+        Tuple of (timestamp_ns, used_fallback).
+        used_fallback is True if header was unavailable/invalid.
     """
     if spec.stamp_src == "header":
         ts_ns = stamp_from_header_ns(msg)
         if ts_ns is not None:
-            return ts_ns
-    return fallback_ns
+            return (ts_ns, False)  # Successfully extracted from header
+    return (fallback_ns, True)  # Used fallback (receive time)

@@ -7,25 +7,74 @@
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p> -->
 
-**Rosetta** bridges ROS2 robots to [LeRobot](https://github.com/huggingface/lerobot). Write a contract YAML that maps your ROS2 topics to LeRobot features, then use that contract for recording, dataset conversion, and deployment. Works with any ROS2 robot using [supported message types](#supported-message-types), or bring your own [encoders/decoders](#extending-experimental).
+**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots. 
 
-Rosetta implements LeRobot's [Robot](https://huggingface.co/docs/lerobot/integrate_hardware) and [Teleoperator](https://huggingface.co/docs/lerobot/integrate_hardware#adding-a-teleoperator) interfaces, so you can use LeRobot's CLI tools directly.
+## Table of Contents
 
-> **Recent Changes:**
-> - **Contract:** `name` → `robot_type`, `rate_hz` → `fps`
-> - **Nodes:** `PolicyBridge` → `rosetta_client_node`, `EpisodeRecorderServer` → `episode_recorder_node`
-> - **Actions:** `/run_policy` → `/rosetta_client/run_policy`, `/record_episode` → `/episode_recorder/record_episode`
-> - **Launch:** `turtlebot_policy_bridge.launch.py` → `rosetta_client_launch.py`, `turtlebot_recorder_server.launch.py` → `episode_recorder_launch.py`
-> - **Conversion:** `bag_to_lerobot.py` → `port_bags.py` (now processes directories, supports sharding)
-> - **Inference:** Policy loading moved to LeRobot's async gRPC server
-> - **New:** `lerobot_teleoperator_rosetta` (experimental), `rosetta_rl` (coming soon)
+- [Recent Changes](#recent-changes)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+  - [What is LeRobot?](#what-is-lerobot)
+  - [What is Rosetta?](#what-is-rosetta)
+- [Architecture](#architecture)
+- [The Contract](#the-contract)
+- [Recording Episodes](#recording-episodes)
+  - [Why Record to Bag Files?](#why-record-to-bag-files)
+- [Converting Bags to Datasets](#converting-bags-to-datasets)
+- [Training a Policy](#training-a-policy)
+  - [Supported Policies](#supported-policies)
+- [Deploying Policies](#deploying-policies)
+- [Contract Reference](#contract-reference)
+  - [Minimal Example](#minimal-example)
+  - [Observations](#observations)
+  - [Actions](#actions)
+  - [Teleop](#teleop)
+  - [Tasks, Rewards, and Signals](#tasks-rewards-and-signals)
+  - [Adjunct Topics](#adjunct-topics)
+  - [Selector Syntax](#selector-syntax)
+  - [Alignment Strategies](#alignment-strategies)
+  - [Supported Message Types](#supported-message-types)
+  - [Custom Encoders/Decoders (Experimental)](#custom-encodersdecoders-experimental)
+- [LeRobot Data Model Reference](#lerobot-data-model-reference)
+  - [Key System](#key-system)
+  - [EnvTransition](#envtransition)
+  - [Data Types](#data-types)
+  - [Policy Feature Compatibility](#policy-feature-compatibility)
+- [License](#license)
 
-## Workflow
+<a id="recent-changes"></a>
+<details>
+<summary><strong>Recent Changes</strong></summary>
 
-**1. Define** a contract for your robot:
+- **Contract:** `name` → `robot_type`, `rate_hz` → `fps`
+- **Nodes:** `PolicyBridge` → `rosetta_client_node`, `EpisodeRecorderServer` → `episode_recorder_node`
+- **Actions:** `/run_policy` → `/rosetta_client/run_policy`, `/record_episode` → `/episode_recorder/record_episode`
+- **Launch:** `turtlebot_policy_bridge.launch.py` → `rosetta_client_launch.py`, `turtlebot_recorder_server.launch.py` → `episode_recorder_launch.py`
+- **Conversion:** `bag_to_lerobot.py` → `port_bags.py` (now processes directories, supports sharding)
+- **Inference:** Policy loading moved to LeRobot's async gRPC server
+- **New:** `lerobot_teleoperator_rosetta` (experimental), `rosetta_rl` (coming soon)
+
+</details>
+
+---
+
+## Quick Start
+
+```
+  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+  │  DEFINE  │     │  RECORD  │     │ CONVERT  │     │  TRAIN   │     │  DEPLOY  │
+  │ Contract │────▶│  Demos   │────▶│ Dataset  │────▶│  Policy  │────▶│ on Robot │
+  └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
+```
+
+[**Define**](#the-contract) a contract that maps your ROS2 topics to [LeRobot](https://github.com/huggingface/lerobot) features, [**record**](#recording-episodes) demos to bag files, [**convert**](#converting-bags-to-datasets) them to a LeRobot dataset, [**train**](#training-a-policy) a policy, and [**deploy**](#deploying-policies) it back to your robot.
+
+> **Getting started?** The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) devcontainer handles the non-trivial setup of getting ROS2, Rosetta, and LeRobot installed together.
+
+**1. Define** a [contract](#the-contract) for your robot:
 
 ```yaml
-# contract.yaml
+# my_contract.yaml
 robot_type: my_robot
 fps: 30
 
@@ -64,13 +113,16 @@ ros2 action send_goal /episode_recorder/record_episode \
     rosetta_interfaces/action/RecordEpisode "{prompt: 'pick up red block'}"
 ```
 
+> **How many episodes?** Plan on recording **50–200+ demonstrations** depending on task complexity. More diverse, high-quality demonstrations tend to produce better policies. For practical data collection tips, see [Collecting Your Dataset](https://abenstirling.com/lerobot/) and [Improving Your Robotics AI Model](https://docs.phospho.ai/learn/improve-robotics-ai-model).
+
 **3. Convert** bags to LeRobot dataset:
 
 ```bash
 python -m rosetta.port_bags \
-    --raw-dir ./recordings \
-    --contract contract.yaml \
-    --repo-id my-org/my-dataset
+    --raw-dir ./datasets/bags \
+    --contract my_contract.yaml \
+    --repo-id my-org/my-dataset \
+    --root ./datasets/lerobot
 ```
 
 **4. Train** with LeRobot:
@@ -99,6 +151,16 @@ ros2 action send_goal /rosetta_client/run_policy \
 
 ---
 
+## Core Concepts
+
+### What is LeRobot?
+
+[LeRobot](https://github.com/huggingface/lerobot) is Hugging Face's open-source framework for [robot learning](https://huggingface.co/spaces/lerobot/robot-learning-tutorial). It provides tools for recording demonstrations, training policies (ACT, Diffusion Policy, VLAs like SmolVLA and Pi0), and deploying them on hardware. LeRobot defines a standard dataset format (v3) built on Parquet files and MP4 videos, with a growing ecosystem of community-contributed datasets and models on the [Hugging Face Hub](https://huggingface.co/datasets?other=LeRobot).
+
+### What is Rosetta?
+
+Rosetta is a set of ROS2 packages and tools to bring state-of-the-art robot learning capabilites to the ROS 2 community. Specifically, Rosetta leverages LeRobot for training and inference.
+
 ## Architecture
 
 Rosetta consists of five packages that implement LeRobot's official interfaces:
@@ -106,10 +168,20 @@ Rosetta consists of five packages that implement LeRobot's official interfaces:
 | Package | Purpose |
 |---------|---------|
 | `rosetta` | Core library, nodes, bag conversion |
-| `rosetta_interfaces` | ROS2 action/service definitions |
-| `lerobot_robot_rosetta` | LeRobot Robot plugin |
-| `lerobot_teleoperator_rosetta` | LeRobot Teleoperator plugin (experimental) |
+| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS2 action/service definitions |
+| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
+| [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
 | `rosetta_rl` | HIL-SERL reinforcement learning (coming soon) |
+
+```
+rosetta/
+├── launch/
+│   ├── episode_recorder_launch.py
+│   └── rosetta_client_launch.py
+└── params/
+    ├── episode_recorder.yaml    # Default config for Episode Recorder
+    └── rosetta_client.yaml      # Default config for Rosetta Client
+```
 
 ### LeRobot Plugin Architecture
 
@@ -126,6 +198,8 @@ The `lerobot_robot_rosetta` and `lerobot_teleoperator_rosetta` packages implemen
 - Hardware drivers exist elsewhere in the ROS2 graph
 - The contract YAML defines topic-to-feature mapping
 
+**Important:** Because `lerobot_robot_rosetta` creates a ROS2 lifecycle node internally, **your system needs ROS2 installed** to use it, even when invoking it through LeRobot's standard CLI tools. When `rosetta_client_node` launches inference, the chain is: `rosetta_client_node` (ROS2 node) → LeRobot `RobotClient` → `lerobot_robot_rosetta` (also a ROS2 node) → your robot's ROS2 topics. Both the convenience node and the robot plugin are ROS2 nodes running in the same ROS2 graph.
+
 This means any ROS2 robot can use LeRobot's tools. Define a contract and use `--robot.type=rosetta`.
 
 ### ROS2 Lifecycle Integration
@@ -140,11 +214,12 @@ LeRobot's `connect()` / `disconnect()` map to ROS2 lifecycle transitions:
 
 ### Policy Inference
 
-The `rosetta_client_node` delegates inference to LeRobot's async gRPC policy server. This provides:
+The `rosetta_client_node` delegates inference to LeRobot's async gRPC policy server (`lerobot.async_inference.policy_server`). This server is a standard LeRobot component with no ROS2 dependency and can run on any machine with LeRobot and a GPU. Benefits:
 
 - Better GPU memory management
 - Support for all LeRobot policy types without code changes
 - Consistent behavior between training and deployment
+- Can run on a remote machine, letting a resource-constrained robot offload inference over the network
 
 ### rosetta_ws Workspace
 
@@ -152,34 +227,70 @@ We provide [rosetta_ws](https://github.com/iblnkn/rosetta_ws), a devcontainer wo
 
 ---
 
-## Nodes
+## The Contract
 
-Both nodes use **parameter files** (`params/`) as the source of truth for default values. All parameters are exposed as launch arguments, so you can override any parameter at launch time without editing the params file.
+The contract defines the translation between ROS 2 topics and the keys LeRobot expects.
 
+| ROS2 Side | | LeRobot Side |
+|-----------|---|-------------|
+| `/front_camera/image_raw/compressed` | &rarr; | `observation.images.front` |
+| `/follower_arm/joint_states` (position fields) | &rarr; | `observation.state` |
+| `/imu/data` (orientation, angular_velocity) | &rarr; | `observation.state.imu` |
+| `/leader_arm/joint_states` (position fields) | &larr; | `action` |
+| `/base_controller/cmd_vel` (linear, angular) | &larr; | `action.base` |
+| `/task_prompt` (String) | &rarr; | `task` |
+| `/reward_signal` (Float64) | &rarr; | `next.reward` |
+
+On the ROS2 side, data lives in typed messages on named topics with rich structure (headers, arrays, nested fields). On the LeRobot side, data lives in flat dictionaries with dot-separated string keys and numpy/tensor values. The contract maps one to the other, handling type conversion, field extraction, timestamp alignment, and resampling.
+
+Here's how a concrete contract entry translates a ROS2 topic to a LeRobot feature:
+
+```yaml
+- key: observation.state
+  topic: /follower_arm/joint_states
+  type: sensor_msgs/msg/JointState
+  selector:
+    names: [position.shoulder_pan, position.shoulder_lift, position.elbow,
+            position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
 ```
-rosetta/
-├── launch/
-│   ├── episode_recorder_launch.py
-│   └── rosetta_client_launch.py
-└── params/
-    ├── episode_recorder.yaml    # Default config for Episode Recorder
-    └── rosetta_client.yaml      # Default config for Rosetta Client
+
+At each timestep, this:
+1. **Subscribes** to `/follower_arm/joint_states` (a `JointState` message)
+2. **Extracts** the named fields using dot notation (`position.shoulder_pan` → `msg.position[msg.name.index("shoulder_pan")]`)
+3. **Assembles** a numpy array: `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]` (dtype `float64`)
+4. **Stores** it under the key `observation.state` in the LeRobot dataset
+
+**Multi-topic concatenation**: Multiple contract entries can map to the **same key**. Their values are concatenated in declaration order. This lets you combine data from separate ROS2 topics into a single feature vector:
+
+```yaml
+observations:
+  # These two entries share the same key; values are concatenated
+  - key: observation.state
+    topic: /arm/joint_states
+    type: sensor_msgs/msg/JointState
+    selector:
+      names: [position.j1, position.j2, position.j3]
+
+  - key: observation.state
+    topic: /gripper/state
+    type: std_msgs/msg/Float32
+    # Result: observation.state = [j1, j2, j3, gripper] (4D vector)
 ```
+This is important because, as shown in [Policy Feature Compatibility](#policy-feature-compatibility), all of the available core policies depend on explicit names for most keys. If you have multiple ros2 topics you would like to use for observation, the most straightforward way to achieve this is to include both topics with the same key name.
 
-**Parameter loading order:**
-1. Params file loads first (provides defaults)
-2. Launch arguments override params file values
+For images, each image key must be unique; image features cannot be concatenated.
 
-To see all available launch arguments:
+A minimal contract typically only needs `observations` and `actions`. See the full [Contract Reference](#contract-reference) for all options, and the [LeRobot Data Model Reference](#lerobot-data-model-reference) for how keys, features, and policies interact.
 
-```bash
-ros2 launch rosetta episode_recorder_launch.py --show-args
-ros2 launch rosetta rosetta_client_launch.py --show-args
-```
+---
 
-### Episode Recorder
+## Recording Episodes
 
-Records contract-specified topics to rosbag. Uses ROS2 lifecycle management.
+The `episode_recorder_node` is a convenience node that records contract-specified topics to [rosbag2](https://github.com/ros2/rosbag2) files. It reads the contract to determine which topics to subscribe to, then lets you start and stop recording via ROS2 actions, with feedback on duration and message count.
+
+**This node is not the only way to record compatible bags.** Any method that produces a valid rosbag2 file containing the contract's topics will work, including `ros2 bag record`, custom scripts using `rosbag2_py`, or third-party recording tools. The `episode_recorder_node` makes this convenient within the ROS2 ecosystem: you define your topics once in the contract, and it handles subscription setup, bag lifecycle, and action-based control. It may also be useful standalone for any workflow where you need to define a set of topics and start/stop recording programmatically via ROS2 actions.
+
+> Both Rosetta nodes use parameter files (`params/`) as defaults. All parameters are also exposed as launch arguments, which override the defaults. Run `ros2 launch rosetta <launch_file> --show-args` to see all options.
 
 ```bash
 ros2 launch rosetta episode_recorder_launch.py contract_path:=/path/to/contract.yaml
@@ -221,72 +332,25 @@ ros2 launch rosetta episode_recorder_launch.py \
     storage_id:=sqlite3
 ```
 
-### Rosetta Client
+### Why Record to Bag Files?
 
-Runs policy inference via LeRobot's async inference server.
+Rosetta records demonstrations to [rosbag2](https://github.com/ros2/rosbag2) files first, then converts them to LeRobot datasets in a separate step. This is a deliberate design choice with several benefits:
 
-```bash
-ros2 launch rosetta rosetta_client_launch.py contract_path:=/path/to/contract.yaml
-```
+- **Preserves raw data.** Bag files store every message at its original rate and timestamp, with no alignment, downsampling, or lossy transformation. This means you can reprocess the same recordings later with a different contract (changing feature keys, adjusting resampling rates, adding new topics) without re-recording.
+- **Familiar to ROS2 users.** Bag files are the standard data format in the ROS2 ecosystem, with mature tooling for [recording, playback, inspection](https://docs.ros.org/en/jazzy/Tutorials/Beginner-CLI-Tools/Recording-And-Playing-Back-Data/Recording-And-Playing-Back-Data.html), and analysis. Any tool that works with bag files works with your recorded data.
+- **Stores data beyond what LeRobot needs.** Bags can include topics that don't map to any LeRobot feature: diagnostics, TF trees, debug streams, extra sensors. This data is preserved for analysis, debugging, or future use even though it isn't part of the training dataset.
+- **Leverages MCAP.** Rosetta defaults to [MCAP](https://mcap.dev/) storage, which provides [high-performance](https://mcap.dev/guides/benchmarks/rosbag2-storage-plugins) random-access reads, efficient compression, and broad ecosystem support beyond ROS2.
+- **Write-optimized for live recording.** Bag files (especially MCAP) are designed for high-throughput sequential writes with minimal overhead, well-suited for capturing live sensor data. LeRobot datasets (Parquet + MP4) are read-optimized for training but involve more overhead when writing live, including in-memory buffering and post-episode video encoding.
 
-Run policy:
 
-```bash
-ros2 action send_goal /rosetta_client/run_policy \
-    rosetta_interfaces/action/RunPolicy "{prompt: 'task description'}"
-```
+## Converting Bags to Datasets
 
-**Parameters** (all available as launch arguments):
+`port_bags.py` converts rosbag2 files to LeRobot datasets using the contract for key mapping, timestamp alignment, resampling, and dtype conversion. It applies the same `StreamBuffer` resampling logic used during live inference, ensuring your offline dataset matches what the robot would see at runtime.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `contract_path` | `contracts/so_101.yaml` | Path to contract YAML |
-| `pretrained_name_or_path` | *(see params file)* | HuggingFace model ID or local path |
-| `server_address` | `127.0.0.1:8080` | Policy server address |
-| `policy_type` | `act` | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc. |
-| `policy_device` | `cuda` | Inference device: `cuda`, `cpu`, `mps`, or `cuda:0` |
-| `actions_per_chunk` | `30` | Actions per inference chunk |
-| `chunk_size_threshold` | `0.95` | When to request new chunk (0.0-1.0) |
-| `aggregate_fn_name` | `weighted_average` | Chunk aggregation: `weighted_average`, `latest_only`, `average`, `conservative` |
-| `feedback_rate_hz` | `2.0` | Execution feedback publish rate |
-| `launch_local_server` | `true` | Auto-start policy server subprocess |
-| `obs_similarity_atol` | `-1.0` | Observation filtering tolerance (-1.0 to disable)* |
-| `log_level` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
-| `configure` | `true` | Auto-configure on startup |
-| `activate` | `true` | Auto-activate on startup |
+While you could write your own conversion script using the primitives in `rosetta.common` (contract loader, decoders, stream buffers), `port_bags.py` handles the full pipeline: reading bags, applying the contract, encoding video, building the LeRobot dataset structure, and optionally pushing to the Hub. Because the raw bag preserves all data without transformation, you can re-run `port_bags.py` with an updated contract (changing keys, adjusting `fps`, adding or removing features) without re-recording.
 
-*\*`obs_similarity_atol`: The policy server filters observations that are "too similar" (L2 norm of state difference < threshold). The default threshold (1.0) assumes joint states change significantly between frames. Many robots have smaller movements, causing most observations to be skipped. Set to `-1.0` to disable filtering.*
 
-**Examples:**
-
-```bash
-# Run with a different model
-ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/path/to/contract.yaml \
-    pretrained_name_or_path:=my-org/my-policy
-
-# Use SmolVLA with a remote server
-ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/path/to/contract.yaml \
-    pretrained_name_or_path:=lerobot/smolvla_base \
-    policy_type:=smolvla \
-    launch_local_server:=false \
-    server_address:=192.168.1.100:8080
-
-# Fine-tune inference behavior
-ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/path/to/contract.yaml \
-    actions_per_chunk:=50 \
-    aggregate_fn_name:=latest_only
-```
-
-### port_bags
-
-Converts ROS2 bags to LeRobot datasets using contract-driven decoding.
-
-`port_bags.py` follows LeRobot's dataset porting conventions. For large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples.
-
-#### Relationship to LeRobot
+### Relationship to LeRobot
 
 `port_bags.py` mirrors the interface of LeRobot's example porters (like `port_droid.py`):
 
@@ -299,10 +363,10 @@ python examples/port_datasets/port_droid.py \
 
 # Rosetta's port_bags.py (same pattern + contract)
 python -m rosetta.port_bags \
-    --raw-dir /data/recordings \
+    --raw-dir ./datasets/bags \
     --contract contract.yaml \
     --repo-id my_org/my_dataset \
-    --push-to-hub
+    --root ./datasets/lerobot
 ```
 
 **Rosetta-specific additions:**
@@ -313,160 +377,24 @@ python -m rosetta.port_bags \
 | `--root` | Override output directory (LeRobot defaults to `~/.cache/huggingface/lerobot`) |
 | `--vcodec` | Video codec selection (not in base LeRobot porters) |
 
-#### Basic Usage
+### Basic Usage
 
 ```bash
 python -m rosetta.port_bags \
-    --raw-dir /path/to/bags \
-    --contract /path/to/contract.yaml \
-    --repo-id my_dataset
-```
-
-#### All Arguments
-
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--raw-dir` | Yes | Directory containing bag subdirectories (each with `metadata.yaml`) |
-| `--contract` | Yes | Path to Rosetta contract YAML |
-| `--repo-id` | No | Dataset name or HuggingFace repo ID. Defaults to `--raw-dir` directory name |
-| `--root` | No | Parent directory for datasets. Dataset saved to `root/repo-id`. Defaults to `~/.cache/huggingface/lerobot` |
-| `--push-to-hub` | No | Upload to HuggingFace Hub after conversion (flag) |
-| `--num-shards` | No | Total shards for parallel processing (SLURM) |
-| `--shard-index` | No | Index of this shard (0 to num-shards-1) |
-| `--vcodec` | No | Video encoder (default: `libsvtav1`). Options: `libx264` (fast), `libsvtav1` (good compression), `h264_nvenc` (GPU) |
-
-#### Examples
-
-**Convert to local directory:**
-
-```bash
-# Bags at /data/recordings, output to /data/lerobot/my_robot_dataset
-python -m rosetta.port_bags \
-    --raw-dir /data/recordings \
-    --contract /home/user/my_robot_contract.yaml \
-    --repo-id my_robot_dataset \
-    --root /data/lerobot
-
-# Use faster H.264 encoder instead of default AV1
-python -m rosetta.port_bags \
-    --raw-dir /data/recordings \
-    --contract /home/user/my_robot_contract.yaml \
-    --repo-id my_robot_dataset \
-    --root /data/lerobot \
-    --vcodec libx264
-```
-
-**Convert and push to HuggingFace:**
-
-```bash
-python -m rosetta.port_bags \
-    --raw-dir ./recordings \
+    --raw-dir ./datasets/bags \
     --contract ./contract.yaml \
-    --repo-id my-org/my-dataset \
-    --push-to-hub
+    --repo-id my_dataset \
+    --root ./datasets/lerobot
 ```
 
-**Parallel conversion (recommended for faster processing):**
+ For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples. 
 
-The conversion bottleneck is video encoding (SVT-AV1). Use sharding to process multiple bags in parallel:
 
-```bash
-# Using the parallel wrapper script (handles sharding + aggregation)
-./scripts/convert_bags_parallel.sh \
-    /path/to/bags \
-    /path/to/contract.yaml \
-    my_dataset \
-    /path/to/output \
-    4  # number of parallel shards
-```
-
-Or manually with sharding:
-
-```bash
-# Run multiple shards in parallel (in separate terminals or background)
-for i in 0 1 2 3; do
-    python -m rosetta.port_bags \
-        --raw-dir /path/to/bags \
-        --contract /path/to/contract.yaml \
-        --repo-id my_dataset_shard_$i \
-        --root /path/to/shards \
-        --num-shards 4 \
-        --shard-index $i &
-done
-wait
-
-# Then aggregate the shards
-python -c "
-from lerobot.datasets.aggregate import aggregate_datasets
-from pathlib import Path
-
-aggregate_datasets(
-    repo_ids=['my_dataset_shard_0', 'my_dataset_shard_1', 'my_dataset_shard_2', 'my_dataset_shard_3'],
-    aggr_repo_id='my_dataset',
-    roots=[Path('/path/to/shards')] * 4,
-    aggr_root=Path('/path/to/output'),
-)
-"
-```
-
-**Large-scale conversion with SLURM:**
-
-```bash
-python -m rosetta.port_bags \
-    --raw-dir ./recordings \
-    --contract ./contract.yaml \
-    --repo-id my-org/my-dataset \
-    --num-shards 100 \
-    --shard-index $SLURM_ARRAY_TASK_ID
-```
-
-For SLURM cluster workflows with `datatrove`, aggregation, and upload scripts, see the [LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3).
-
-#### Directory Structure
-
-The `--raw-dir` should contain bag directories, each identified by a `metadata.yaml` file:
-
-```
-raw-dir/
-├── episode_001/
-│   ├── metadata.yaml
-│   └── episode_001_0.mcap
-├── episode_002/
-│   ├── metadata.yaml
-│   └── episode_002_0.mcap
-└── ...
-```
-
-The output LeRobot dataset is saved to `{root}/{repo-id}/`:
-
-```
-root/
-└── my_dataset/
-    ├── meta/
-    │   ├── info.json
-    │   ├── episodes.jsonl
-    │   └── ...
-    └── data/
-        └── ...
-```
 
 ## Training a Policy
 
-Once you've converted your ROS2 bags to a LeRobot dataset, train with `lerobot-train`.
+Once you've converted your ROS2 bags to a LeRobot dataset, [train a policy](https://huggingface.co/docs/lerobot/il_robots#train-a-policy) with `lerobot-train`.
 
-### Supported Policies
-
-| Policy | Type | Best For |
-|--------|------|----------|
-| **ACT** | Behavior Cloning | General manipulation, fast training (recommended for beginners) |
-| **Diffusion Policy** | Diffusion | Complex multi-modal tasks |
-| **SmolVLA** | VLA | Efficient VLA, good for resource-constrained setups |
-| **Pi0 / Pi0Fast** | VLA | Physical Intelligence foundation models |
-| **Pi0.5** | VLA | Open-world generalization |
-| **NVIDIA GR00T N1.5** | VLA | Humanoid and general robotics |
-| **X-VLA** | VLA | Cross-embodiment with soft prompts |
-| **VQ-BeT** | Behavior Transformer | Discrete action spaces |
-| **TDMPC** | Model-based RL | Sample-efficient learning |
 
 ### Quick Start: ACT
 
@@ -481,7 +409,7 @@ lerobot-train \
 
 ### Fine-tuning VLA Models
 
-VLA models are large pre-trained vision-language-action models. Use PEFT/LoRA for efficient fine-tuning:
+VLA models are large pre-trained vision-language-action models. Use [PEFT](https://huggingface.co/docs/peft/index)/[LoRA](https://huggingface.co/docs/peft/task_guides/lora_based_methods) for [efficient fine-tuning](https://huggingface.co/docs/lerobot/peft_training):
 
 ```bash
 lerobot-train \
@@ -495,17 +423,9 @@ lerobot-train \
     --peft.r=64
 ```
 
-**Available pre-trained models:**
-
-| Policy | Default Pretrained |
-|--------|-------------------|
-| smolvla | `lerobot/smolvla_base` |
-| pi0 | `lerobot/pi0_base` |
-| pi0fast | `lerobot/pi0fast_base` |
-| pi05 | `lerobot/pi05_base` |
-| xvla | `lerobot/xvla-base` |
-
 ### Multi-GPU Training
+
+LeRobot supports [training on multiple GPUs](https://huggingface.co/docs/lerobot/multi_gpu_training) using [Hugging Face Accelerate](https://huggingface.co/docs/accelerate/index):
 
 ```bash
 accelerate launch \
@@ -533,15 +453,93 @@ huggingface-cli upload my-org/my-policy \
     outputs/train/my_run/checkpoints/last/pretrained_model
 ```
 
-### Further Reading
 
-- **[Imitation Learning on Real Robots](https://huggingface.co/docs/lerobot/il_robots)** - Full tutorial
-- **[Multi-GPU Training](https://huggingface.co/docs/lerobot/multi_gpu_training)** - Scale with Accelerate
-- **[PEFT/LoRA Fine-tuning](https://huggingface.co/docs/lerobot/peft_training)** - Efficient VLA fine-tuning
+### Supported Policies
+
+| Policy | Type | Best For |
+|--------|------|----------|
+| [**ACT**](https://huggingface.co/docs/lerobot/act) | Behavior Cloning | General manipulation, fast training (recommended for beginners) |
+| [**SmolVLA**](https://huggingface.co/docs/lerobot/smolvla) | VLA | Efficient VLA, good for resource-constrained setups |
+| [**Pi0**](https://huggingface.co/docs/lerobot/pi0) / [**Pi0Fast**](https://huggingface.co/docs/lerobot/pi0fast) | VLA | Physical Intelligence foundation models |
+| [**Pi0.5**](https://huggingface.co/docs/lerobot/pi05) | VLA | Open-world generalization |
+| [**NVIDIA GR00T N1.5**](https://huggingface.co/docs/lerobot/groot) | VLA | Humanoid and general robotics |
+| [**Wall-X**](https://huggingface.co/docs/lerobot/walloss) | VLA | Qwen 2.5-VL backbone, multi-embodiment |
+| [**X-VLA**](https://huggingface.co/docs/lerobot/xvla) | VLA | Cross-embodiment with soft prompts |
+
+## Deploying Policies
+
+The `rosetta_client_node` is a convenience node that wraps LeRobot's inference pipeline in ROS2 actions. It lets you start and stop policy execution via `ros2 action send_goal`, with feedback on inference progress. It can optionally launch a local LeRobot gRPC policy server as a subprocess, or connect to a remote one.
+
+Launch Client:
+
+```bash
+ros2 launch rosetta rosetta_client_launch.py contract_path:=/path/to/contract.yaml
+```
+
+Run policy:
+
+```bash
+ros2 action send_goal /rosetta_client/run_policy \
+    rosetta_interfaces/action/RunPolicy "{prompt: 'task description'}"
+```
+
+**Remote inference:** When `launch_local_server` is `false`, the node connects to a LeRobot gRPC policy server at `server_address`. This server is a standard LeRobot component with no ROS2 dependency. It can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server.
+
+**Parameters** (all available as launch arguments):
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `contract_path` | `contracts/so_101.yaml` | Path to contract YAML |
+| `pretrained_name_or_path` | *(see params file)* | HuggingFace model ID or local path |
+| `server_address` | `127.0.0.1:8080` | Policy server address |
+| `policy_type` | `act` | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc. |
+| `policy_device` | `cuda` | Inference device: `cuda`, `cpu`, `mps`, or `cuda:0` |
+| `actions_per_chunk` | `30` | Actions per inference chunk |
+| `chunk_size_threshold` | `0.95` | When to request new chunk (0.0-1.0) |
+| `aggregate_fn_name` | `weighted_average` | Chunk aggregation: `weighted_average`, `latest_only`, `average`, `conservative` |
+| `feedback_rate_hz` | `2.0` | Execution feedback publish rate |
+| `launch_local_server` | `true` | Auto-start policy server subprocess |
+| `obs_similarity_atol` | `-1.0` | Observation filtering tolerance (-1.0 to disable)* |
+| `log_level` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
+| `configure` | `true` | Auto-configure on startup |
+| `activate` | `true` | Auto-activate on startup |
+
+*\*`obs_similarity_atol`: The policy server filters observations that are "too similar" (L2 norm of state difference < threshold). The default threshold (1.0) assumes joint states change significantly between frames. Many robots have smaller movements, causing most observations to be skipped. Set to `-1.0` to disable filtering.*
+
+**Example:**
+
+```bash
+# Run with a pretrained model
+ros2 launch rosetta rosetta_client_launch.py \
+    contract_path:=/path/to/contract.yaml \
+    pretrained_name_or_path:=my-org/my-policy
+```
+
+**This node is not the only way to deploy.** You can run inference using LeRobot's standard CLI tools directly with the Rosetta robot plugin:
+
+```bash
+# Standard LeRobot deployment, no rosetta_client_node needed
+lerobot-record --robot.type=rosetta --robot.config_path=contract.yaml
+```
+
+See [Imitation Learning on Real Robots](https://huggingface.co/docs/lerobot/il_robots) for LeRobot's native deployment workflow. The `rosetta_client_node` adds ROS2 action-based lifecycle management on top of this, which is convenient if your workflow is already ROS2-centric.
+
+---
 
 ## Contract Reference
 
-A contract is a YAML file that maps ROS2 topics to LeRobot's observation/action interface.
+A contract is a YAML file that maps ROS2 topics to LeRobot's observation/action interface. The contract currently maps to the full LeRobot `EnvTransition` interface:
+
+| Contract Section | EnvTransition Slot | Status |
+|-----------------|-------------------|--------|
+| `observations` | `observation.*` | Supported |
+| `actions` | `action*` | Supported |
+| `tasks` | `complementary_data.task` | Supported |
+| `rewards` | `next.reward` | Supported |
+| `signals` | `next.done`, `next.truncated` | Supported |
+| `complementary_data` | `complementary_data.*` | Supported |
+
+Not every section needs to be filled for every robot. A minimal contract only needs `observations` and `actions`. To see which keys are required or accepted by different policies, see [Policy Feature Compatibility](#policy-feature-compatibility).
 
 ### Minimal Example
 
@@ -569,7 +567,7 @@ actions:
 
 ```yaml
 observations:
-  # State vector
+  # State vector (with all optional fields shown)
   - key: observation.state
     topic: /joint_states
     type: sensor_msgs/msg/JointState
@@ -587,10 +585,10 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [480, 640]  # [height, width]
+      resize: [224, 224]  # [height, width]
 ```
 
-Multiple topics can share the same `key`. Values are concatenated.
+Multiple topics can share the same `key`. Values are concatenated (see [The Contract](#the-contract)).
 
 ### Actions
 
@@ -630,21 +628,55 @@ teleop:
       failure: buttons.1
 ```
 
-## Supported Message Types
+### Tasks, Rewards, and Signals
 
-| Type | Extracted Fields |
-|------|------------------|
-| `sensor_msgs/msg/JointState` | position, velocity, effort by joint name |
-| `sensor_msgs/msg/Image` | RGB uint8 array |
-| `sensor_msgs/msg/CompressedImage` | Decoded to RGB uint8 |
-| `geometry_msgs/msg/Twist` | linear.xyz, angular.xyz |
-| `nav_msgs/msg/Odometry` | pose, twist fields |
-| `sensor_msgs/msg/Joy` | axes, buttons arrays |
-| `sensor_msgs/msg/Imu` | orientation, angular_velocity, linear_acceleration |
+These sections are optional. Use them when your workflow requires task prompts from ROS2 topics, RL reward signals, or episode termination signals.
+
+```yaml
+tasks:
+  - key: task
+    topic: /task_prompt
+    type: std_msgs/msg/String
+
+rewards:
+  - key: next.reward
+    topic: /reward
+    type: std_msgs/msg/Float64
+    dtype: float64
+
+signals:
+  - key: next.done
+    topic: /episode_done
+    type: std_msgs/msg/Bool
+
+  - key: next.truncated
+    topic: /episode_truncated
+    type: std_msgs/msg/Bool
+```
+
+For VLA policies, the `task` string can also be provided via the `prompt` argument when recording or running a policy, so you don't need a ROS2 topic for it.
+
+### Adjunct Topics
+
+Adjunct topics are recorded to the bag file but have no LeRobot feature mapping. Use them for data you want preserved alongside your demonstrations but that isn't part of the training dataset: diagnostics, TF trees, debug streams, extra sensors.
+
+```yaml
+adjunct:
+  - topic: /tf
+    type: tf2_msgs/msg/TFMessage
+
+  - topic: /diagnostics
+    type: diagnostic_msgs/msg/DiagnosticArray
+
+  - topic: /imu/raw
+    type: sensor_msgs/msg/Imu
+```
+
+Because the bag preserves this data, you can always add a contract mapping for these topics later and re-run `port_bags.py` without re-recording.
 
 ### Selector Syntax
 
-Dot notation extracts nested fields:
+Dot notation extracts nested fields from ROS2 messages:
 
 ```yaml
 # JointState: {field}.{joint_name}
@@ -658,17 +690,36 @@ names: [twist.twist.linear.x, pose.pose.position.z]
 
 | Strategy | Behavior |
 |----------|----------|
-| `hold` | Use most recent message (default) |
-| `asof` | Interpolate to exact timestamp |
-| `drop` | Skip frame if no message available |
+| `hold` | Use most recent message, no matter how old (default) |
+| `asof` | Use most recent message only if within `tol_ms` tolerance window, otherwise return nothing (zero-filled). Useful for rejecting stale data |
+| `drop` | Use most recent message only if it arrived within the current step/frame window |
 
-## Extending (Experimental)
+### Supported Message Types
 
-> **Note:** Custom encoder/decoder support is **experimental**. 
+| Type | Extracted Fields |
+|------|------------------|
+| `sensor_msgs/msg/JointState` | position, velocity, effort by joint name |
+| `sensor_msgs/msg/Image` | RGB uint8 array |
+| `sensor_msgs/msg/CompressedImage` | Decoded to RGB uint8 |
+| `geometry_msgs/msg/Twist` | linear.xyz, angular.xyz |
+| `nav_msgs/msg/Odometry` | pose, twist fields |
+| `sensor_msgs/msg/Joy` | axes, buttons arrays |
+| `sensor_msgs/msg/Imu` | orientation, angular_velocity, linear_acceleration |
+| `std_msgs/msg/Float32` | Scalar float32 |
+| `std_msgs/msg/Float64` | Scalar float64 |
+| `std_msgs/msg/String` | Text string |
+| `std_msgs/msg/Bool` | Boolean |
+| `std_msgs/msg/Float64MultiArray` | Vector float64 |
+
+The dtype is auto-detected from the message type. You can override it with the `dtype` field in the contract, or use a custom decoder for non-standard types.
+
+### Custom Encoders/Decoders (Experimental)
+
+> **Note:** Custom encoder/decoder support is **experimental**.
 
 Add support for unsupported ROS message types by writing custom decoders (ROS → numpy) and encoders (numpy → ROS).
 
-### Method 1: Specify in Contract (Recommended)
+#### Method 1: Specify in Contract (Recommended)
 
 Point directly to your converter functions in the contract YAML:
 
@@ -690,7 +741,7 @@ actions:
 
 The module must be importable in your Python environment. Paths are validated at contract load time.
 
-### Method 2: Global Registration
+#### Method 2: Global Registration
 
 Register converters globally so they're used for all instances of a message type:
 
@@ -719,7 +770,7 @@ from lerobot_robot_rosetta import Rosetta, RosettaConfig
 robot = Rosetta(RosettaConfig(config_path="contract.yaml"))
 ```
 
-### Function Signatures
+#### Function Signatures
 
 **Decoder:** Converts ROS message → numpy array
 
@@ -744,13 +795,298 @@ def my_encoder(values, spec, stamp_ns=None):
     return msg
 ```
 
-### When Each Is Used
+#### When Each Is Used
 
 | Field | Used By | Purpose |
 |-------|---------|---------|
 | `decoder` on observations | Runtime, `port_bags.py` | Decode incoming sensor data |
 | `decoder` on actions | `port_bags.py` | Read recorded actions from bags |
 | `encoder` on actions | Runtime | Publish actions to ROS topics |
+
+---
+
+
+## LeRobot Data Model Reference
+
+This section covers LeRobot's internal data model in detail. You don't need this to get started. Refer back here when you need to understand key conventions, feature types, or policy compatibility.
+
+### Key System
+
+
+**LeRobot keys are flat dictionary strings that use dots as a naming convention.** `observation.state.joint_position` is a single string key, not a nested lookup. The only hard rule is **no forward slashes** (`/`) in key names.
+
+This means you can create keys at any depth:
+
+```python
+# These are all valid, independent LeRobot feature keys:
+"observation.state"                              # (14,) float64
+"observation.state.joint_position"               # (7,)  float32
+"observation.state.gripper_position"             # (1,)  float32
+"observation.state.imu.orientation"              # (4,)  float64
+"observation.environment_state"                  # (25,) float64
+"observation.environment_state.object_positions" # (12,) float32
+"observation.images.front"                       # (480, 640, 3) video
+"observation.images.wrist.left"                  # (480, 640, 3) video
+"action"                                         # (8,) float32
+"action.arm"                                     # (6,) float32
+"action.gripper"                                 # (1,) float32
+"action.base"                                    # (2,) float32
+```
+
+There is no parent-child relationship between these keys. `observation.state` and `observation.state.joint_position` can coexist as completely independent features with different shapes. They just happen to share a prefix.
+
+#### How LeRobot classifies keys
+
+While keys are free-form strings, LeRobot policies use **prefix matching** to classify them into feature types. This classification determines how policies process each feature:
+
+| Prefix | FeatureType | How policies use it |
+|--------|-------------|---------------------|
+| `observation.images.*` or `observation.image` | `VISUAL` | Fed through vision encoder |
+| `observation.environment_state` (exact) | `ENV` | Separate encoder projection (privileged sim state) |
+| `observation.*` (everything else under observation) | `STATE` | Robot state encoder |
+| `observation.language.*` | `LANGUAGE` | Tokenized text for VLA forward pass |
+| `action*` | `ACTION` | Policy output / training target |
+| `next.reward` | `REWARD` | RL reward signal |
+
+This means `observation.state.imu`, `observation.state.joint_position`, and `observation.state` are all classified as `STATE`. Similarly, `action.arm` and `action.gripper` are both `ACTION`.
+
+#### Convention vs. compatibility
+
+LeRobot's key system has two layers:
+
+1. **The dataset format** accepts any key string. You can store `observation.state.fake_sensor.special_data` or `my_custom_thing` and it works.
+2. **Built-in policies** look for specific keys by exact match. ACT, SmolVLA, and Pi0 all expect `observation.state` and `action` as single combined vectors.
+
+The [DROID dataset](https://huggingface.co/datasets/lerobot/droid) demonstrates the recommended approach when you need both richness and compatibility: **store split sub-keys alongside combined keys**:
+
+```python
+# Split sub-keys (rich, self-documenting):
+"observation.state.joint_position":     {"shape": (7,)}
+"observation.state.cartesian_position": {"shape": (6,)}
+"observation.state.gripper_position":   {"shape": (1,)}
+
+# Combined key (policy-compatible):
+"observation.state":                    {"shape": (8,)}  # joints + gripper
+
+# Same pattern for actions:
+"action.joint_position":    {"shape": (7,)}
+"action.gripper_position":  {"shape": (1,)}
+"action":                   {"shape": (8,)}  # joints + gripper
+```
+
+The sub-keys preserve semantic meaning and enable richer downstream analysis. The combined keys keep existing policies working without modification.
+
+### EnvTransition
+
+LeRobot defines a [Universal Data Container](https://huggingface.co/docs/lerobot/introduction_processors#envtransition-the-universal-data-container) that descends from the classic Gymnasium `step()` return (`observation, reward, terminated, truncated, info`), called `EnvTransition`.
+
+The `EnvTransition` TypedDict defines six top-level slots. The contract aims to make explicit the mapping between ROS2 and the semantic categories defined by the EnvTransition. No core policy currently leverages all components.
+
+#### Observation (`observation.*`)
+
+Everything the robot senses. Sub-divided by modality:
+
+```
+observation.
+├── state                           # Robot proprioception (joints, EEF pose)
+│   ├── joint_position              #   Optional: split out joint positions
+│   ├── cartesian_position          #   Optional: split out EEF pose
+│   └── gripper_position            #   Optional: split out gripper
+│
+├── environment_state               # External/privileged state (sim only)
+│   ├── object_positions            #   Optional: sub-key for object poses
+│   └── contact_forces              #   Optional: sub-key for forces
+│
+├── images.                         # Camera feeds (stored as MP4 video)
+│   ├── top                         #   Overhead / third-person view
+│   ├── front                       #   Front-facing view
+│   ├── left / right                #   Side views
+│   ├── wrist.left / wrist.right    #   Wrist-mounted cameras
+│   └── wrist.top / wrist.bottom    #   Wrist camera orientations
+│
+└── language                        # Tokenized text (generated by processor)
+    ├── tokens                      #   Token IDs (int tensor)
+    └── attention_mask              #   Attention mask (bool tensor)
+```
+
+**`observation.state`** vs **`observation.environment_state`**: These are semantically distinct. `state` is the robot's proprioception, i.e. what the robot knows about its own body (joint angles, gripper width, EEF pose). `environment_state` is privileged information about the external world (object positions, contact forces), typically only available in simulation. They have different `FeatureType`s (`STATE` vs `ENV`) and policies encode them with separate projections.
+
+#### Action (`action*`)
+
+Motor commands the robot executes:
+
+```
+action                              # Combined action vector (policy-compatible)
+├── joint_position                  # Optional: split out joint commands
+├── cartesian_position              # Optional: split out EEF commands
+├── gripper_position                # Optional: split out gripper
+├── base                            # Optional: mobile base velocity
+└── arm1.fingers                    # Optional: arbitrary depth is allowed
+```
+
+Most built-in policies expect a single `action` key. If you split into sub-keys, also provide the combined `action` for compatibility (see the DROID pattern above).
+
+#### Task and Language
+
+These serve different purposes and can coexist:
+
+| Concept | Key(s) | Type | Purpose |
+|---------|--------|------|---------|
+| **Task string** | `task` | `str` | Human-readable label: `"pick up the red block"` |
+| **Language tokens** | `observation.language.tokens` | `Tensor (int)` | Tokenized text for VLA forward pass |
+| **Language mask** | `observation.language.attention_mask` | `Tensor (bool)` | Attention mask for tokenized text |
+
+The **flow** between them: the dataset stores a `task_index` (int) per frame, which resolves to a `task` string via `meta/tasks.parquet`. How that string reaches the policy depends on the policy:
+
+- **Pre-tokenized** (SmolVLA, Pi0, Pi0Fast, Pi0.5, X-VLA): LeRobot's `TokenizerProcessorStep` reads the `task` string and produces `observation.language.tokens` and `observation.language.attention_mask` tensors. The policy consumes these tensors.
+- **Internally tokenized** (GR00T, Wall-X): The raw `task` string is passed directly to the policy, which tokenizes it through its own VLM backbone (Eagle 2.5 for GR00T, Qwen 2.5-VL for Wall-X).
+
+`task` is always a single string per frame. `subtask` is a recognized complementary data key.
+
+#### Reward and Episode Signals
+
+RL signals and episode boundaries:
+
+```
+next.reward                         # Scalar float: RL reward signal
+next.done                           # Bool: episode terminated naturally (goal reached, failure)
+next.truncated                      # Bool: episode ended artificially (time limit)
+```
+
+These use the `next.` prefix because they describe the outcome *after* taking the action.
+
+#### Complementary Data
+
+Per-frame metadata that flows through training but isn't a model input:
+
+```
+task                                # Task description string (resolved from task_index)
+task_index                          # int64: index into meta/tasks.parquet
+episode_index                       # int64: which episode this frame belongs to
+frame_index                         # int64: position within the episode
+index                               # int64: global frame index
+timestamp                           # float32: time in seconds
+observation.state_is_pad            # bool tensor: padding flag for state
+observation.images.front_is_pad     # bool tensor: padding flag per image key
+action_is_pad                       # bool tensor: padding flag for action
+```
+
+The `*_is_pad` flags mark which frames in a temporal window are real vs. padded (used when a policy looks at multiple past frames and some haven't occurred yet).
+
+The five default features (`timestamp`, `frame_index`, `episode_index`, `index`, `task_index`) are automatically added to every dataset. You don't need to declare them.
+
+#### Info
+
+The `info` slot in `EnvTransition` is **runtime-only** and is not persisted to datasets. It carries transient signals like teleop events (`is_intervention`, `rerecord_episode`, `terminate_episode`) used during live recording and policy execution. If you need persistent metadata, use `complementary_data` instead.
+
+Note: `meta/info.json` in the dataset directory is unrelated; it stores the dataset schema (features, fps, robot_type), not per-frame data.
+
+### Data Types
+
+Each feature key maps to a specific data type. LeRobot datasets support:
+
+| Data Type | LeRobot dtype | Shape | Description | Example Keys |
+|-----------|--------------|-------|-------------|-------------|
+| **Float vector** | `float32` / `float64` | `(N,)` | Continuous values: joints, poses, velocities | `observation.state`, `action` |
+| **Image** | `video` | `(H, W, 3)` | RGB uint8 frames, stored as MP4 | `observation.images.*` |
+| **String** | `string` | `(1,)` | Text labels, prompts | `task`, `language_instruction` |
+| **Boolean** | `bool` | `(1,)` or `(N,)` | Binary flags | `next.done`, `action_is_pad` |
+| **Integer** | `int32` / `int64` | `(1,)` or `(N,)` | Discrete values, indices | `task_index`, `episode_index` |
+
+In the Rosetta contract, dtype is usually **auto-detected** from the ROS2 message type:
+
+| ROS2 Message Type | Auto dtype | Output |
+|-------------------|-----------|--------|
+| `sensor_msgs/msg/JointState` | `float64` | Selected position/velocity/effort values |
+| `sensor_msgs/msg/CompressedImage` | `video` | RGB uint8 `(H, W, 3)` |
+| `sensor_msgs/msg/Image` | `video` | RGB uint8 `(H, W, 3)` |
+| `geometry_msgs/msg/Twist` | `float64` | Selected linear/angular components |
+| `nav_msgs/msg/Odometry` | `float64` | Selected pose/twist fields |
+| `sensor_msgs/msg/Imu` | `float64` | Orientation, angular vel, linear accel |
+| `std_msgs/msg/Float32` | `float32` | Scalar `(1,)` |
+| `std_msgs/msg/Float64` | `float64` | Scalar `(1,)` |
+| `std_msgs/msg/String` | `string` | Text `(1,)` |
+| `std_msgs/msg/Bool` | `bool` | Boolean `(1,)` |
+| `std_msgs/msg/Float64MultiArray` | `float64` | Vector `(N,)` |
+
+You can override the auto-detected dtype with the `dtype` field in the contract, or use a [custom decoder](#custom-encodersdecoders-experimental) for non-standard message types.
+
+### Policy Feature Compatibility
+
+Each LeRobot policy implements its own `validate_features()` and accesses batch keys differently. There is no single enforced schema; what keys a policy accepts depends on the policy. This table summarizes the actual requirements based on the modeling code in `lerobot/src/lerobot/policies/`:
+
+| Feature | ACT | SmolVLA | Pi0 | Pi0-Fast | Pi0.5 | GR00T N1.5 | Wall-X | X-VLA |
+|---------|:---:|:-------:|:---:|:--------:|:-----:|:----------:|:------:|:-----:|
+| **Type** | BC | VLA | VLA | VLA | VLA | VLA | VLA | VLA |
+| **`observation.state`** | optional | **required** | optional | - | - | optional | **required** | optional |
+| **`observation.environment_state`** | optional | - | - | - | - | - | - | - |
+| **`observation.images.*`** | multi | multi | multi | multi | multi | multi | multi | multi |
+| **`task` string** | - | **required** | **required** | **required** | **required** | **required** | **required** | **required** |
+| **`action`** | **required** | **required** | **required** | **required** | **required** | **required** | **required** | **required** |
+| **VLM backbone (params)** | - | SmolVLM2 (0.5B) | PaliGemma (3B / 0.7B) | PaliGemma (3B) | PaliGemma (3B / 0.7B) | Eagle 2.5 (3B) | Qwen 2.5-VL (7B) | Florence2 (0.7B / 0.2B) |
+| **RTC support** | - | yes | yes | yes | yes | - | - | - |
+| **Max state dim** | any | 32 | 32 | 32 | - | 64 | 20 | 32 |
+| **Max action dim** | any | 32 | 32 | 32 | 32 | 32 | 20 | 20 |
+| **Image size** | any | 512×512 | 224×224 | 224×224 | 224×224 | 224×224 | any | any |
+| **Max language tokens** | - | 48 | 48 | 200 | 48 | 4096 | 768 | 64 |
+| **Chunk size (default) [max]** | (100) | (50) | (50) | (50) | (50) | (50) [1024] | (32) | (32) [512] |
+| **Async inference** | yes | yes | yes | - | yes | yes | - | - |
+
+
+
+**Key dimensions:**
+
+- **Max images**: All "multi" policies dynamically handle N cameras, configured at init time. However, no policy has truly unlimited image capacity. ACT concatenates image features, so the practical limit depends on the model's hidden dimension. VLA policies (Pi0 family, SmolVLA, Wall-X) feed images through a VLM, so the number of images is constrained by the VLM context window. For most robotics setups (2-3 cameras), this is probably not a bottleneck.
+- **Max language tokens**: Maximum number of tokens the policy's tokenizer will keep from your task string. Longer prompts get truncated.
+- **Chunk size**: Number of future action steps the policy predicts per inference call. Larger chunks mean fewer inference calls but less reactivity. Most policies build architecture (positional embeddings, pre-allocated tensors) to match the configured `chunk_size` at init time.
+- **RTC (Real-Time Chunking)**: An [inference wrapper](https://huggingface.co/docs/lerobot/rtc) that improves real-time performance by overlapping action chunks with continuous re-planning. Only works with flow-matching policies (Pi0 family + SmolVLA).
+- **Async inference**: Whether the policy is in LeRobot's gRPC-based asynchronous inference server allowlist (`SUPPORTED_POLICIES` in `async_inference/constants.py`). [Async](https://huggingface.co/docs/lerobot/rtc) decouples observation collection from action computation, which is useful for high-frequency control loops. Pi0-Fast, Wall-X, and X-VLA all implement `predict_action_chunk()` and are technically compatible, but haven't been added to the allowlist yet.
+
+**VLA language pipeline**: All VLA policies require a `task` string (e.g., `"pick up the red block"`). In Rosetta, this comes from the `prompt` argument when recording or running a policy. The string gets tokenized into tensors automatically, either by LeRobot's `TokenizerProcessorStep` (a pipeline step that runs before the policy sees the data) or by the policy itself internally. From a Rosetta/ROS2 perspective, **you just provide the task prompt**.
+
+**Subtask support**: LeRobot provides a `lerobot-annotate` [tool](https://huggingface.co/spaces/lerobot/annotate) for adding subtask annotations to recorded episodes (e.g., marking "reach for object", "grasp", "lift" within a longer task). These annotations are stored as `language_instruction` columns in the dataset. However, **no current action policy consumes subtask annotations**. They are used by [SARM](https://huggingface.co/docs/lerobot/sarm) (a reward model) to compute progress scores for [RA-BC](https://huggingface.co/docs/lerobot/sarm) weighted training of Pi0, Pi0.5, and SmolVLA.
+
+#### What this means for your contract
+
+The keys you define in your Rosetta contract determine which policies you can train with. Some practical guidance:
+
+**Maximum compatibility**: if you want your dataset to work with the widest range of policies:
+
+```yaml
+observations:
+  - key: observation.state          # Required by: SmolVLA, Wall-X
+    topic: /joint_states
+    type: sensor_msgs/msg/JointState
+    selector: { names: [...] }
+
+  - key: observation.images.top     # At least 1 image required by most policies
+    topic: /camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image: { resize: [480, 640] }
+
+actions:
+  - key: action                     # Required by all action policies
+    publish:
+      topic: /joint_commands
+      type: sensor_msgs/msg/JointState
+    selector: { names: [...] }
+
+# For VLA policies, also provide a task prompt when recording:
+# ros2 action send_goal ... "{prompt: 'pick up the red block'}"
+```
+
+**For VLA fine-tuning**: add a second camera and ensure your recording prompts are descriptive:
+
+```yaml
+observations:
+  # ... state and first camera as above ...
+
+  - key: observation.images.wrist.right
+    topic: /wrist_camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image: { resize: [512, 512] }
+```
+
 
 ## License
 

@@ -27,6 +27,10 @@ Usage:
     # Launch without auto-activation (manual lifecycle control)
     ros2 launch rosetta rosetta_client_launch.py configure:=false activate:=false
 
+    # Override params file
+    ros2 launch rosetta rosetta_client_launch.py \\
+        params_file:=/path/to/params.yaml
+
     # Override contract path
     ros2 launch rosetta rosetta_client_launch.py \\
         contract_path:=/path/to/contract.yaml
@@ -48,6 +52,7 @@ from launch.substitutions import EqualsSubstitution, LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
+from launch_ros.event_handlers import OnStateTransition
 
 
 def generate_launch_description():
@@ -58,6 +63,12 @@ def generate_launch_description():
     # Declare launch arguments
     # Defaults come from params file - launch args override when provided
     launch_description = [
+        # Parameters file - can be overridden when included from other launch files
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to ROS2 parameters YAML file'
+        ),
         # Contract path - deployment-specific
         DeclareLaunchArgument(
             'contract_path',
@@ -132,6 +143,11 @@ def generate_launch_description():
             default_value='true',
             description='Whether to auto-activate the node on startup (requires configure:=true)'
         ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation time (set to false for real time)'
+        ),
     ]
 
     # Create the lifecycle node
@@ -145,7 +161,7 @@ def generate_launch_description():
         emulate_tty=True,
         parameters=[
             # Load defaults from params file (source of truth)
-            default_params,
+            LaunchConfiguration('params_file'),
             # Launch argument overrides (later values take precedence)
             {
                 'contract_path': LaunchConfiguration('contract_path'),
@@ -159,11 +175,11 @@ def generate_launch_description():
                 'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
                 'launch_local_server': LaunchConfiguration('launch_local_server'),
                 'obs_similarity_atol': LaunchConfiguration('obs_similarity_atol'),
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
     )
-
     # Auto-configure event (triggered on process start)
     configure_event = EmitEvent(
         event=ChangeState(
@@ -173,7 +189,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
     )
 
-    # Auto-activate event (triggered after configure completes)
+    # Auto-activate event (triggered after configure completes and node reaches 'inactive')
     activate_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(rosetta_client_node),
@@ -182,7 +198,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
     )
 
-    # Chain events: process start -> configure -> activate
+    # Trigger configure when the node process starts
     configure_event_handler = RegisterEventHandler(
         OnProcessStart(
             target_action=rosetta_client_node,
@@ -191,9 +207,10 @@ def generate_launch_description():
     )
 
     activate_event_handler = RegisterEventHandler(
-        OnExecutionComplete(
-            target_action=configure_event,
-            on_completion=[activate_event],
+        OnStateTransition(
+            target_lifecycle_node=rosetta_client_node,
+            goal_state='inactive',   # trigger when node reaches INACTIVE (configure finished)
+            entities=[activate_event],
         )
     )
 

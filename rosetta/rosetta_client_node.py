@@ -45,6 +45,7 @@ from lerobot.async_inference.robot_client import RobotClient
 from rosetta_interfaces.action import RunPolicy
 
 from lerobot_robot_rosetta import RosettaConfig
+from lerobot_robot_rosetta.rosetta import _TopicBridge
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -57,7 +58,7 @@ class RosettaClientNode(LifecycleNode):
     """ROS2 Lifecycle Action Server wrapping LeRobot's RobotClient for policy inference."""
 
     def __init__(self):
-        super().__init__("rosetta_client", enable_logger_service=True)
+        super().__init__("rosetta_client")
 
         # Parameters with descriptors for introspection (ros2 param describe)
         # Read-only parameters are set once at startup and cannot be changed
@@ -105,6 +106,14 @@ class RosettaClientNode(LifecycleNode):
             "obs_similarity_atol", 1.0,
             ParameterDescriptor(description="L2 norm tolerance for observation similarity (-1.0 to disable)")
         )
+        self.declare_parameter(
+            "sim_time_multiplier", 1.0,
+            ParameterDescriptor(
+                description="Multiplier for fps sent to LeRobot (contract_fps * sim_time_multiplier). "
+                "Use values < 1.0 for slow sims (e.g., 0.5 for 0.5x speed sim) to maintain wall-time action rate. "
+                "Set to 1.0 for real-time or when not using sim time."
+            )
+        )
 
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
@@ -114,6 +123,10 @@ class RosettaClientNode(LifecycleNode):
         self._active_goal = None
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
+
+        # Topic bridge: manages observation subscriptions + action publishers
+        self._rosetta_config: RosettaConfig | None = None
+        self._bridge: _TopicBridge | None = None
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -130,6 +143,22 @@ class RosettaClientNode(LifecycleNode):
         if not self._pretrained:
             self.get_logger().error("pretrained_name_or_path parameter required")
             return TransitionCallbackReturn.FAILURE
+        # Distinguish local paths from HF repo IDs (e.g. "user/model").
+        # Local paths start with /, ./, or ../
+        _looks_local = self._pretrained.startswith(('/', './', '../'))
+        if _looks_local and not os.path.isdir(self._pretrained):
+            self.get_logger().error(
+                f"Local model path does not exist: {self._pretrained}. "
+                "Use a HuggingFace repo ID (e.g. 'user/model') or a valid local directory."
+            )
+            return TransitionCallbackReturn.FAILURE
+
+        # Create topic bridge (observation subscriptions + lifecycle action publishers)
+        # Bridge uses contract fps (unscaled) for ROS2 timing (watchdog, etc.)
+        # ROS2 clock respects use_sim_time and /clock, so watchdog operates in sim time
+        self._rosetta_config = RosettaConfig(config_path=self._contract_path)
+        self._bridge = _TopicBridge(self._rosetta_config)
+        self._bridge.setup(self)
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -165,6 +194,10 @@ class RosettaClientNode(LifecycleNode):
         """Stop accepting goals, cancel in-progress execution, stop policy server."""
         self._accepting_goals = False
 
+        # Send safety action while lifecycle publishers are still active
+        if self._bridge is not None:
+            self._bridge.send_safety_action()
+
         # Cancel any in-progress goal
         if self._client is not None:
             self.get_logger().info("Cancelling in-progress policy execution...")
@@ -189,6 +222,11 @@ class RosettaClientNode(LifecycleNode):
         """Release resources and destroy action server."""
         self._stop_policy_server()  # Ensure stopped
 
+        if self._bridge is not None:
+            self._bridge.teardown()
+            self._bridge = None
+        self._rosetta_config = None
+
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
             self._action_server = None
@@ -203,6 +241,11 @@ class RosettaClientNode(LifecycleNode):
         """Final cleanup before destruction."""
         self._accepting_goals = False
         self._stop_policy_server()
+
+        if self._bridge is not None:
+            self._bridge.teardown()
+            self._bridge = None
+        self._rosetta_config = None
 
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
@@ -220,6 +263,9 @@ class RosettaClientNode(LifecycleNode):
             if self._client is not None:
                 self._client.shutdown_event.set()
             self._stop_policy_server()
+            if self._bridge is not None:
+                self._bridge.teardown()
+                self._bridge = None
         except Exception as e:
             self.get_logger().error(f"Error during error handling: {e}")
 
@@ -362,10 +408,35 @@ class RosettaClientNode(LifecycleNode):
     def _build_config(self, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters."""
         robot_config = RosettaConfig(
-            id="rosetta",
             config_path=self._contract_path,
+            # id is auto-populated from contract's robot_type (vortex_ctl)
+            # use_sim_time=self.get_parameter("use_sim_time").value,
         )
-        fps = robot_config.fps
+        robot_config._external_bridge = self._bridge  # Inject pre-built bridge
+        
+        # Apply sim_time_multiplier to control loop fps
+        # 
+        # Architecture:
+        #   - Contract fps (10Hz): Rate at which observations are resampled (sim time)
+        #   - RobotClient fps: Rate at which control_loop() polls for observations (wall time)
+        #   - PolicyServer fps: Only used for FPSTracker logging (not critical)
+        #
+        # In slow sims (0.5x speed):
+        #   - Topics publish at sim-governed rates
+        #   - StreamBuffer resamples to contract fps (10Hz sim time)
+        #   - control_loop() polls at scaled fps (5Hz wall time) to match sim speed
+        #   - This prevents spamming get_observation() faster than new data arrives
+        #
+        contract_fps = robot_config.fps
+        sim_multiplier = self.get_parameter("sim_time_multiplier").value
+        control_loop_fps = int(contract_fps * sim_multiplier)
+        
+        if sim_multiplier != 1.0:
+            self.get_logger().info(
+                f"Applied sim_time_multiplier={sim_multiplier:.2f}: "
+                f"contract fps={contract_fps}Hz (sim time) → "
+                f"control loop fps={control_loop_fps}Hz (wall time)"
+            )
 
         config_kwargs = dict(
             robot=robot_config,
@@ -374,7 +445,7 @@ class RosettaClientNode(LifecycleNode):
             pretrained_name_or_path=self._pretrained,
             policy_device=self.get_parameter("policy_device").value,
             task=task,
-            fps=fps,
+            fps=control_loop_fps,  # Wall-time polling rate for control_loop()
             actions_per_chunk=self.get_parameter("actions_per_chunk").value,
             chunk_size_threshold=self.get_parameter("chunk_size_threshold").value,
             aggregate_fn_name=self.get_parameter("aggregate_fn_name").value,
