@@ -1,0 +1,91 @@
+robot_type: turtlebot3_waffle
+
+fps: 30
+max_duration_s: 60.0
+
+observations:
+  # Front-facing RGB camera
+  - key: observation.images.front
+    topic: /camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image:
+      resize: [224, 224]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
+
+  # Overhead bird's-eye camera
+  - key: observation.images.overhead
+    topic: /overhead_camera/image_raw/compressed
+    type: sensor_msgs/msg/CompressedImage
+    image:
+      resize: [224, 224]
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 10}
+
+  # Wheel joint states: positions + velocities (4 values)
+  - key: observation.state
+    topic: /joint_states
+    type: sensor_msgs/msg/JointState
+    selector:
+      names:
+        - position.wheel_left_joint
+        - position.wheel_right_joint
+        - velocity.wheel_left_joint
+        - velocity.wheel_right_joint
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 50}
+
+  # IMU: orientation quaternion + angular velocity + linear acceleration (10 values)
+  - key: observation.state
+    topic: /imu
+    type: sensor_msgs/msg/Imu
+    selector:
+      names:
+        - orientation.x
+        - orientation.y
+        - orientation.z
+        - orientation.w
+        - angular_velocity.x
+        - angular_velocity.y
+        - angular_velocity.z
+        - linear_acceleration.x
+        - linear_acceleration.y
+        - linear_acceleration.z
+    dtype: float64
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 50}
+
+  # Odometry: 2D pose + velocity (6 values)
+  - key: observation.state
+    topic: /odom
+    type: nav_msgs/msg/Odometry
+    selector:
+      names:
+        - twist.twist.linear.x
+        - twist.twist.angular.z
+    dtype: float64
+    align: {strategy: hold, stamp: header}
+    qos: {reliability: best_effort, history: keep_last, depth: 50}
+
+# observation.state total: 4 (wheels) + 10 (imu) + 6 (odom) = 20 dimensions
+
+actions:
+  - key: action
+    publish:
+      topic: /cmd_vel
+      type: geometry_msgs/msg/TwistStamped
+      qos: {reliability: reliable, history: keep_last, depth: 10}
+    selector:
+      names: [linear.x, angular.z]
+    safety_behavior: zeros
+
+# action total: 2 dimensions (forward velocity, yaw rate)
+
+adjunct:
+  - topic: /tf
+    type: tf2_msgs/msg/TFMessage
+  - topic: /scan
+    type: sensor_msgs/msg/LaserScan
+
+recording:
+  storage: mcap

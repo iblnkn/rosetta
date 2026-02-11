@@ -93,6 +93,41 @@ def _enc_twist(
 
 
 # =============================================================================
+# TwistStamped Encoder
+# =============================================================================
+
+
+@register_encoder("geometry_msgs/msg/TwistStamped")
+def _enc_twist_stamped(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to geometry_msgs/TwistStamped.
+
+    Requires selector.names like ['linear.x', 'angular.z'].
+    Same selector syntax as Twist - the stamped wrapper is transparent.
+    """
+    if not spec.names:
+        raise ValueError(
+            "TwistStamped encoder requires selector.names "
+            "(e.g., ['linear.x', 'angular.z'])"
+        )
+
+    msg_cls = get_message("geometry_msgs/msg/TwistStamped")
+    msg = msg_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    for i, path in enumerate(spec.names):
+        dot_set(msg.twist, path, arr[i])
+
+    return msg
+
+
+# =============================================================================
 # Array Encoders
 # =============================================================================
 

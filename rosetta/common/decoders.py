@@ -381,6 +381,34 @@ def _dec_twist(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 # =============================================================================
+# TwistStamped Decoder
+# =============================================================================
+
+
+@register_decoder("geometry_msgs/msg/TwistStamped", dtype="float64")
+def _dec_twist_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode geometry_msgs/TwistStamped.
+
+    Same selector syntax as Twist - the stamped wrapper is transparent.
+    With selector names: extracts specified dotted paths from inner twist
+    Without names: returns [linear(3), angular(3)]
+    """
+    if not spec.names:
+        return np.concatenate([
+            np.array([
+                msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z
+            ], dtype=np.float64),
+            np.array([
+                msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z
+            ], dtype=np.float64),
+        ])
+
+    return np.asarray(
+        [float(dot_get(msg.twist, name)) for name in spec.names], dtype=np.float64
+    )
+
+
+# =============================================================================
 # MultiDOFCommand Decoder
 # =============================================================================
 

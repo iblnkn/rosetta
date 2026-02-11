@@ -134,6 +134,11 @@ def generate_launch_description():
             default_value='true',
             description='Whether to auto-activate the node on startup (requires configure:=true)'
         ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulated time from /clock topic'
+        ),
     ]
 
     # --- Lifecycle node (params file + launch-arg overrides) ----------------
@@ -158,6 +163,7 @@ def generate_launch_description():
                 'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
                 'launch_local_server': LaunchConfiguration('launch_local_server'),
                 'obs_similarity_atol': LaunchConfiguration('obs_similarity_atol'),
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
