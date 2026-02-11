@@ -150,11 +150,28 @@ class StreamBuffer:
         with self._lock:
             if self.last_ts is None:
                 return None
+            
+            # Handle clock resets (e.g., simulation restart)
+            # If buffered timestamp is in the future, clock was reset - clear stale data
+            if self.last_ts > tick_ns:
+                self._clear_unsafe()  # Already holding lock
+                return None
+            
             if self.policy == ResamplePolicy.DROP.value:
                 return self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
             if self.policy == ResamplePolicy.ASOF.value:
                 return self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
             return self.last_val  # hold is default
+
+    def _clear_unsafe(self) -> None:
+        """Clear buffered data without acquiring lock (internal use only)."""
+        self.last_ts = None
+        self.last_val = None
+
+    def reset(self) -> None:
+        """Clear buffered data (e.g., between episodes or after sim reset)."""
+        with self._lock:
+            self._clear_unsafe()
 
 
 # =============================================================================
