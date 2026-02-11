@@ -31,10 +31,15 @@ Usage:
 
     robot.disconnect()
 
-Lifecycle states:
-    - Unconfigured: Node exists, no subscriptions/publishers
-    - Inactive: Subscriptions active (buffering), publishers disabled
-    - Active: Processing observations, sending actions, watchdog running
+Architecture:
+    _TopicBridge: Manages observation subscriptions, lifecycle action publishers,
+        watchdog timer, and data buffering on a given LifecycleNode.
+    _RosettaLifecycleNode: Thin lifecycle wrapper around _TopicBridge for
+        standalone mode (creates its own node + executor + spin thread).
+    Rosetta: LeRobot Robot interface with two modes:
+        - Standalone: creates _RosettaLifecycleNode internally (current behavior)
+        - Injected: attaches to a pre-built _TopicBridge on an external node
+          (used by RosettaClientNode for launch remapping support)
 """
 
 from __future__ import annotations
@@ -77,14 +82,22 @@ SPIN_TIMEOUT_SEC = 0.01
 THREAD_JOIN_TIMEOUT_SEC = 1.0
 
 
-class _RosettaLifecycleNode(Node):
-    """Internal lifecycle node for Rosetta robot."""
+class _TopicBridge:
+    """Manages observation subscriptions, action publishers, and watchdog on a LifecycleNode.
 
-    def __init__(self, node_name: str, config: RosettaConfig, **kwargs):
+    This is a plain Python object (not a Node). It creates ROS2 entities
+    (subscriptions, lifecycle publishers, timers) on a host LifecycleNode via
+    ``setup()``, and destroys them via ``teardown()``.
+
+    Lifecycle publishers are activated/deactivated atomically by the host node's
+    lifecycle transitions (``super().on_activate()`` / ``super().on_deactivate()``).
+    The publisher's ``is_activated`` property gates publishing automatically.
+    """
+
+    def __init__(self, config: RosettaConfig):
         self._config = config
 
-        # These will be created in on_configure, None/empty indicates unconfigured
-        # Following the demo pattern: check publisher existence and is_activated
+        # Created in setup(), cleared in teardown()
         self._obs_buffers: dict[str, tuple[ObservationStreamSpec, StreamBuffer]] = {}
         self._act_publishers: dict[str, tuple[Any, Publisher]] = {}
         self._subscriptions: list[Any] = []
@@ -98,23 +111,27 @@ class _RosettaLifecycleNode(Node):
         self._last_action_ns: Optional[int] = None
         self._last_sent: dict[str, np.ndarray] = {}
 
-        super().__init__(node_name, **kwargs)
+        # Reference to the host node (set in setup, cleared in teardown)
+        self._node: Optional[Any] = None
 
-    def on_configure(self, _state: State) -> TransitionCallbackReturn:
+    def setup(self, node) -> None:
+        """Create subscriptions, lifecycle publishers, and watchdog on the given node.
+
+        Subscriptions start buffering immediately. Lifecycle publishers are
+        created in the inactive state and will be enabled when the host node
+        transitions to active via ``super().on_activate()``.
+
+        Args:
+            node: A ``rclpy.lifecycle.Node`` (LifecycleNode).
         """
-        Configure the node, after a configuring transition is requested.
+        self._node = node
 
-        Creates subscriptions (start buffering immediately) and lifecycle publishers
-        (disabled until activate).
-        """
-        self.get_logger().info("on_configure() is called.")
-
-        # Create regular subscriptions (start buffering immediately)
+        # Create subscriptions (start buffering immediately)
         for spec in self._config.observation_specs:
             buffer = StreamBuffer.from_spec(spec)
             self._obs_buffers[spec.topic] = (spec, buffer)
             callback = partial(self._on_observation, spec=spec, buffer=buffer)
-            sub = self.create_subscription(
+            sub = node.create_subscription(
                 get_message(spec.msg_type),
                 spec.topic,
                 callback,
@@ -122,160 +139,59 @@ class _RosettaLifecycleNode(Node):
             )
             self._subscriptions.append(sub)
 
-        # Create lifecycle publishers (disabled until activate)
+        # Create lifecycle publishers (disabled until host node activates)
         for spec in self._config.action_specs:
-            pub = self.create_lifecycle_publisher(
+            pub = node.create_lifecycle_publisher(
                 get_message(spec.msg_type),
                 spec.topic,
                 qos_profile_from_dict(spec.qos) or 10,
             )
             self._act_publishers[spec.topic] = (spec, pub)
 
-        # Create watchdog timer (callback will check if active)
+        # Create watchdog timer
         if self._should_use_watchdog():
             period_sec = 2.0 / self._config.fps
-            self._watchdog_timer = self.create_timer(period_sec, self._on_watchdog)
+            self._watchdog_timer = node.create_timer(period_sec, self._on_watchdog)
 
-        self.get_logger().info(
-            f"Configured: {len(self._config.observation_specs)} obs, "
+        node.get_logger().info(
+            f"TopicBridge: {len(self._config.observation_specs)} obs, "
             f"{len(self._config.action_specs)} act @ {self._config.fps}Hz"
         )
-        return TransitionCallbackReturn.SUCCESS
 
-    def on_activate(self, state: State) -> TransitionCallbackReturn:
-        """
-        Activate the node.
+    def teardown(self) -> None:
+        """Destroy all ROS2 resources on the host node."""
+        node = self._node
+        if node is None:
+            return
 
-        The default LifecycleNode callback transitions LifecyclePublisher entities
-        from inactive to enabled. We must call super().on_activate().
-        """
-        self.get_logger().info("on_activate() is called.")
-        return super().on_activate(state)
-
-    def on_deactivate(self, state: State) -> TransitionCallbackReturn:
-        """
-        Deactivate the node.
-
-        Send safety action before publishers are disabled by super().on_deactivate().
-        """
-        self.get_logger().info("on_deactivate() is called.")
-        self._send_safety_action()
-        self._last_action_ns = None
-        return super().on_deactivate(state)
-
-    def on_cleanup(self, _state: State) -> TransitionCallbackReturn:
-        """
-        Cleanup the node, after a cleaning-up transition is requested.
-
-        Destroys all subscriptions and publishers.
-        """
-        self.get_logger().info("on_cleanup() is called.")
-
-        # Destroy watchdog timer
         if self._watchdog_timer is not None:
-            self.destroy_timer(self._watchdog_timer)
+            node.destroy_timer(self._watchdog_timer)
             self._watchdog_timer = None
 
-        # Destroy subscriptions
         for sub in self._subscriptions:
-            self.destroy_subscription(sub)
+            node.destroy_subscription(sub)
         self._subscriptions.clear()
 
-        # Destroy publishers
         for _, pub in self._act_publishers.values():
             if pub is not None:
-                self.destroy_publisher(pub)
+                node.destroy_publisher(pub)
         self._act_publishers.clear()
 
-        # Clear buffers and state
         self._obs_buffers.clear()
         self._missing_streams.clear()
         self._header_warned.clear()
         self._last_sent.clear()
         self._last_action_ns = None
+        self._node = None
 
-        return TransitionCallbackReturn.SUCCESS
+    def send_safety_action(self) -> None:
+        """Publish safety action (zeros or hold) per spec's safety_behavior.
 
-    def on_shutdown(self, _state: State) -> TransitionCallbackReturn:
+        Only publishes on activated lifecycle publishers.
         """
-        Shutdown the node, after a shutting-down transition is requested.
-        """
-        self.get_logger().info("on_shutdown() is called.")
-
-        # Cleanup resources if we have them
-        if self._watchdog_timer is not None:
-            self.destroy_timer(self._watchdog_timer)
-            self._watchdog_timer = None
-
-        for sub in self._subscriptions:
-            self.destroy_subscription(sub)
-        self._subscriptions.clear()
-
-        for _, pub in self._act_publishers.values():
-            if pub is not None:
-                self.destroy_publisher(pub)
-        self._act_publishers.clear()
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def on_error(self, state: State) -> TransitionCallbackReturn:
-        """
-        Handle errors by cleaning up resources.
-        """
-        self.get_logger().error(f"Error occurred in state: {state.label}")
-
-        try:
-            if self._watchdog_timer is not None:
-                self.destroy_timer(self._watchdog_timer)
-                self._watchdog_timer = None
-
-            for sub in self._subscriptions:
-                self.destroy_subscription(sub)
-            self._subscriptions.clear()
-
-            for _, pub in self._act_publishers.values():
-                if pub is not None:
-                    self.destroy_publisher(pub)
-            self._act_publishers.clear()
-
-            self._obs_buffers.clear()
-            self._missing_streams.clear()
-            self._header_warned.clear()
-            self._last_sent.clear()
-            self._last_action_ns = None
-        except Exception as e:
-            self.get_logger().error(f"Error during cleanup: {e}")
-
-        return TransitionCallbackReturn.SUCCESS
-
-    def _should_use_watchdog(self) -> bool:
-        """Check if watchdog should be enabled."""
-        if not self._act_publishers:
-            return False
-        return not all(
-            spec.safety_behavior == "none" for spec, _ in self._act_publishers.values()
-        )
-
-    def _on_watchdog(self) -> None:
-        """Check if actions have stopped and send safety action if needed."""
-        # Only check when active
-        if not self.is_active:
+        if self._node is None:
             return
-
-        if self._last_action_ns is None:
-            return
-
-        now_ns = self.get_clock().now().nanoseconds
-        timeout_ns = int(2e9 / self._config.fps)  # 2 frame periods
-
-        if now_ns - self._last_action_ns > timeout_ns:
-            self.get_logger().warning("Action timeout - sending safety action")
-            self._send_safety_action()
-            self._last_action_ns = None
-
-    def _send_safety_action(self) -> None:
-        """Publish safety action (zeros or hold) per spec's safety_behavior."""
-        stamp_ns = self.get_clock().now().nanoseconds
+        stamp_ns = self._node.get_clock().now().nanoseconds
         for topic, (spec, pub) in self._act_publishers.items():
             if pub is None or not pub.is_activated:
                 continue
@@ -288,61 +204,32 @@ class _RosettaLifecycleNode(Node):
             msg = encode_value(spec, arr, stamp_ns)
             pub.publish(msg)
 
-    def _on_observation(
-        self, msg, spec: ObservationStreamSpec, buffer: StreamBuffer
-    ) -> None:
-        """Handle incoming observation message: extract timestamp, decode, and buffer."""
-        fallback_ns = self.get_clock().now().nanoseconds
-        ts_ns = get_message_timestamp_ns(msg, spec, fallback_ns)
+    def reset_state(self) -> None:
+        """Reset internal state tracking (e.g., between episodes)."""
+        self._missing_streams.clear()
+        self._header_warned.clear()
+        self._last_action_ns = None
 
-        # Log warning on first header fallback per stream
-        if spec.stamp_src == "header" and ts_ns == fallback_ns:
-            if spec.key not in self._header_warned:
-                self.get_logger().warning(
-                    f"Header stamp unavailable for '{spec.key}', using receive time"
-                )
-                self._header_warned.add(spec.key)
-
-        buffer.push(ts_ns, decode_value(msg, spec))
-
-    def _log_stream_state(self, key: str, is_missing: bool) -> None:
-        """Log on state transitions only (missing <-> recovered)."""
-        was_missing = key in self._missing_streams
-        if is_missing and not was_missing:
-            self.get_logger().warning(f"Stream '{key}' missing - using zeros")
-            self._missing_streams.add(key)
-        elif not is_missing and was_missing:
-            self.get_logger().info(f"Stream '{key}' recovered")
-            self._missing_streams.discard(key)
+    # -------------------- Properties --------------------
 
     @property
     def is_active(self) -> bool:
-        """
-        Check if the node is in active state.
-
-        Uses the lifecycle publisher's is_activated property (public API).
-        This follows the pattern from the official ROS 2 lifecycle demo.
-        """
-        # Check any lifecycle publisher - they all transition together
+        """Check if lifecycle publishers are activated."""
         for _, pub in self._act_publishers.values():
             return pub.is_activated
-        # No publishers configured - check subscriptions exist (configured but no actions)
         return False
 
     @property
     def is_configured(self) -> bool:
-        """
-        Check if the node has been configured.
-
-        Publishers/subscriptions are created in on_configure and cleared in on_cleanup.
-        """
-        # Publishers created in on_configure, cleared in on_cleanup
+        """Check if setup() has been called (resources exist)."""
         return bool(self._act_publishers) or bool(self._subscriptions)
+
+    # -------------------- Observation / Action --------------------
 
     def sample_observation(self) -> RobotObservation:
         """Sample current observations from buffers."""
         obs = {}
-        now_ns = self.get_clock().now().nanoseconds
+        now_ns = self._node.get_clock().now().nanoseconds
 
         for spec, buffer in self._obs_buffers.values():
             data = buffer.sample(now_ns)
@@ -364,7 +251,7 @@ class _RosettaLifecycleNode(Node):
     def publish_action(self, action: RobotAction) -> RobotAction:
         """Publish action to ROS2 topics via lifecycle publishers."""
         sent = {}
-        stamp_ns = self.get_clock().now().nanoseconds
+        stamp_ns = self._node.get_clock().now().nanoseconds
 
         for topic, (spec, pub) in self._act_publishers.items():
             if pub is None:
@@ -384,15 +271,127 @@ class _RosettaLifecycleNode(Node):
         self._last_action_ns = stamp_ns
         return sent
 
+    # -------------------- Private --------------------
+
+    def _should_use_watchdog(self) -> bool:
+        """Check if watchdog should be enabled."""
+        if not self._act_publishers:
+            return False
+        return not all(
+            spec.safety_behavior == "none" for spec, _ in self._act_publishers.values()
+        )
+
+    def _on_watchdog(self) -> None:
+        """Check if actions have stopped and send safety action if needed."""
+        if not self.is_active:
+            return
+        if self._last_action_ns is None:
+            return
+
+        now_ns = self._node.get_clock().now().nanoseconds
+        timeout_ns = int(2e9 / self._config.fps)  # 2 frame periods
+
+        if now_ns - self._last_action_ns > timeout_ns:
+            self._node.get_logger().warning("Action timeout - sending safety action")
+            self.send_safety_action()
+            self._last_action_ns = None
+
+    def _on_observation(
+        self, msg, spec: ObservationStreamSpec, buffer: StreamBuffer
+    ) -> None:
+        """Handle incoming observation message: extract timestamp, decode, and buffer."""
+        fallback_ns = self._node.get_clock().now().nanoseconds
+        ts_ns = get_message_timestamp_ns(msg, spec, fallback_ns)
+
+        # Log warning on first header fallback per stream
+        if spec.stamp_src == "header" and ts_ns == fallback_ns:
+            if spec.key not in self._header_warned:
+                self._node.get_logger().warning(
+                    f"Header stamp unavailable for '{spec.key}', using receive time"
+                )
+                self._header_warned.add(spec.key)
+
+        buffer.push(ts_ns, decode_value(msg, spec))
+
+    def _log_stream_state(self, key: str, is_missing: bool) -> None:
+        """Log on state transitions only (missing <-> recovered)."""
+        was_missing = key in self._missing_streams
+        if is_missing and not was_missing:
+            self._node.get_logger().warning(f"Stream '{key}' missing - using zeros")
+            self._missing_streams.add(key)
+        elif not is_missing and was_missing:
+            self._node.get_logger().info(f"Stream '{key}' recovered")
+            self._missing_streams.discard(key)
+
+
+class _RosettaLifecycleNode(Node):
+    """Thin lifecycle wrapper around _TopicBridge for standalone mode."""
+
+    def __init__(self, node_name: str, config: RosettaConfig, **kwargs):
+        super().__init__(node_name, **kwargs)
+        self._bridge = _TopicBridge(config)
+
+    def on_configure(self, _state: State) -> TransitionCallbackReturn:
+        self.get_logger().info("on_configure() is called.")
+        self._bridge.setup(self)
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_activate(self, state: State) -> TransitionCallbackReturn:
+        self.get_logger().info("on_activate() is called.")
+        return super().on_activate(state)
+
+    def on_deactivate(self, state: State) -> TransitionCallbackReturn:
+        self.get_logger().info("on_deactivate() is called.")
+        self._bridge.send_safety_action()
+        self._bridge._last_action_ns = None
+        return super().on_deactivate(state)
+
+    def on_cleanup(self, _state: State) -> TransitionCallbackReturn:
+        self.get_logger().info("on_cleanup() is called.")
+        self._bridge.teardown()
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_shutdown(self, _state: State) -> TransitionCallbackReturn:
+        self.get_logger().info("on_shutdown() is called.")
+        self._bridge.teardown()
+        return TransitionCallbackReturn.SUCCESS
+
+    def on_error(self, state: State) -> TransitionCallbackReturn:
+        self.get_logger().error(f"Error occurred in state: {state.label}")
+        try:
+            self._bridge.teardown()
+        except Exception as e:
+            self.get_logger().error(f"Error during cleanup: {e}")
+        return TransitionCallbackReturn.SUCCESS
+
+    @property
+    def is_active(self) -> bool:
+        return self._bridge.is_active
+
+    @property
+    def is_configured(self) -> bool:
+        return self._bridge.is_configured
+
+    def sample_observation(self) -> RobotObservation:
+        return self._bridge.sample_observation()
+
+    def publish_action(self, action: RobotAction) -> RobotAction:
+        return self._bridge.publish_action(action)
+
     def reset_state(self) -> None:
-        """Reset internal state tracking (e.g., between episodes)."""
-        self._missing_streams.clear()
-        self._header_warned.clear()
-        self._last_action_ns = None
+        self._bridge.reset_state()
 
 
 class Rosetta(Robot):
-    """LeRobot Robot that bridges to ROS2 topics with lifecycle support."""
+    """LeRobot Robot that bridges to ROS2 topics with lifecycle support.
+
+    Supports two modes:
+        - Standalone: creates an internal _RosettaLifecycleNode with its own
+          executor and spin thread. Used when launched independently.
+        - Injected: attaches to a pre-built _TopicBridge on an external node
+          (via config._external_bridge). Used by RosettaClientNode so that
+          launch topic remappings apply to observation/action topics.
+    """
 
     config_class = RosettaConfig
     name = "rosetta"
@@ -401,10 +400,17 @@ class Rosetta(Robot):
         super().__init__(config)
         self._config: RosettaConfig = config
 
+        # Standalone mode resources (None in injected mode)
         self._node: Optional[_RosettaLifecycleNode] = None
         self._executor: Optional[SingleThreadedExecutor] = None
         self._spin_thread: Optional[threading.Thread] = None
         self._owns_rclpy = False
+
+        # Injected mode: pre-built bridge from external node
+        self._external_bridge: Optional[_TopicBridge] = getattr(
+            config, "_external_bridge", None
+        )
+        self._bridge: Optional[_TopicBridge] = None
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -431,7 +437,9 @@ class Rosetta(Robot):
 
     @property
     def is_connected(self) -> bool:
-        """Returns True only when lifecycle state is ACTIVE."""
+        """Returns True when ready to send/receive data."""
+        if self._external_bridge is not None:
+            return self._bridge is not None
         if self._node is None:
             return False
         return self._node.is_active
@@ -449,7 +457,9 @@ class Rosetta(Robot):
         pass
 
     def configure(self) -> None:
-        """Trigger lifecycle configure transition."""
+        """Trigger lifecycle configure transition (standalone mode only)."""
+        if self._external_bridge is not None:
+            return  # Bridge already configured by external node
         if self._node is None:
             self._create_node()
         self._node.trigger_configure()
@@ -460,6 +470,12 @@ class Rosetta(Robot):
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
+        if self._external_bridge is not None:
+            # Injected mode: bridge already setup + activated by external node
+            self._bridge = self._external_bridge
+            return
+
+        # Standalone mode
         if self._node is None:
             self._create_node()
 
@@ -522,7 +538,16 @@ class Rosetta(Robot):
             self._owns_rclpy = False
 
     def disconnect(self) -> None:
-        """Deactivate and cleanup the lifecycle node."""
+        """Deactivate and cleanup."""
+        if self._external_bridge is not None:
+            # Injected mode: detach from bridge, reset state for next episode.
+            # Do NOT teardown — bridge is owned by the external node.
+            if self._bridge is not None:
+                self._bridge.reset_state()
+                self._bridge = None
+            return
+
+        # Standalone mode
         if self._node is None:
             return
 
@@ -538,7 +563,9 @@ class Rosetta(Robot):
 
     def reset(self) -> None:
         """Reset internal state tracking (e.g., between episodes)."""
-        if self._node is not None:
+        if self._bridge is not None:
+            self._bridge.reset_state()
+        elif self._node is not None:
             self._node.reset_state()
 
     def get_observation(self) -> RobotObservation:
@@ -551,6 +578,8 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        if self._bridge is not None:
+            return self._bridge.sample_observation()
         return self._node.sample_observation()
 
     def send_action(self, action: RobotAction) -> RobotAction:
@@ -565,6 +594,8 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        if self._bridge is not None:
+            return self._bridge.publish_action(action)
         return self._node.publish_action(action)
 
     @property
