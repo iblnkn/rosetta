@@ -79,6 +79,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from lerobot.robots.config import RobotConfig
 
@@ -102,6 +103,7 @@ class RosettaConfig(RobotConfig):
     _contract: Contract | None = field(default=None, init=False, repr=False)
     _observation_specs: list[ObservationStreamSpec] | None = field(default=None, init=False, repr=False)
     _action_specs: list[ActionStreamSpec] | None = field(default=None, init=False, repr=False)
+    _external_bridge: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         super().__post_init__()
