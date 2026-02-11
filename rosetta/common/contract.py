@@ -133,6 +133,7 @@ class ObservationSpec:
     qos: dict[str, Any] | None = None
     dtype: str | None = None
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
+    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +150,7 @@ class ActionSpec:
     safety_behavior: str = "none"
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
     encoder: str | None = None  # Custom encoder path: "module.path:function_name"
+    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -264,6 +266,7 @@ class ObservationStreamSpec(StreamSpec):
     qos: dict[str, Any] | None = None
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
+    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +279,7 @@ class ActionStreamSpec(StreamSpec):
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
     encoder: str | None = None  # Custom encoder path
+    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 # =============================================================================
@@ -389,6 +393,14 @@ def _parse_observation(data: dict[str, Any], idx: int, section: str = "observati
     if not data["topic"]:
         raise ContractValidationError(f"Empty topic in {ctx}")
 
+    uc = data.get("unit_conversion")
+    if uc is not None:
+        uc = str(uc).lower().strip()
+        if uc not in ("rad2deg",):
+            raise ContractValidationError(
+                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
+            )
+
     return ObservationSpec(
         key=data["key"],
         topic=data["topic"],
@@ -399,6 +411,7 @@ def _parse_observation(data: dict[str, Any], idx: int, section: str = "observati
         qos=data.get("qos"),
         dtype=_validate_dtype(data.get("dtype"), ctx),
         decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
+        unit_conversion=uc,
     )
 
 
@@ -410,6 +423,14 @@ def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> Observatio
     if not data["topic"]:
         raise ContractValidationError(f"Empty topic in {ctx}")
 
+    uc = data.get("unit_conversion")
+    if uc is not None:
+        uc = str(uc).lower().strip()
+        if uc not in ("rad2deg",):
+            raise ContractValidationError(
+                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
+            )
+
     return ObservationSpec(
         key=data["key"],
         topic=data["topic"],
@@ -420,6 +441,7 @@ def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> Observatio
         qos=data.get("qos"),
         dtype=_validate_dtype(data["dtype"], ctx, required=True),
         decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
+        unit_conversion=uc,
     )
 
 
@@ -441,6 +463,15 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> A
         data.get("safety_behavior", "zeros"), SafetyBehavior, "safety_behavior", ctx
     )
 
+    # Read unit_conversion (e.g., "rad2deg")
+    uc = data.get("unit_conversion")
+    if uc is not None:
+        uc = str(uc).lower().strip()
+        if uc not in ("rad2deg",):
+            raise ContractValidationError(
+                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
+            )
+
     return ActionSpec(
         key=data["key"],
         publish_topic=pub["topic"],
@@ -452,6 +483,7 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> A
         safety_behavior=safety,
         decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
         encoder=_validate_converter_path(data.get("encoder"), f"{ctx}.encoder"),
+        unit_conversion=uc,
     )
 
 
@@ -528,6 +560,7 @@ def _parse_teleop(data: dict[str, Any] | None) -> TeleopSpec | None:
             safety_behavior="none",
             decoder=f.decoder,
             encoder=f.encoder,
+            unit_conversion=f.unit_conversion,
         )
         for f in feedback
     ]
