@@ -228,15 +228,22 @@ class _TopicBridge:
 
     @property
     def is_active(self) -> bool:
-        """Check if lifecycle publishers are activated."""
-        for _, pub in self._act_publishers.values():
-            return pub.is_activated
-        return False
+        """
+        Check if the node is in active state using the internal lifecycle node state.
+        """
+        current_state = self._node._state_machine.current_state
+        return current_state[1] == 'active'
 
     @property
     def is_configured(self) -> bool:
-        """Check if setup() has been called (resources exist)."""
-        return bool(self._act_publishers) or bool(self._subscriptions)
+        """
+        Check if the node has been configured by checking the internal lifecycle node state
+        """
+        current_state = self._node._state_machine.current_state
+        # Configured states: inactive, active, or any transition involving them
+        # The second element is the string label
+        return current_state[1] in ['inactive', 'active', 'activating', 'deactivating']
+
 
     # -------------------- Observation / Action --------------------
 
