@@ -45,6 +45,7 @@ from lerobot.async_inference.robot_client import RobotClient
 from rosetta_interfaces.action import RunPolicy
 
 from lerobot_robot_rosetta import RosettaConfig
+from lerobot_robot_rosetta.rosetta import _TopicBridge
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -115,6 +116,10 @@ class RosettaClientNode(LifecycleNode):
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
 
+        # Topic bridge: manages observation subscriptions + action publishers
+        self._rosetta_config: RosettaConfig | None = None
+        self._bridge: _TopicBridge | None = None
+
         self.get_logger().info("Node created (unconfigured)")
 
     # -------------------- Lifecycle callbacks --------------------
@@ -139,6 +144,13 @@ class RosettaClientNode(LifecycleNode):
                 "Use a HuggingFace repo ID (e.g. 'user/model') or a valid local directory."
             )
             return TransitionCallbackReturn.FAILURE
+
+        # Create topic bridge (observation subscriptions + lifecycle action publishers)
+        self._rosetta_config = RosettaConfig(
+            id="rosetta", config_path=self._contract_path
+        )
+        self._bridge = _TopicBridge(self._rosetta_config)
+        self._bridge.setup(self)
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -174,6 +186,10 @@ class RosettaClientNode(LifecycleNode):
         """Stop accepting goals, cancel in-progress execution, stop policy server."""
         self._accepting_goals = False
 
+        # Send safety action while lifecycle publishers are still active
+        if self._bridge is not None:
+            self._bridge.send_safety_action()
+
         # Cancel any in-progress goal
         if self._client is not None:
             self.get_logger().info("Cancelling in-progress policy execution...")
@@ -198,6 +214,11 @@ class RosettaClientNode(LifecycleNode):
         """Release resources and destroy action server."""
         self._stop_policy_server()  # Ensure stopped
 
+        if self._bridge is not None:
+            self._bridge.teardown()
+            self._bridge = None
+        self._rosetta_config = None
+
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
             self._action_server = None
@@ -212,6 +233,11 @@ class RosettaClientNode(LifecycleNode):
         """Final cleanup before destruction."""
         self._accepting_goals = False
         self._stop_policy_server()
+
+        if self._bridge is not None:
+            self._bridge.teardown()
+            self._bridge = None
+        self._rosetta_config = None
 
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
@@ -229,6 +255,9 @@ class RosettaClientNode(LifecycleNode):
             if self._client is not None:
                 self._client.shutdown_event.set()
             self._stop_policy_server()
+            if self._bridge is not None:
+                self._bridge.teardown()
+                self._bridge = None
         except Exception as e:
             self.get_logger().error(f"Error during error handling: {e}")
 
@@ -374,6 +403,7 @@ class RosettaClientNode(LifecycleNode):
             id="rosetta",
             config_path=self._contract_path,
         )
+        robot_config._external_bridge = self._bridge  # Inject pre-built bridge
         fps = robot_config.fps
 
         config_kwargs = dict(
