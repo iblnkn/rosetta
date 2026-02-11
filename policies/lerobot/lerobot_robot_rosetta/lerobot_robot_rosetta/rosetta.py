@@ -149,6 +149,8 @@ class _TopicBridge:
             self._act_publishers[spec.topic] = (spec, pub)
 
         # Create watchdog timer
+        # Uses contract fps (sim-time rate) because timer and timeout use ROS2 clock
+        # which respects use_sim_time and /clock topic for simulation time
         if self._should_use_watchdog():
             period_sec = 2.0 / self._config.fps
             self._watchdog_timer = node.create_timer(period_sec, self._on_watchdog)
@@ -205,24 +207,43 @@ class _TopicBridge:
             pub.publish(msg)
 
     def reset_state(self) -> None:
-        """Reset internal state tracking (e.g., between episodes)."""
+        """Reset internal state tracking (e.g., between episodes).
+        
+        Clears episode-specific state without destroying ROS2 resources.
+        Called between policy runs in injected mode.
+        """
+        # Clear observation buffers to prevent stale data from previous episode
+        for _, buffer in self._obs_buffers.values():
+            buffer.reset()
+        
+        # Reset warning/logging state for new episode
         self._missing_streams.clear()
         self._header_warned.clear()
+        
+        # Reset action state
         self._last_action_ns = None
+        self._last_sent.clear()  # Clear cached actions (important for safety_behavior="hold")
 
     # -------------------- Properties --------------------
 
     @property
     def is_active(self) -> bool:
-        """Check if lifecycle publishers are activated."""
-        for _, pub in self._act_publishers.values():
-            return pub.is_activated
-        return False
+        """
+        Check if the node is in active state using the internal lifecycle node state.
+        """
+        current_state = self._node._state_machine.current_state
+        return current_state[1] == 'active'
 
     @property
     def is_configured(self) -> bool:
-        """Check if setup() has been called (resources exist)."""
-        return bool(self._act_publishers) or bool(self._subscriptions)
+        """
+        Check if the node has been configured by checking the internal lifecycle node state
+        """
+        current_state = self._node._state_machine.current_state
+        # Configured states: inactive, active, or any transition involving them
+        # The second element is the string label
+        return current_state[1] in ['inactive', 'active', 'activating', 'deactivating']
+
 
     # -------------------- Observation / Action --------------------
 
@@ -289,6 +310,17 @@ class _TopicBridge:
             return
 
         now_ns = self._node.get_clock().now().nanoseconds
+        
+        # Handle clock resets (sim time going backwards)
+        # If last_action timestamp is in the future, clock was reset - clear it
+        if self._last_action_ns > now_ns:
+            self._node.get_logger().warning(
+                "Clock reset detected (last_action in future) - resetting watchdog"
+            )
+            self._last_action_ns = None
+            return
+        
+        # Timeout uses contract fps (sim-time rate) because timestamps are in sim time
         timeout_ns = int(2e9 / self._config.fps)  # 2 frame periods
 
         if now_ns - self._last_action_ns > timeout_ns:
@@ -301,10 +333,10 @@ class _TopicBridge:
     ) -> None:
         """Handle incoming observation message: extract timestamp, decode, and buffer."""
         fallback_ns = self._node.get_clock().now().nanoseconds
-        ts_ns = get_message_timestamp_ns(msg, spec, fallback_ns)
+        ts_ns, used_fallback = get_message_timestamp_ns(msg, spec, fallback_ns)
 
         # Log warning on first header fallback per stream
-        if spec.stamp_src == "header" and ts_ns == fallback_ns:
+        if spec.stamp_src == "header" and used_fallback:
             if spec.key not in self._header_warned:
                 self._node.get_logger().warning(
                     f"Header stamp unavailable for '{spec.key}', using receive time"
@@ -493,12 +525,7 @@ class Rosetta(Robot):
             self._owns_rclpy = True
 
         self._node = _RosettaLifecycleNode(
-            f"rosetta_{self.config.id}", self._config,
-            # Ignore global CLI args (e.g. __node:= remap from the launch system)
-            # so this internal node keeps its own name and services separate from
-            # the launch-managed lifecycle node. Side-effect: --log-level from the
-            # launch CLI won't apply to this node (it uses the default level).
-            use_global_arguments=False,
+            f"rosetta_{self.config.id}", self._config
         )
         self._executor = SingleThreadedExecutor()
         self._executor.add_node(self._node)
@@ -543,6 +570,8 @@ class Rosetta(Robot):
             # Injected mode: detach from bridge, reset state for next episode.
             # Do NOT teardown — bridge is owned by the external node.
             if self._bridge is not None:
+                # Send safety action before disconnecting (stop robot movement)
+                self._bridge.send_safety_action()
                 self._bridge.reset_state()
                 self._bridge = None
             return
