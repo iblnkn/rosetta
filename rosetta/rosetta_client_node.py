@@ -47,6 +47,8 @@ from rosetta_interfaces.action import RunPolicy
 from lerobot_robot_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import _TopicBridge
 
+from .common.ros2_utils import is_jazzy_or_newer
+
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
 SERVER_STOP_TIMEOUT_SEC = 5.0
@@ -58,7 +60,14 @@ class RosettaClientNode(LifecycleNode):
     """ROS2 Lifecycle Action Server wrapping LeRobot's RobotClient for policy inference."""
 
     def __init__(self):
-        super().__init__("rosetta_client")
+        # Initialize with enable_logger_service on Jazzy (not supported in Humble)
+        # The logger service allows runtime configuration of log levels via
+        # ros2 service call /node_name/set_logger_level ...
+        # In Humble, logger services are always enabled by default.
+        if is_jazzy_or_newer():
+            super().__init__("rosetta_client", enable_logger_service=True)
+        else:
+            super().__init__("rosetta_client")
 
         # Parameters with descriptors for introspection (ros2 param describe)
         # Read-only parameters are set once at startup and cannot be changed
