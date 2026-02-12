@@ -18,29 +18,25 @@ Launch file for EpisodeRecorderNode - records ROS2 topics to rosbag.
 This is a lifecycle node. By default, it auto-configures and auto-activates.
 Set configure:=false activate:=false for manual lifecycle control.
 
-All node parameter defaults are read from params/episode_recorder.yaml (single
-source of truth).  Launch arguments override only when explicitly provided:
-
 Usage:
-    # Launch with defaults from YAML
+    # Launch with auto-activate (default behavior)
     ros2 launch rosetta episode_recorder_launch.py
 
-    # Override a parameter at launch time
-    ros2 launch rosetta episode_recorder_launch.py \\
-        bag_base_dir:=/tmp/my_bags
-
-    # Manual lifecycle control
+    # Launch without auto-activation (manual lifecycle control)
     ros2 launch rosetta episode_recorder_launch.py configure:=false activate:=false
+
+    # Override contract path
+    ros2 launch rosetta episode_recorder_launch.py contract_path:=/path/to/contract.yaml
 """
 
 import os
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
-from launch.event_handlers import OnExecutionComplete, OnProcessStart
+from launch.event_handlers import OnProcessStart
+from launch_ros.event_handlers import OnStateTransition
 from launch.events import matches_action
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration
 from launch_ros.actions import LifecycleNode
@@ -52,52 +48,57 @@ def generate_launch_description():
     share = get_package_share_directory('rosetta')
     default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
     default_params = os.path.join(share, 'params', 'episode_recorder.yaml')
+    default_bag_base_dir = '/workspaces/rosetta_ws/datasets/bags'
+    default_use_sim_time = 'false'
 
-    # Read defaults from the params YAML (single source of truth)
-    with open(default_params) as f:
-        _yaml = yaml.safe_load(f)
-    defaults = _yaml['episode_recorder']['ros__parameters']
-
-    # --- Declare launch arguments (defaults pulled from YAML) ---------------
+    # Declare launch arguments
+    # Defaults come from params file - launch args override when provided
     launch_description = [
-        # Contract path - deployment-specific (not in the params YAML)
+        # Params file path
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to parameter YAML file'
+        ),
+        # Contract path - deployment-specific
         DeclareLaunchArgument(
             'contract_path',
             default_value=default_contract,
             description='Path to contract YAML file'
         ),
-        # Node parameters - defaults from params/episode_recorder.yaml
+        # Node parameters (defaults from params/episode_recorder.yaml)
         DeclareLaunchArgument(
             'bag_base_dir',
-            default_value=str(defaults['bag_base_dir']),
+            default_value=default_bag_base_dir,
             description='Directory for rosbag output'
         ),
         DeclareLaunchArgument(
             'storage_id',
-            default_value=str(defaults['storage_id']),
+            default_value='mcap',
             description='Rosbag format: mcap (recommended) or sqlite3'
         ),
         DeclareLaunchArgument(
             'default_max_duration',
-            default_value=str(defaults['default_max_duration']),
+            default_value='300.0',
             description='Max episode duration in seconds'
         ),
         DeclareLaunchArgument(
             'feedback_rate_hz',
-            default_value=str(defaults['feedback_rate_hz']),
+            default_value='2.0',
             description='Recording feedback publish rate (Hz)'
         ),
         DeclareLaunchArgument(
             'default_qos_depth',
-            default_value=str(defaults['default_qos_depth']),
-            description='Default QoS queue depth for subscriptions'
+            default_value='10',
+            description='QoS queue depth for subscriptions'
         ),
-        # Launch-only arguments (not node params, not in YAML)
+        # Log level
         DeclareLaunchArgument(
             'log_level',
             default_value='info',
             description='Logging level (debug, info, warn, error)'
         ),
+        # Lifecycle control
         DeclareLaunchArgument(
             'configure',
             default_value='true',
@@ -105,7 +106,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_sim_time',
-            default_value='false',
+            default_value=default_use_sim_time,
             description='Run node with simulated time (pass to use_sim_time param)'
         ),
         DeclareLaunchArgument(
@@ -115,7 +116,8 @@ def generate_launch_description():
         ),
     ]
 
-    # --- Lifecycle node (params file + launch-arg overrides) ----------------
+    # Create the lifecycle node
+    # Parameters are loaded from params file first, then launch args override
     episode_recorder_node = LifecycleNode(
         package='rosetta',
         executable='episode_recorder_node',
@@ -124,7 +126,9 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            default_params,
+            # Load defaults from params file (can be overridden via params_file argument)
+            LaunchConfiguration('params_file'),
+            # Launch argument overrides (later values take precedence)
             {
                 'contract_path': LaunchConfiguration('contract_path'),
                 'bag_base_dir': LaunchConfiguration('bag_base_dir'),
@@ -138,7 +142,7 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
     )
 
-    # --- Lifecycle auto-transition events -----------------------------------
+    # Auto-configure event (triggered on process start)
     configure_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(episode_recorder_node),
@@ -147,6 +151,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
     )
 
+    # Auto-activate event (triggered after configure completes)
     activate_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(episode_recorder_node),
@@ -155,6 +160,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
     )
 
+    # Chain events: process start -> configure -> activate
     configure_event_handler = RegisterEventHandler(
         OnProcessStart(
             target_action=episode_recorder_node,
@@ -163,9 +169,10 @@ def generate_launch_description():
     )
 
     activate_event_handler = RegisterEventHandler(
-        OnExecutionComplete(
-            target_action=configure_event,
-            on_completion=[activate_event],
+        OnStateTransition(
+            target_lifecycle_node=episode_recorder_node,
+            goal_state='inactive',   # trigger when node reaches INACTIVE (configure finished)
+            entities=[activate_event],
         )
     )
 

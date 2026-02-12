@@ -13,16 +13,18 @@
 # limitations under the License.
 
 """
-ROS2 utilities: QoS profiles, message field access, and timestamp helpers.
+ROS2 utilities: QoS profiles, message field access, timestamp helpers, and distribution compatibility.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from rclpy.qos import (
     DurabilityPolicy,
     HistoryPolicy,
+    LivelinessPolicy,
     QoSProfile,
     ReliabilityPolicy,
 )
@@ -59,6 +61,115 @@ def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile | None:
         depth=depth,
         durability=DurabilityPolicy.TRANSIENT_LOCAL if dur == "transient_local" else DurabilityPolicy.VOLATILE,
     )
+
+
+# =============================================================================
+# ROS2 Distribution Compatibility
+# =============================================================================
+
+
+def detect_ros_distro() -> str:
+    """
+    Detect ROS2 distribution from environment.
+    
+    Returns:
+        Distribution name in lowercase (e.g., 'humble', 'jazzy', 'rolling').
+        Defaults to 'humble' if ROS_DISTRO is not set.
+    """
+    return os.environ.get("ROS_DISTRO", "humble").lower()
+
+
+def is_jazzy_or_newer() -> bool:
+    """
+    Check if running on Jazzy, Rolling, or newer distributions.
+    
+    Jazzy introduced several API changes:
+    - rosbag2_py uses QoS objects instead of YAML strings in TopicMetadata
+    - LifecycleNode supports enable_logger_service parameter
+    
+    Returns:
+        True if Jazzy/Rolling or newer, False otherwise (Humble, etc.)
+    """
+    distro = detect_ros_distro()
+    return distro in ("jazzy", "rolling")
+
+
+def extract_qos_numeric_values(q: QoSProfile | int) -> dict[str, int]:
+    """
+    Extract numeric RMW QoS policy values from QoSProfile.
+    
+    Uses rclpy.qos enums and extracts their .value attributes to get
+    the underlying RMW numeric values. This approach works consistently
+    across Humble and Jazzy.
+    
+    Args:
+        q: Either a QoSProfile object or an integer depth value
+    
+    Returns:
+        dict with keys: depth, history, reliability, durability, liveliness
+        All values are integers matching RMW QoS policy constants.
+    """
+    if isinstance(q, int):
+        # Just depth provided, use common defaults
+        return {
+            "depth": q,
+            "history": HistoryPolicy.KEEP_LAST.value,
+            "reliability": ReliabilityPolicy.RELIABLE.value,
+            "durability": DurabilityPolicy.VOLATILE.value,
+            "liveliness": LivelinessPolicy.AUTOMATIC.value,
+        }
+    
+    # Extract depth directly (not an enum)
+    depth = int(getattr(q, "depth", 10) or 10)
+    
+    # Extract enum .value attributes with fallback defaults
+    # Using the rclpy enums ensures we get the correct RMW numeric values
+    history = getattr(q.history, "value", HistoryPolicy.KEEP_LAST.value)
+    reliability = getattr(q.reliability, "value", ReliabilityPolicy.RELIABLE.value)
+    durability = getattr(q.durability, "value", DurabilityPolicy.VOLATILE.value)
+    liveliness = getattr(q.liveliness, "value", LivelinessPolicy.AUTOMATIC.value)
+    
+    return {
+        "depth": depth,
+        "history": history,
+        "reliability": reliability,
+        "durability": durability,
+        "liveliness": liveliness,
+    }
+
+
+def is_transient_local(qos: QoSProfile | int) -> bool:
+    """
+    Check if QoS profile has TRANSIENT_LOCAL durability.
+    
+    Args:
+        qos: Either a QoSProfile object or an integer depth value
+        
+    Returns:
+        True if QoS uses TRANSIENT_LOCAL durability, False otherwise
+    """
+    if isinstance(qos, int):
+        return False
+    
+    try:
+        return qos.durability == DurabilityPolicy.TRANSIENT_LOCAL
+    except Exception:
+        return False
+
+
+def get_qos_depth(qos: QoSProfile | int) -> int:
+    """
+    Extract history depth from QoS profile.
+    
+    Args:
+        qos: Either a QoSProfile object or an integer depth value
+        
+    Returns:
+        History depth as integer
+    """
+    if isinstance(qos, int):
+        return qos
+    return int(getattr(qos, "depth", 10) or 10)
 
 
 # =============================================================================
@@ -139,8 +250,12 @@ def stamp_from_header_ns(msg) -> int | None:
     except (TypeError, ValueError, AttributeError):
         return None
 
-    ns = sec * 1_000_000_000 + nsec
-    return ns if ns > 0 else None
+    # Accept timestamps >= 0 (simulation starts at time 0)
+    # Only reject if both sec and nanosec are 0 (uninitialized)
+    if sec == 0 and nsec == 0:
+        return None
+    
+    return sec * 1_000_000_000 + nsec
 
 
 def get_message_timestamp_ns(
