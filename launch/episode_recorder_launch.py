@@ -18,22 +18,34 @@ Launch file for EpisodeRecorderNode - records ROS2 topics to rosbag.
 This is a lifecycle node. By default, it auto-configures and auto-activates.
 Set configure:=false activate:=false for manual lifecycle control.
 
+Configuration is loaded from params/episode_recorder.yaml (source of truth).
+Launch arguments override only deployment-specific settings (paths, sim time, etc.).
+Algorithm/tuning parameters should be set in the YAML file.
+
 Usage:
-    # Launch with auto-activate (default behavior)
+    # Launch with default params file
     ros2 launch rosetta episode_recorder_launch.py
 
-    # Launch without auto-activation (manual lifecycle control)
-    ros2 launch rosetta episode_recorder_launch.py configure:=false activate:=false
+    # Use custom params file
+    ros2 launch rosetta episode_recorder_launch.py \\
+        params_file:=/path/to/custom_params.yaml
 
-    # Override contract path
-    ros2 launch rosetta episode_recorder_launch.py contract_path:=/path/to/contract.yaml
+    # Override deployment-specific settings
+    ros2 launch rosetta episode_recorder_launch.py \\
+        contract_path:=/path/to/contract.yaml \\
+        bag_base_dir:=/custom/dataset/path \\
+        use_sim_time:=true
+
+    # Manual lifecycle control
+    ros2 launch rosetta episode_recorder_launch.py \\
+        configure:=false activate:=false
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessStart
 from launch_ros.event_handlers import OnStateTransition
@@ -44,80 +56,33 @@ from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
 
-def generate_launch_description():
-    share = get_package_share_directory('rosetta')
-    default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
-    default_params = os.path.join(share, 'params', 'episode_recorder.yaml')
-    default_bag_base_dir = '/workspaces/rosetta_ws/datasets/bags'
-    default_use_sim_time = 'false'
-
-    # Declare launch arguments
-    # Defaults come from params file - launch args override when provided
-    launch_description = [
-        # Params file path
-        DeclareLaunchArgument(
-            'params_file',
-            default_value=default_params,
-            description='Path to parameter YAML file'
-        ),
-        # Contract path - deployment-specific
-        DeclareLaunchArgument(
-            'contract_path',
-            default_value=default_contract,
-            description='Path to contract YAML file'
-        ),
-        # Node parameters (defaults from params/episode_recorder.yaml)
-        DeclareLaunchArgument(
-            'bag_base_dir',
-            default_value=default_bag_base_dir,
-            description='Directory for rosbag output'
-        ),
-        DeclareLaunchArgument(
-            'storage_id',
-            default_value='mcap',
-            description='Rosbag format: mcap (recommended) or sqlite3'
-        ),
-        DeclareLaunchArgument(
-            'default_max_duration',
-            default_value='300.0',
-            description='Max episode duration in seconds'
-        ),
-        DeclareLaunchArgument(
-            'feedback_rate_hz',
-            default_value='2.0',
-            description='Recording feedback publish rate (Hz)'
-        ),
-        DeclareLaunchArgument(
-            'default_qos_depth',
-            default_value='10',
-            description='QoS queue depth for subscriptions'
-        ),
-        # Log level
-        DeclareLaunchArgument(
-            'log_level',
-            default_value='info',
-            description='Logging level (debug, info, warn, error)'
-        ),
-        # Lifecycle control
-        DeclareLaunchArgument(
-            'configure',
-            default_value='true',
-            description='Whether to auto-configure the node on startup'
-        ),
-        DeclareLaunchArgument(
-            'use_sim_time',
-            default_value=default_use_sim_time,
-            description='Run node with simulated time (pass to use_sim_time param)'
-        ),
-        DeclareLaunchArgument(
-            'activate',
-            default_value='true',
-            description='Whether to auto-activate the node on startup (requires configure:=true)'
-        ),
-    ]
-
+def launch_setup(context, *args, **kwargs):
+    """Build node with conditional parameter overrides."""
+    
+    # Resolve launch configurations in context
+    params_file = LaunchConfiguration('params_file').perform(context)
+    contract_path = LaunchConfiguration('contract_path').perform(context)
+    bag_base_dir = LaunchConfiguration('bag_base_dir').perform(context)
+    use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
+    log_level = LaunchConfiguration('log_level').perform(context)
+    
+    # Build parameters list
+    parameters = [params_file]  # Load YAML first
+    
+    # Build override dict with only non-empty values
+    overrides = {'contract_path': contract_path}  # Always override contract
+    
+    if bag_base_dir:  # Only add if non-empty
+        overrides['bag_base_dir'] = bag_base_dir
+    
+    if use_sim_time:  # Only add if non-empty
+        # Convert string to boolean
+        overrides['use_sim_time'] = use_sim_time.lower() in ('true', '1', 'yes')
+    
+    if overrides:
+        parameters.append(overrides)
+    
     # Create the lifecycle node
-    # Parameters are loaded from params file first, then launch args override
     episode_recorder_node = LifecycleNode(
         package='rosetta',
         executable='episode_recorder_node',
@@ -125,21 +90,8 @@ def generate_launch_description():
         namespace='',
         output='screen',
         emulate_tty=True,
-        parameters=[
-            # Load defaults from params file (can be overridden via params_file argument)
-            LaunchConfiguration('params_file'),
-            # Launch argument overrides (later values take precedence)
-            {
-                'contract_path': LaunchConfiguration('contract_path'),
-                'bag_base_dir': LaunchConfiguration('bag_base_dir'),
-                'storage_id': LaunchConfiguration('storage_id'),
-                'default_max_duration': LaunchConfiguration('default_max_duration'),
-                'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
-                'default_qos_depth': LaunchConfiguration('default_qos_depth'),
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
-            },
-        ],
-        arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
+        parameters=parameters,
+        arguments=['--ros-args', '--log-level', log_level],
     )
 
     # Auto-configure event (triggered on process start)
@@ -176,8 +128,64 @@ def generate_launch_description():
         )
     )
 
-    launch_description.append(episode_recorder_node)
-    launch_description.append(configure_event_handler)
-    launch_description.append(activate_event_handler)
+    return [
+        episode_recorder_node,
+        configure_event_handler,
+        activate_event_handler,
+    ]
+
+
+def generate_launch_description():
+    share = get_package_share_directory('rosetta')
+    default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
+    default_params = os.path.join(share, 'params', 'episode_recorder.yaml')
+
+    # Declare launch arguments
+    # Only deployment-specific settings are exposed as launch args
+    # Algorithm/tuning parameters should be set in the params YAML file
+    launch_description = [
+        # Parameters file path - source of truth for tuning params
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to ROS2 parameters YAML file (contains tuning params)'
+        ),
+        # Deployment-specific paths
+        DeclareLaunchArgument(
+            'contract_path',
+            default_value=default_contract,
+            description='Path to robot contract YAML file'
+        ),
+        DeclareLaunchArgument(
+            'bag_base_dir',
+            default_value='',  # Empty = use value from params file
+            description='Directory for rosbag output (empty = use params file value)'
+        ),
+        # Runtime settings
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='',  # Empty = use value from params file
+            description='Use simulated time from /clock topic (empty = use params file value)'
+        ),
+        DeclareLaunchArgument(
+            'log_level',
+            default_value='info',
+            description='Logging level (debug, info, warn, error)'
+        ),
+        # Lifecycle control
+        DeclareLaunchArgument(
+            'configure',
+            default_value='true',
+            description='Auto-configure node on startup'
+        ),
+        DeclareLaunchArgument(
+            'activate',
+            default_value='true',
+            description='Auto-activate node after configure (requires configure:=true)'
+        ),
+    ]
+
+    # Use OpaqueFunction to build node with conditional parameter overrides
+    launch_description.append(OpaqueFunction(function=launch_setup))
 
     return LaunchDescription(launch_description)
