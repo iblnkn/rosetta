@@ -68,7 +68,7 @@ from .common.contract_utils import (
     StreamBuffer,
     zeros_for_spec,
 )
-from .common.ros2_utils import get_message_timestamp_ns, stamp_from_header_ns
+from .common.ros2_utils import get_message_timestamp_ns
 
 # Bag metadata keys
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
@@ -332,18 +332,17 @@ def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
             spec, buffer = buffers[topic]
             msg = deserialize_message(data, get_message(spec.msg_type))
 
+            ts, used_fallback = get_message_timestamp_ns(msg, spec, bag_ns)
             if (
                 spec.stamp_src == "header"
+                and used_fallback
                 and spec.key not in header_warned
-                and stamp_from_header_ns(msg) is None
             ):
                 logging.warning(
                     "Header stamp unavailable for '%s' in %s, using bag receive time",
                     spec.key, bag_dir.name,
                 )
                 header_warned.add(spec.key)
-
-            ts = get_message_timestamp_ns(msg, spec, bag_ns)
             val = decode_value(msg, spec)
             if val is not None:
                 buffer.push(ts, val)
