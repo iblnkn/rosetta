@@ -113,8 +113,8 @@ class EpisodeRecorderNode(LifecycleNode):
         self._storage_id: str | None = None
         self._default_max_duration: float = 300.0
         self._feedback_rate_hz: float = 2.0
-        self._topics: list[tuple[str, str, QoSProfile | int]] = []
-        self._subs: list = []
+        self._topics: list[tuple[str, str, QoSProfile | int, str]] = []  # (topic, type, qos, buffering_strategy)
+        self._subs: dict[str, Any] = {}  # topic -> subscription object
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
 
@@ -158,8 +158,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._topics = self._build_topic_list()
 
         # Create subscriptions (callbacks no-op when not recording)
-        for topic, type_str, qos in self._topics:
-            self._subs.append(self._create_sub(topic, type_str, qos))
+        for topic, type_str, qos, buffering_strategy in self._topics:
+            sub = self._create_sub(topic, type_str, qos, buffering_strategy)
+            self._subs[topic] = sub
 
         # Create action server
         self._action_server = ActionServer(
@@ -218,9 +219,9 @@ class EpisodeRecorderNode(LifecycleNode):
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Release resources."""
         # Destroy subscriptions
-        for sub in self._subs:
+        for sub in self._subs.values():
             self.destroy_subscription(sub)
-        self._subs = []
+        self._subs.clear()
 
         # Destroy action server
         if self._action_server is not None:
@@ -241,9 +242,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._close_writer()
 
         # Destroy subscriptions
-        for sub in self._subs:
+        for sub in self._subs.values():
             self.destroy_subscription(sub)
-        self._subs = []
+        self._subs.clear()
 
         # Destroy action server
         if self._action_server is not None:
@@ -268,29 +269,49 @@ class EpisodeRecorderNode(LifecycleNode):
 
     # -------------------- Topic and subscription management --------------------
 
-    def _build_topic_list(self) -> list[tuple[str, str, QoSProfile | int]]:
+    def _build_topic_list(self) -> list[tuple[str, str, QoSProfile | int, str]]:
         """Extract topics from contract.
 
         Includes:
         - Observation and action topics (from iter_specs)
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
+        
+        Returns:
+            List of (topic, type_str, qos, buffering_strategy) tuples
         """
-        topics: list[tuple[str, str, QoSProfile | int]] = []
+        topics: list[tuple[str, str, QoSProfile | int, str]] = []
 
         for spec in iter_specs(self._contract):
             qos = qos_profile_from_dict(spec.qos) or 10
-            topics.append((spec.topic, spec.msg_type, qos))
+            # Default buffering strategy for observation/action topics
+            topics.append((spec.topic, spec.msg_type, qos, "no_buffer"))
 
         # Task topics
         for task in self._contract.tasks or []:
             qos = qos_profile_from_dict(task.qos) or 10
-            topics.append((task.topic, task.type, qos))
+            topics.append((task.topic, task.type, qos, "no_buffer"))
 
-        # Adjunct topics (record-only, no key mapping)
+        # Adjunct topics (record-only, no key mapping) - these can have buffering strategies
         for adj in self._contract.adjunct or []:
             qos = qos_profile_from_dict(adj.qos) or 10
-            topics.append((adj.topic, adj.type, qos))
+            # Use buffering strategy from contract, default to "accumulate" for transient_local
+            buffering_strategy = adj.buffering_strategy
+            if buffering_strategy is None:
+                # Auto-detect: use accumulate for transient_local, no_buffer otherwise
+                if isinstance(qos, QoSProfile):
+                    try:
+                        from rclpy.qos import DurabilityPolicy
+                        if qos.durability == DurabilityPolicy.TRANSIENT_LOCAL:
+                            buffering_strategy = "accumulate"
+                        else:
+                            buffering_strategy = "no_buffer"
+                    except Exception:
+                        buffering_strategy = "no_buffer"
+                else:
+                    buffering_strategy = "no_buffer"
+            
+            topics.append((adj.topic, adj.type, qos, buffering_strategy))
 
         # If node is running with simulation time enabled, record the /clock
         # topic so playback can drive sim time. Use a safe get in case the
@@ -303,11 +324,11 @@ class EpisodeRecorderNode(LifecycleNode):
         if use_sim:
             # Use the standard ROS2 clock message type. QoS depth 10 is a
             # reasonable default for clock topic traffic.
-            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10))
+            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10, "no_buffer"))
 
         return topics
 
-    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int):
+    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
         
@@ -332,7 +353,7 @@ class EpisodeRecorderNode(LifecycleNode):
 
         def callback(msg: Any, _topic: str = topic) -> None:
             timestamp_ns = self.get_clock().now().nanoseconds
-            # Buffer TRANSIENT_LOCAL messages when not recording
+            # Buffer TRANSIENT_LOCAL messages when not recording (based on strategy)
             if not self._is_recording:
                 # Check if this topic has TRANSIENT_LOCAL durability
                 is_transient_local = False
@@ -348,7 +369,8 @@ class EpisodeRecorderNode(LifecycleNode):
                 elif isinstance(qos, int):
                     history_depth = int(qos)
 
-                if is_transient_local:
+                # Only buffer if TRANSIENT_LOCAL and strategy is not no_buffer
+                if is_transient_local and buffering_strategy != "no_buffer":
                     try:
                         serialized = serialize_message(msg)
                         if len(serialized) <= MAX_BUFFER_BYTES:
@@ -547,6 +569,53 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def _open_writer(self, bag_dir: Path) -> None:
         """Open writer and register all topics."""
+        
+        # Step 1: Re-subscribe to topics with resubscribe_on_start strategy
+        # This must happen BEFORE opening the writer so messages buffer properly
+        resubscribe_topics = [
+            (topic, type_str, qos, strategy)
+            for topic, type_str, qos, strategy in self._topics
+            if strategy == "resubscribe_on_start"
+        ]
+        
+        for topic, type_str, qos, strategy in resubscribe_topics:
+            self.get_logger().info(f"Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data...")
+            
+            # Find and destroy old subscriber
+            if topic in self._subs:
+                old_sub = self._subs[topic]
+                self.destroy_subscription(old_sub)
+                del self._subs[topic]
+            
+            # Clear buffer for this topic
+            with self._buffer_lock:
+                if topic in self._buffers:
+                    old_count = len(self._buffers[topic])
+                    self._buffers[topic].clear()
+                    self.get_logger().info(f"Cleared {old_count} stale messages from {topic} buffer")
+            
+            # Create new subscriber - will immediately receive latched TRANSIENT_LOCAL messages
+            new_sub = self._create_sub(topic, type_str, qos, strategy)
+            self._subs[topic] = new_sub
+        
+        # Step 2: Brief sleep to allow TRANSIENT_LOCAL delivery to new subscribers
+        if resubscribe_topics:
+            time.sleep(0.2)  # 200ms should be plenty for latched message delivery
+            with self._buffer_lock:
+                for topic, _, _, _ in resubscribe_topics:
+                    buf_size = len(self._buffers.get(topic, []))
+                    if buf_size == 0:
+                        self.get_logger().warning(
+                            f"After re-subscribe, {topic} buffer is EMPTY! "
+                            f"This means the publisher is not publishing with TRANSIENT_LOCAL QoS, "
+                            f"or the publisher is not running. Recording will continue without this data."
+                        )
+                    else:
+                        self.get_logger().info(
+                            f"After re-subscribe, {topic} buffer has {buf_size} message(s)"
+                        )
+        
+        # Step 3: Open storage and create writer
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
             storage_id=self._storage_id,
@@ -671,7 +740,7 @@ class EpisodeRecorderNode(LifecycleNode):
         
 
         # Register all topics
-        for idx, (topic, type_str, qos) in enumerate(self._topics):
+        for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
             # Use positional args for TopicMetadata to be compatible with
             # different rosbag2_py bindings (some are strict about kwargs
             # or have slightly different signatures). The expected

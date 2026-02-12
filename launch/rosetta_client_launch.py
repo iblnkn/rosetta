@@ -46,13 +46,13 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
-from launch.event_handlers import OnExecutionComplete, OnProcessStart
+from launch.event_handlers import OnProcessStart
+from launch_ros.event_handlers import OnStateTransition
 from launch.events import matches_action
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
-from launch_ros.event_handlers import OnStateTransition
 
 
 def generate_launch_description():
