@@ -41,7 +41,13 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from rclpy.qos import QoSProfile
+from rclpy.qos import (
+    QoSProfile,
+    HistoryPolicy,
+    ReliabilityPolicy,
+    DurabilityPolicy,
+    LivelinessPolicy,
+)
 from rclpy.serialization import serialize_message
 
 import rosbag2_py
@@ -56,7 +62,14 @@ from .common.contract import load_contract
 from .common import decoders as _decoders  # noqa: F401 - registers decoders
 from .common import encoders as _encoders  # noqa: F401 - registers encoders
 from .common.contract_utils import iter_specs
-from .common.ros2_utils import qos_profile_from_dict
+from .common.ros2_utils import (
+    qos_profile_from_dict,
+    detect_ros_distro,
+    is_jazzy_or_newer,
+    extract_qos_numeric_values,
+    is_transient_local,
+    get_qos_depth,
+)
 
 # Bag metadata keys
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
@@ -71,6 +84,10 @@ METADATA_RETRY_DELAY_SEC = 0.1
 # Maximum serialized bytes to buffer for a retained message (4 MiB)
 MAX_BUFFER_BYTES = 4 * 1024 * 1024
 
+# ROS2 distribution compatibility flag
+# Uses common utilities from ros2_compat module
+_IS_JAZZY = is_jazzy_or_newer()
+
 
 class EpisodeRecorderNode(LifecycleNode):
     """
@@ -83,7 +100,14 @@ class EpisodeRecorderNode(LifecycleNode):
     """
 
     def __init__(self):
-        super().__init__("episode_recorder", enable_logger_service=True)
+        # Initialize with enable_logger_service on Jazzy (not supported in Humble)
+        # The logger service allows runtime configuration of log levels via
+        # ros2 service call /node_name/set_logger_level ...
+        # In Humble, logger services are always enabled by default.
+        if _IS_JAZZY:
+            super().__init__("episode_recorder", enable_logger_service=True)
+        else:
+            super().__init__("episode_recorder")
 
         # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
@@ -113,8 +137,8 @@ class EpisodeRecorderNode(LifecycleNode):
         self._storage_id: str | None = None
         self._default_max_duration: float = 300.0
         self._feedback_rate_hz: float = 2.0
-        self._topics: list[tuple[str, str, QoSProfile | int]] = []
-        self._subs: list = []
+        self._topics: list[tuple[str, str, QoSProfile | int, str]] = []  # (topic, type, qos, buffering_strategy)
+        self._subs: dict[str, Any] = {}  # topic -> subscription object
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
 
@@ -158,8 +182,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._topics = self._build_topic_list()
 
         # Create subscriptions (callbacks no-op when not recording)
-        for topic, type_str, qos in self._topics:
-            self._subs.append(self._create_sub(topic, type_str, qos))
+        for topic, type_str, qos, buffering_strategy in self._topics:
+            sub = self._create_sub(topic, type_str, qos, buffering_strategy)
+            self._subs[topic] = sub
 
         # Create action server
         self._action_server = ActionServer(
@@ -218,9 +243,9 @@ class EpisodeRecorderNode(LifecycleNode):
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Release resources."""
         # Destroy subscriptions
-        for sub in self._subs:
+        for sub in self._subs.values():
             self.destroy_subscription(sub)
-        self._subs = []
+        self._subs.clear()
 
         # Destroy action server
         if self._action_server is not None:
@@ -241,9 +266,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._close_writer()
 
         # Destroy subscriptions
-        for sub in self._subs:
+        for sub in self._subs.values():
             self.destroy_subscription(sub)
-        self._subs = []
+        self._subs.clear()
 
         # Destroy action server
         if self._action_server is not None:
@@ -268,29 +293,42 @@ class EpisodeRecorderNode(LifecycleNode):
 
     # -------------------- Topic and subscription management --------------------
 
-    def _build_topic_list(self) -> list[tuple[str, str, QoSProfile | int]]:
+    def _build_topic_list(self) -> list[tuple[str, str, QoSProfile | int, str]]:
         """Extract topics from contract.
 
         Includes:
         - Observation and action topics (from iter_specs)
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
+        
+        Returns:
+            List of (topic, type_str, qos, buffering_strategy) tuples
         """
-        topics: list[tuple[str, str, QoSProfile | int]] = []
+        topics: list[tuple[str, str, QoSProfile | int, str]] = []
 
         for spec in iter_specs(self._contract):
             qos = qos_profile_from_dict(spec.qos) or 10
-            topics.append((spec.topic, spec.msg_type, qos))
+            # Default buffering strategy for observation/action topics
+            topics.append((spec.topic, spec.msg_type, qos, "no_buffer"))
 
         # Task topics
         for task in self._contract.tasks or []:
             qos = qos_profile_from_dict(task.qos) or 10
-            topics.append((task.topic, task.type, qos))
+            topics.append((task.topic, task.type, qos, "no_buffer"))
 
-        # Adjunct topics (record-only, no key mapping)
+        # Adjunct topics (record-only, no key mapping) - these can have buffering strategies
         for adj in self._contract.adjunct or []:
             qos = qos_profile_from_dict(adj.qos) or 10
-            topics.append((adj.topic, adj.type, qos))
+            # Use buffering strategy from contract, default to "accumulate" for transient_local
+            buffering_strategy = adj.buffering_strategy
+            if buffering_strategy is None:
+                # Auto-detect: use accumulate for transient_local, no_buffer otherwise
+                if is_transient_local(qos):
+                    buffering_strategy = "accumulate"
+                else:
+                    buffering_strategy = "no_buffer"
+            
+            topics.append((adj.topic, adj.type, qos, buffering_strategy))
 
         # If node is running with simulation time enabled, record the /clock
         # topic so playback can drive sim time. Use a safe get in case the
@@ -303,11 +341,11 @@ class EpisodeRecorderNode(LifecycleNode):
         if use_sim:
             # Use the standard ROS2 clock message type. QoS depth 10 is a
             # reasonable default for clock topic traffic.
-            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10))
+            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10, "no_buffer"))
 
         return topics
 
-    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int):
+    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
         
@@ -332,23 +370,14 @@ class EpisodeRecorderNode(LifecycleNode):
 
         def callback(msg: Any, _topic: str = topic) -> None:
             timestamp_ns = self.get_clock().now().nanoseconds
-            # Buffer TRANSIENT_LOCAL messages when not recording
+            # Buffer TRANSIENT_LOCAL messages when not recording (based on strategy)
             if not self._is_recording:
-                # Check if this topic has TRANSIENT_LOCAL durability
-                is_transient_local = False
-                history_depth = 1
-                
-                if isinstance(qos, QoSProfile):
-                    try:
-                        from rclpy.qos import DurabilityPolicy
-                        is_transient_local = (qos.durability == DurabilityPolicy.TRANSIENT_LOCAL)
-                        history_depth = int(getattr(qos, "depth", 1) or 1)
-                    except Exception:
-                        pass
-                elif isinstance(qos, int):
-                    history_depth = int(qos)
+                # Check if this topic should be buffered
+                is_tl = is_transient_local(qos)
+                history_depth = get_qos_depth(qos)
 
-                if is_transient_local:
+                # Only buffer if TRANSIENT_LOCAL and strategy is not no_buffer
+                if is_tl and buffering_strategy != "no_buffer":
                     try:
                         serialized = serialize_message(msg)
                         if len(serialized) <= MAX_BUFFER_BYTES:
@@ -547,6 +576,53 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def _open_writer(self, bag_dir: Path) -> None:
         """Open writer and register all topics."""
+        
+        # Step 1: Re-subscribe to topics with resubscribe_on_start strategy
+        # This must happen BEFORE opening the writer so messages buffer properly
+        resubscribe_topics = [
+            (topic, type_str, qos, strategy)
+            for topic, type_str, qos, strategy in self._topics
+            if strategy == "resubscribe_on_start"
+        ]
+        
+        for topic, type_str, qos, strategy in resubscribe_topics:
+            self.get_logger().info(f"Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data...")
+            
+            # Find and destroy old subscriber
+            if topic in self._subs:
+                old_sub = self._subs[topic]
+                self.destroy_subscription(old_sub)
+                del self._subs[topic]
+            
+            # Clear buffer for this topic
+            with self._buffer_lock:
+                if topic in self._buffers:
+                    old_count = len(self._buffers[topic])
+                    self._buffers[topic].clear()
+                    self.get_logger().info(f"Cleared {old_count} stale messages from {topic} buffer")
+            
+            # Create new subscriber - will immediately receive latched TRANSIENT_LOCAL messages
+            new_sub = self._create_sub(topic, type_str, qos, strategy)
+            self._subs[topic] = new_sub
+        
+        # Step 2: Brief sleep to allow TRANSIENT_LOCAL delivery to new subscribers
+        if resubscribe_topics:
+            time.sleep(0.2)  # 200ms should be plenty for latched message delivery
+            with self._buffer_lock:
+                for topic, _, _, _ in resubscribe_topics:
+                    buf_size = len(self._buffers.get(topic, []))
+                    if buf_size == 0:
+                        self.get_logger().warning(
+                            f"After re-subscribe, {topic} buffer is EMPTY! "
+                            f"This means the publisher is not publishing with TRANSIENT_LOCAL QoS, "
+                            f"or the publisher is not running. Recording will continue without this data."
+                        )
+                    else:
+                        self.get_logger().info(
+                            f"After re-subscribe, {topic} buffer has {buf_size} message(s)"
+                        )
+        
+        # Step 3: Open storage and create writer
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
             storage_id=self._storage_id,
@@ -559,76 +635,94 @@ class EpisodeRecorderNode(LifecycleNode):
         writer = rosbag2_py.SequentialWriter()
         writer.open(storage_options, converter_options)
 
-        def _qos_to_rosbag2(q: QoSProfile | int) -> rosbag2_py._storage.QoS:
-            """Convert an rclpy QoSProfile (or int depth) to a rosbag2_py QoS."""
-            from rosbag2_py._storage import (
-                QoS as Rosbag2QoS,
-                Duration as Rosbag2Duration,
-                rmw_qos_history_policy_t,
-                rmw_qos_reliability_policy_t,
-                rmw_qos_durability_policy_t,
-                rmw_qos_liveliness_policy_t,
-            )
+        # QoS conversion: Jazzy uses rosbag2_py._storage.QoS objects, Humble uses YAML strings
+        if _IS_JAZZY:
+            # Jazzy/Rolling: Use rosbag2_py._storage.QoS API
+            def _qos_to_rosbag2(q: QoSProfile | int) -> rosbag2_py._storage.QoS:
+                """Convert an rclpy QoSProfile (or int depth) to a rosbag2_py QoS."""
+                from rosbag2_py._storage import (
+                    QoS as Rosbag2QoS,
+                    Duration as Rosbag2Duration,
+                )
+                
+                # Extract numeric RMW values using unified helper
+                vals = extract_qos_numeric_values(q)
+                
+                if isinstance(q, int):
+                    return Rosbag2QoS(q).reliable()
+                
+                # Build rosbag2 QoS using numeric enum values
+                bag_qos = Rosbag2QoS(vals["depth"])
+                bag_qos = bag_qos.history(vals["history"])
+                bag_qos = bag_qos.reliability(vals["reliability"])
+                bag_qos = bag_qos.durability(vals["durability"])
+                bag_qos = bag_qos.liveliness(vals["liveliness"])
 
-            if isinstance(q, int):
-                return Rosbag2QoS(q).reliable()
+                # Convert rclpy Duration to rosbag2 Duration
+                def _dur(rclpy_dur) -> Rosbag2Duration:
+                    ns = int(getattr(rclpy_dur, "nanoseconds", 0) or 0)
+                    return Rosbag2Duration(ns // 1_000_000_000, ns % 1_000_000_000)
 
-            depth = int(getattr(q, "depth", 0) or 0)
-            bag_qos = Rosbag2QoS(depth)
+                bag_qos = bag_qos.deadline(_dur(q.deadline))
+                bag_qos = bag_qos.lifespan(_dur(q.lifespan))
+                bag_qos = bag_qos.liveliness_lease_duration(_dur(q.liveliness_lease_duration))
 
-            history_map = {
-                "KEEP_LAST": rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_LAST,
-                "KEEP_ALL": rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_ALL,
-            }
-            bag_qos = bag_qos.history(
-                history_map.get(q.history.name, rmw_qos_history_policy_t.RMW_QOS_POLICY_HISTORY_KEEP_LAST)
-            )
+                return bag_qos
+            
+            # Register topics with Jazzy API
+            for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
+                topic_info = rosbag2_py.TopicMetadata(
+                    id=idx,
+                    name=topic,
+                    type=type_str,
+                    serialization_format="cdr",
+                    offered_qos_profiles=[_qos_to_rosbag2(qos)],
+                )
+                writer.create_topic(topic_info)
+        
+        else:
+            # Humble: Use YAML string format for offered_qos_profiles
+            def _serialize_offered_qos(q: QoSProfile | int) -> str:
+                """
+                Emit a Humble-compatible YAML mapping string for rosbag2 metadata.
+                
+                Uses rclpy.qos enum values consistently with Jazzy approach.
+                Output format: YAML list with single QoS mapping (prefixed with '- ').
+                """
+                # Numeric defaults for deadline/lifespan/liveliness_lease_duration
+                # These represent "infinite" duration in RMW
+                MAX_SEC = 2147483647
+                MAX_NSEC = 4294967295
 
-            rel_map = {
-                "RELIABLE": rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_RELIABLE,
-                "BEST_EFFORT": rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT,
-            }
-            bag_qos = bag_qos.reliability(
-                rel_map.get(q.reliability.name, rmw_qos_reliability_policy_t.RMW_QOS_POLICY_RELIABILITY_RELIABLE)
-            )
+                # Extract all QoS numeric values using unified helper
+                vals = extract_qos_numeric_values(q)
 
-            dur_map = {
-                "TRANSIENT_LOCAL": rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL,
-                "VOLATILE": rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_VOLATILE,
-            }
-            bag_qos = bag_qos.durability(
-                dur_map.get(q.durability.name, rmw_qos_durability_policy_t.RMW_QOS_POLICY_DURABILITY_VOLATILE)
-            )
-
-            live_map = {
-                "AUTOMATIC": rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_AUTOMATIC,
-                "MANUAL_BY_TOPIC": rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC,
-            }
-            bag_qos = bag_qos.liveliness(
-                live_map.get(q.liveliness.name, rmw_qos_liveliness_policy_t.RMW_QOS_POLICY_LIVELINESS_AUTOMATIC)
-            )
-
-            def _dur(rclpy_dur) -> Rosbag2Duration:
-                ns = int(getattr(rclpy_dur, "nanoseconds", 0) or 0)
-                return Rosbag2Duration(ns // 1_000_000_000, ns % 1_000_000_000)
-
-            bag_qos = bag_qos.deadline(_dur(q.deadline))
-            bag_qos = bag_qos.lifespan(_dur(q.lifespan))
-            bag_qos = bag_qos.liveliness_lease_duration(_dur(q.liveliness_lease_duration))
-
-            return bag_qos
-
-        # Register all topics with QoS so playback recreates the correct
-        # QoS settings (e.g. transient_local/reliable).
-        for idx, (topic, type_str, qos) in enumerate(self._topics):
-            topic_info = rosbag2_py.TopicMetadata(
-                id=idx,
-                name=topic,
-                type=type_str,
-                serialization_format="cdr",
-                offered_qos_profiles=[_qos_to_rosbag2(qos)],
-            )
-            writer.create_topic(topic_info)
+                # Build the Humble-style YAML string
+                # rosbag2_player requires all fields present
+                lines = [
+                    f"- history: {vals['history']}",
+                    f"  depth: {vals['depth']}",
+                    f"  reliability: {vals['reliability']}",
+                    f"  durability: {vals['durability']}",
+                    f"  deadline:",
+                    f"    sec: {MAX_SEC}",
+                    f"    nsec: {MAX_NSEC}",
+                    f"  lifespan:",
+                    f"    sec: {MAX_SEC}",
+                    f"    nsec: {MAX_NSEC}",
+                    f"  liveliness: {vals['liveliness']}",
+                    f"  liveliness_lease_duration:",
+                    f"    sec: {MAX_SEC}",
+                    f"    nsec: {MAX_NSEC}",
+                    f"  avoid_ros_namespace_conventions: false",
+                ]
+                return "\n".join(lines)
+            
+            # Register topics with Humble API (YAML string format)
+            for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
+                offered = _serialize_offered_qos(qos)
+                topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
+                writer.create_topic(topic_info)
 
         # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
         with self._writer_lock:

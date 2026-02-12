@@ -57,3 +57,20 @@ rosetta_client:
     # - Set to positive value: filter observations within this L2 tolerance
     # Note: Requires LeRobot version with obs_similarity_atol support.
     obs_similarity_atol: -1.0
+
+    # Simulation time speed multiplier (for compensating slow/fast simulations)
+    # LeRobot uses wall time for its control loop, not ROS sim time.
+    # This parameter scales the contract fps before passing to LeRobot:
+    #   lerobot_fps = contract_fps * sim_time_multiplier
+    #
+    # Examples:
+    #   - Real robot or real-time sim: 1.0 (no adjustment needed)
+    #   - Sim running at 0.5x speed:  0.5 (contract fps=10 → lerobot fps=5)
+    #   - Sim running at 2.0x speed:  2.0 (contract fps=10 → lerobot fps=20)
+    #
+    # Why needed: If sim runs at 0.5x speed and contract fps=10:
+    #   - Without multiplier: Actions publish at 10Hz wall time = ~18Hz sim time (too fast)
+    #   - With multiplier=0.5: Actions publish at 5Hz wall time = ~10Hz sim time (correct)
+    #
+    # To measure your sim speed: ros2 topic hz /clock (should be ~60Hz for real-time)
+    sim_time_multiplier: 1.0
