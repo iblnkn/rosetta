@@ -128,6 +128,37 @@ def _enc_twist_stamped(
 
 
 # =============================================================================
+# Scalar Encoders
+# =============================================================================
+
+# Be carefull. Float 32 and Float64 have no header
+@register_encoder("std_msgs/msg/Float32")
+def _enc_float32(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to std_msgs/Float32 (scalar)."""
+    _ = stamp_ns  # Unused - message type has no header
+    msg_cls = get_message("std_msgs/msg/Float32")
+    msg = msg_cls()
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
+    msg.data = float(arr[0])
+    return msg
+
+
+@register_encoder("std_msgs/msg/Float64")
+def _enc_float64(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to std_msgs/Float64 (scalar)."""
+    _ = stamp_ns  # Unused - message type has no header
+    msg_cls = get_message("std_msgs/msg/Float64")
+    msg = msg_cls()
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    msg.data = float(arr[0])
+    return msg
+    
+    
+# =============================================================================
 # Array Encoders
 # =============================================================================
 

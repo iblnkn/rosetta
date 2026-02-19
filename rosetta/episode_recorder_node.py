@@ -56,6 +56,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from std_srvs.srv import Trigger
 from rosidl_runtime_py.utilities import get_message
 from rosetta_interfaces.action import RecordEpisode
+from rosetta_interfaces.srv import StartRecording
 
 # Import contract utilities
 from .common.contract import load_contract
@@ -205,6 +206,16 @@ class EpisodeRecorderNode(LifecycleNode):
             Trigger,
             "~/cancel_recording",
             self._on_cancel_service,
+            callback_group=self._cbg,
+        )
+
+        # Service to start recording without using the ROS2 action protocol.
+        # Useful for Foxglove extensions and other clients that cannot call
+        # the hidden _action/* services.
+        self._start_service = self.create_service(
+            StartRecording,
+            "~/start_recording",
+            self._on_start_service,
             callback_group=self._cbg,
         )
 
@@ -462,6 +473,75 @@ class EpisodeRecorderNode(LifecycleNode):
         response.success = True
         response.message = "Cancel requested"
         return response
+
+    def _on_start_service(self, request, response):
+        """Handle StartRecording service call.
+
+        Starts recording directly without the ROS2 action protocol.
+        This is the primary interface for Foxglove extensions since the
+        foxglove bridge cannot route to hidden _action/* services.
+        """
+        if not self._accepting_goals:
+            response.accepted = False
+            response.message = "Node not active"
+            return response
+
+        if self._is_recording:
+            response.accepted = False
+            response.message = "Already recording"
+            return response
+
+        prompt = request.prompt or ""
+        self.get_logger().info(f"start_recording service called: prompt='{prompt}'")
+
+        # Start recording in a background thread (mirrors _execute logic)
+        self._stop_event.clear()
+        self._messages_written = 0
+        self._goal_handle = None  # No action goal for service-based recording
+        self._is_recording = True  # Set recording flag immediately to start writing live messages
+        
+        record_thread = threading.Thread(
+            target=self._service_record,
+            args=(prompt,),
+            daemon=True,
+        )
+        record_thread.start()
+
+        response.accepted = True
+        response.message = "Recording started"
+        return response
+
+    def _service_record(self, prompt: str) -> None:
+        """Recording loop for service-based starts (no action goal handle)."""
+        bag_dir = self._create_bag_dir()
+        max_duration = self._default_max_duration
+
+        self.get_logger().info(f"Recording (service): {bag_dir}, max={max_duration}s")
+
+        try:
+            self._open_writer(bag_dir)
+            self._is_recording = True
+
+            start_time = time.time()
+            while not self._stop_event.is_set():
+                elapsed = time.time() - start_time
+                if elapsed >= max_duration:
+                    self.get_logger().info("Timeout reached")
+                    break
+                time.sleep(1.0 / self._feedback_rate_hz)
+
+        except Exception as e:
+            self.get_logger().error(f"Recording error: {e}")
+
+        # Finalize
+        self._close_writer()
+        try:
+            self._write_metadata(bag_dir, prompt)
+        except RuntimeError as e:
+            self.get_logger().error(f"Metadata error: {e}")
+
+        self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
+        self._is_recording = False
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Execute recording episode."""
