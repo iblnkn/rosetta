@@ -469,7 +469,8 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event.clear()
         self._messages_written = 0
         self._goal_handle = None  # No action goal for service-based recording
-
+        self._is_recording = True  # Set recording flag immediately to start writing live messages
+        
         record_thread = threading.Thread(
             target=self._service_record,
             args=(prompt,),
