@@ -41,11 +41,4 @@ setup(
     ],
     description='Rosetta: ROS 2 utilities, common contract handling, and nodes for LeRobot integration.',
     license='Apache-2.0',
-    entry_points={
-        'console_scripts': [
-            'episode_recorder_node = rosetta.episode_recorder_node:main',
-            'rosetta_client_node = rosetta.rosetta_client_node:main',
-            'port_bags = rosetta.port_bags:main',
-        ],
-    },
 )
