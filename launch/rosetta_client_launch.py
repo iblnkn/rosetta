@@ -18,130 +18,84 @@ Launch file for RosettaClientNode - runs LeRobot policy inference.
 This is a lifecycle node. By default, it auto-configures and auto-activates.
 Set configure:=false activate:=false for manual lifecycle control.
 
-All node parameter defaults are read from params/rosetta_client.yaml (single
-source of truth).  Launch arguments override only when explicitly provided:
+Configuration is loaded from params/rosetta_client.yaml (source of truth).
+Launch arguments override only deployment-specific settings (paths, server address, etc.).
+Algorithm/tuning parameters should be set in the YAML file.
 
 Usage:
-    # Launch with defaults from YAML
+    # Launch with default params file
     ros2 launch rosetta rosetta_client_launch.py
 
-    # Override a parameter at launch time
+    # Use custom params file
     ros2 launch rosetta rosetta_client_launch.py \\
-        pretrained_name_or_path:=my-org/my-model
+        params_file:=/path/to/custom_params.yaml
+
+    # Override deployment-specific settings
+    ros2 launch rosetta rosetta_client_launch.py \\
+        contract_path:=/path/to/contract.yaml \\
+        pretrained_name_or_path:=/path/to/model \\
+        server_address:=192.168.1.100:8080
 
     # Manual lifecycle control
-    ros2 launch rosetta rosetta_client_launch.py configure:=false activate:=false
+    ros2 launch rosetta rosetta_client_launch.py \\
+        configure:=false activate:=false
+
+    # Connect to remote server (don't launch local)
+    ros2 launch rosetta rosetta_client_launch.py \\
+        launch_local_server:=false
 """
 
 import os
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessStart
+from launch_ros.event_handlers import OnStateTransition
 from launch.events import matches_action
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration
 from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
 
-def generate_launch_description():
-    share = get_package_share_directory('rosetta')
-    default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
-    default_params = os.path.join(share, 'params', 'rosetta_client.yaml')
-
-    # Read defaults from the params YAML (single source of truth)
-    with open(default_params) as f:
-        _yaml = yaml.safe_load(f)
-    defaults = _yaml['rosetta_client']['ros__parameters']
-
-    # --- Declare launch arguments (defaults pulled from YAML) ---------------
-    launch_description = [
-        # Contract path - deployment-specific (not in the params YAML)
-        DeclareLaunchArgument(
-            'contract_path',
-            default_value=default_contract,
-            description='Path to contract YAML file'
-        ),
-        # Node parameters - defaults from params/rosetta_client.yaml
-        DeclareLaunchArgument(
-            'pretrained_name_or_path',
-            default_value=str(defaults['pretrained_name_or_path']),
-            description='HuggingFace model ID or local path to trained model'
-        ),
-        DeclareLaunchArgument(
-            'server_address',
-            default_value=str(defaults['server_address']),
-            description='LeRobot policy server address (host:port)'
-        ),
-        DeclareLaunchArgument(
-            'policy_type',
-            default_value=str(defaults['policy_type']),
-            description='Policy type: act, smolvla, diffusion, pi0, pi05, etc.'
-        ),
-        DeclareLaunchArgument(
-            'policy_device',
-            default_value=str(defaults['policy_device']),
-            description='Inference device: cuda, cpu, mps, or cuda:0'
-        ),
-        DeclareLaunchArgument(
-            'actions_per_chunk',
-            default_value=str(defaults['actions_per_chunk']),
-            description='Number of actions per inference chunk'
-        ),
-        DeclareLaunchArgument(
-            'chunk_size_threshold',
-            default_value=str(defaults['chunk_size_threshold']),
-            description='Threshold for requesting new chunk (0.0-1.0)'
-        ),
-        DeclareLaunchArgument(
-            'aggregate_fn_name',
-            default_value=str(defaults['aggregate_fn_name']),
-            description='Chunk aggregation: weighted_average, latest_only, average, conservative'
-        ),
-        DeclareLaunchArgument(
-            'feedback_rate_hz',
-            default_value=str(defaults['feedback_rate_hz']),
-            description='Execution feedback publish rate (Hz)'
-        ),
-        DeclareLaunchArgument(
-            'launch_local_server',
-            default_value=str(defaults['launch_local_server']).lower(),
-            description='Launch local policy server automatically (set false for remote server)'
-        ),
-        DeclareLaunchArgument(
-            'obs_similarity_atol',
-            default_value=str(defaults['obs_similarity_atol']),
-            description='Observation filtering tolerance (-1.0 to disable)'
-        ),
-        # Launch-only arguments (not node params, not in YAML)
-        DeclareLaunchArgument(
-            'log_level',
-            default_value='info',
-            description='Logging level (debug, info, warn, error)'
-        ),
-        DeclareLaunchArgument(
-            'configure',
-            default_value='true',
-            description='Whether to auto-configure the node on startup'
-        ),
-        DeclareLaunchArgument(
-            'activate',
-            default_value='true',
-            description='Whether to auto-activate the node on startup (requires configure:=true)'
-        ),
-        DeclareLaunchArgument(
-            'use_sim_time',
-            default_value='false',
-            description='Use simulated time from /clock topic'
-        ),
-    ]
-
-    # --- Lifecycle node (params file + launch-arg overrides) ----------------
+def launch_setup(context, *args, **kwargs):
+    """Build node with conditional parameter overrides."""
+    
+    # Resolve launch configurations in context
+    params_file = LaunchConfiguration('params_file').perform(context)
+    contract_path = LaunchConfiguration('contract_path').perform(context)
+    pretrained_name_or_path = LaunchConfiguration('pretrained_name_or_path').perform(context)
+    server_address = LaunchConfiguration('server_address').perform(context)
+    launch_local_server = LaunchConfiguration('launch_local_server').perform(context)
+    use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
+    log_level = LaunchConfiguration('log_level').perform(context)
+    
+    # Build parameters list
+    parameters = [params_file]  # Load YAML first
+    
+    # Build override dict with only non-empty values
+    overrides = {'contract_path': contract_path}  # Always override contract
+    
+    if pretrained_name_or_path:  # Only add if non-empty
+        overrides['pretrained_name_or_path'] = pretrained_name_or_path
+    
+    if server_address:  # Only add if non-empty
+        overrides['server_address'] = server_address
+    
+    if launch_local_server:  # Only add if non-empty
+        # Convert string to boolean
+        overrides['launch_local_server'] = launch_local_server.lower() in ('true', '1', 'yes')
+    
+    if use_sim_time:  # Only add if non-empty
+        # Convert string to boolean
+        overrides['use_sim_time'] = use_sim_time.lower() in ('true', '1', 'yes')
+    
+    if overrides:
+        parameters.append(overrides)
+    
+    # Create the lifecycle node
     rosetta_client_node = LifecycleNode(
         package='rosetta',
         executable='rosetta_client_node',
@@ -149,27 +103,11 @@ def generate_launch_description():
         namespace='',
         output='screen',
         emulate_tty=True,
-        parameters=[
-            default_params,
-            {
-                'contract_path': LaunchConfiguration('contract_path'),
-                'pretrained_name_or_path': LaunchConfiguration('pretrained_name_or_path'),
-                'server_address': LaunchConfiguration('server_address'),
-                'policy_type': LaunchConfiguration('policy_type'),
-                'policy_device': LaunchConfiguration('policy_device'),
-                'actions_per_chunk': LaunchConfiguration('actions_per_chunk'),
-                'chunk_size_threshold': LaunchConfiguration('chunk_size_threshold'),
-                'aggregate_fn_name': LaunchConfiguration('aggregate_fn_name'),
-                'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
-                'launch_local_server': LaunchConfiguration('launch_local_server'),
-                'obs_similarity_atol': LaunchConfiguration('obs_similarity_atol'),
-                'use_sim_time': LaunchConfiguration('use_sim_time'),
-            },
-        ],
-        arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
+        parameters=parameters,
+        arguments=['--ros-args', '--log-level', log_level],
     )
 
-    # --- Lifecycle auto-transition events -----------------------------------
+    # Auto-configure event (triggered on process start)
     configure_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(rosetta_client_node),
@@ -178,6 +116,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
     )
 
+    # Auto-activate event (triggered after configure completes)
     activate_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(rosetta_client_node),
@@ -186,6 +125,7 @@ def generate_launch_description():
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
     )
 
+    # Chain events: process start -> configure -> activate
     configure_event_handler = RegisterEventHandler(
         OnProcessStart(
             target_action=rosetta_client_node,
@@ -196,14 +136,80 @@ def generate_launch_description():
     activate_event_handler = RegisterEventHandler(
         OnStateTransition(
             target_lifecycle_node=rosetta_client_node,
-            start_state='configuring',
-            goal_state='inactive',
+            goal_state='inactive',   # trigger when node reaches INACTIVE (configure finished)
             entities=[activate_event],
         )
     )
 
-    launch_description.append(rosetta_client_node)
-    launch_description.append(configure_event_handler)
-    launch_description.append(activate_event_handler)
+    return [
+        rosetta_client_node,
+        configure_event_handler,
+        activate_event_handler,
+    ]
+
+
+def generate_launch_description():
+    share = get_package_share_directory('rosetta')
+    default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
+    default_params = os.path.join(share, 'params', 'rosetta_client.yaml')
+
+    # Declare launch arguments
+    # Only deployment-specific settings are exposed as launch args
+    # Algorithm/tuning parameters should be set in the params YAML file
+    launch_description = [
+        # Parameters file path - source of truth for tuning params
+        DeclareLaunchArgument(
+            'params_file',
+            default_value=default_params,
+            description='Path to ROS2 parameters YAML file (contains tuning params)'
+        ),
+        # Deployment-specific paths
+        DeclareLaunchArgument(
+            'contract_path',
+            default_value=default_contract,
+            description='Path to robot contract YAML file'
+        ),
+        DeclareLaunchArgument(
+            'pretrained_name_or_path',
+            default_value='',  # Empty = use value from params file
+            description='Path or HF repo ID of trained policy (empty = use params file value)'
+        ),
+        # Server configuration
+        DeclareLaunchArgument(
+            'server_address',
+            default_value='',  # Empty = use value from params file
+            description='Policy server address host:port (empty = use params file value)'
+        ),
+        DeclareLaunchArgument(
+            'launch_local_server',
+            default_value='',  # Empty = use value from params file
+            description='Launch local policy server (true/false, empty = use params file value)'
+        ),
+        # Runtime settings
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='',  # Empty = use value from params file
+            description='Use simulated time from /clock topic (empty = use params file value)'
+        ),
+        DeclareLaunchArgument(
+            'log_level',
+            default_value='info',
+            description='Logging level (debug, info, warn, error)'
+        ),
+        # Lifecycle control
+        DeclareLaunchArgument(
+            'configure',
+            default_value='true',
+            description='Auto-configure node on startup'
+        ),
+        DeclareLaunchArgument(
+            'activate',
+            default_value='true',
+            description='Auto-activate node after configure (requires configure:=true)'
+        ),
+    ]
+
+    # Use OpaqueFunction to build node with conditional parameter overrides
+    launch_description.append(OpaqueFunction(function=launch_setup))
 
     return LaunchDescription(launch_description)

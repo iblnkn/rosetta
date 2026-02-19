@@ -98,6 +98,14 @@ class SafetyBehavior(str, Enum):
     HOLD = "hold"  # Hold last action
 
 
+class BufferingStrategy(str, Enum):
+    """Buffering strategy for TRANSIENT_LOCAL topics."""
+
+    NO_BUFFER = "no_buffer"  # Don't buffer (default for non-transient topics)
+    ACCUMULATE = "accumulate"  # Keep all messages up to history depth
+    RESUBSCRIBE_ON_START = "resubscribe_on_start"  # Re-subscribe when recording starts
+
+
 class ResetMode(str, Enum):
     """Reset mechanism mode."""
 
@@ -170,6 +178,7 @@ class AdjunctSpec:
     topic: str
     type: str
     qos: dict[str, Any] | None = None
+    buffering_strategy: str | None = None  # "no_buffer" | "accumulate" | "resubscribe_on_start"
 
 
 @dataclass(frozen=True, slots=True)
@@ -505,10 +514,29 @@ def _parse_adjunct(data: dict[str, Any], idx: int) -> AdjunctSpec:
     ctx = f"adjunct[{idx}]"
     _require_fields(data, ["topic", "type"], ctx)
 
+    buffering_strategy = data.get("buffering_strategy")
+    
+    # Validate buffering strategy if provided
+    if buffering_strategy is not None:
+        buffering_strategy = _validate_enum(
+            buffering_strategy, BufferingStrategy, "buffering_strategy", ctx
+        )
+        
+        # Validate that buffering strategy is only used with TRANSIENT_LOCAL topics
+        qos = data.get("qos", {})
+        durability = qos.get("durability", "volatile").lower()
+        
+        if buffering_strategy != BufferingStrategy.NO_BUFFER.value and durability != "transient_local":
+            raise ContractValidationError(
+                f"buffering_strategy '{buffering_strategy}' can only be used with "
+                f"transient_local durability in {ctx}. Current durability: {durability}"
+            )
+
     return AdjunctSpec(
         topic=data["topic"],
         type=data["type"],
         qos=data.get("qos"),
+        buffering_strategy=buffering_strategy,
     )
 
 
