@@ -1,0 +1,4 @@
+string prompt                    # Description of this demonstration episode
+---
+bool accepted                    # Whether recording was started
+string message                   # Error details or confirmation
