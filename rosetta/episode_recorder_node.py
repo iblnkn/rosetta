@@ -723,20 +723,25 @@ class EpisodeRecorderNode(LifecycleNode):
                 from rosbag2_py._storage import (
                     QoS as Rosbag2QoS,
                     Duration as Rosbag2Duration,
+                    rmw_qos_history_policy_t,
+                    rmw_qos_reliability_policy_t,
+                    rmw_qos_durability_policy_t,
+                    rmw_qos_liveliness_policy_t,
                 )
-                
+
                 # Extract numeric RMW values using unified helper
                 vals = extract_qos_numeric_values(q)
-                
+
                 if isinstance(q, int):
                     return Rosbag2QoS(q).reliable()
-                
-                # Build rosbag2 QoS using numeric enum values
+
+                # Build rosbag2 QoS using the rosbag2_py enum types (not raw ints).
+                # The QoS setter methods on Jazzy require rmw_qos_*_policy_t enums.
                 bag_qos = Rosbag2QoS(vals["depth"])
-                bag_qos = bag_qos.history(vals["history"])
-                bag_qos = bag_qos.reliability(vals["reliability"])
-                bag_qos = bag_qos.durability(vals["durability"])
-                bag_qos = bag_qos.liveliness(vals["liveliness"])
+                bag_qos = bag_qos.history(rmw_qos_history_policy_t(vals["history"]))
+                bag_qos = bag_qos.reliability(rmw_qos_reliability_policy_t(vals["reliability"]))
+                bag_qos = bag_qos.durability(rmw_qos_durability_policy_t(vals["durability"]))
+                bag_qos = bag_qos.liveliness(rmw_qos_liveliness_policy_t(vals["liveliness"]))
 
                 # Convert rclpy Duration to rosbag2 Duration
                 def _dur(rclpy_dur) -> Rosbag2Duration:
