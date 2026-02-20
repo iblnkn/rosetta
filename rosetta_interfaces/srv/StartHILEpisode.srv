@@ -1,0 +1,12 @@
+# Request — mirrors ManageEpisode goal
+string prompt                       # Task description for the episode
+float64 max_duration_s              # Max episode duration (0.0 = use contract default)
+float64 success_reward_threshold    # Reward threshold for auto-success (0.0 = disabled)
+---
+# Response — mirrors ManageEpisode result
+bool success                        # Whether the episode completed successfully
+string message                      # Error details or success info
+string bag_path                     # Path to the recorded rosbag
+float64 final_reward                # Last reward value at episode end
+int32 messages_written              # Total messages recorded
+string termination_reason           # "timeout" | "human_stop" | "reward_threshold" | "cancelled"

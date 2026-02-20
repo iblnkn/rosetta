@@ -1,0 +1,19 @@
+# Goal
+string prompt                       # Task description for the episode
+float64 max_duration_s              # Max episode duration (0.0 = use contract default)
+float64 success_reward_threshold    # Reward threshold for auto-success (0.0 = disabled)
+---
+# Result
+bool success                        # Whether the episode completed successfully
+string message                      # Error details or success info
+string bag_path                     # Path to the recorded rosbag
+float64 final_reward                # Last reward value at episode end
+int32 messages_written              # Total messages recorded
+string termination_reason           # "timeout" | "human_stop" | "reward_threshold" | "cancelled"
+---
+# Feedback
+float64 elapsed_s                   # Seconds since episode start
+float64 current_reward              # Latest reward value
+string control_source               # "policy" | "teleop"
+string status                       # "starting" | "running" | "stopping"
+int32 messages_written              # Messages recorded so far
