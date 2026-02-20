@@ -45,6 +45,7 @@ setup(
         'console_scripts': [
             'episode_recorder_node = rosetta.episode_recorder_node:main',
             'rosetta_client_node = rosetta.rosetta_client_node:main',
+            'rosetta_hil_manager_node = rosetta.rosetta_hil_manager_node:main',
             'port_bags = rosetta.port_bags:main',
         ],
     },
