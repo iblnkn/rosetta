@@ -47,6 +47,7 @@ Usage:
 
 import os
 
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
@@ -63,23 +64,50 @@ from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
 
+def _yaml_params(path, node_name):
+    """Load a ROS2 parameter YAML and return the node's ros__parameters dict."""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    return data.get(node_name, {}).get('ros__parameters', {})
+
+
 def generate_launch_description():
     rosetta_share = get_package_share_directory('rosetta')
 
-    default_contract = os.path.join(rosetta_share, 'contracts', 'so_101_hil.yaml')
+    default_contract = os.path.join(rosetta_share, 'contracts', 'so_101_hil.yaml')  # fallback only
     default_rosetta_params = os.path.join(rosetta_share, 'params', 'rosetta_client.yaml')
     default_recorder_params = os.path.join(rosetta_share, 'params', 'episode_recorder.yaml')
     default_hil_params = os.path.join(rosetta_share, 'params', 'rosetta_hil_manager.yaml')
+
+    # Build per-node config dicts for launch argument defaults.
+    #
+    # rosetta_hil_manager.yaml is the "super YAML" for this launch:
+    #   - its robot_policy / episode_recorder sections override the node's own YAML
+    #   - its reward_classifier section provides all classifier defaults
+    #   - CLI arguments override everything
+    #
+    # Merge order (last wins): base node YAML < HIL super YAML < CLI arg
+    with open(default_hil_params) as f:
+        hil_full = yaml.safe_load(f)
+
+    def _section(name):
+        return hil_full.get(name, {}).get('ros__parameters', {})
+
+    hil_cfg = _section('hil_manager')
+    contract_path_default = hil_full.get('contract_path', default_contract)
+    client_cfg = {**_yaml_params(default_rosetta_params, 'rosetta_client'), **_section('robot_policy')}
+    recorder_cfg = {**_yaml_params(default_recorder_params, 'episode_recorder'), **_section('episode_recorder')}
+    reward_cfg = {**_yaml_params(default_rosetta_params, 'rosetta_client'), **_section('reward_classifier')}
 
     # ==================================================================
     # Launch arguments
     # ==================================================================
 
     launch_args = [
-        # --- Shared ---
+        # --- Shared (launch-specific, no YAML source) ---
         DeclareLaunchArgument(
             'contract_path',
-            default_value=default_contract,
+            default_value=contract_path_default,
             description='Path to HIL contract YAML file'
         ),
         DeclareLaunchArgument(
@@ -98,49 +126,49 @@ def generate_launch_description():
             description='Whether to auto-activate nodes on startup (requires configure:=true)'
         ),
 
-        # --- Robot policy ---
+        # --- Robot policy (defaults from rosetta_client.yaml) ---
         DeclareLaunchArgument(
             'pretrained_name_or_path',
-            default_value='/workspaces/rosetta_ws/models/ACT/checkpoints/last/pretrained_model',
+            default_value=client_cfg['pretrained_name_or_path'],
             description='HuggingFace model ID or local path to trained policy model'
         ),
         DeclareLaunchArgument(
             'server_address',
-            default_value='127.0.0.1:8080',
+            default_value=client_cfg['server_address'],
             description='LeRobot policy server address (host:port)'
         ),
         DeclareLaunchArgument(
             'policy_type',
-            default_value='act',
+            default_value=client_cfg['policy_type'],
             description='Policy type: act, smolvla, diffusion, pi0, pi05, etc.'
         ),
         DeclareLaunchArgument(
             'policy_device',
-            default_value='cuda',
+            default_value=client_cfg['policy_device'],
             description='Inference device: cuda, cpu, mps, or cuda:0'
         ),
         DeclareLaunchArgument(
             'actions_per_chunk',
-            default_value='30',
+            default_value=str(client_cfg['actions_per_chunk']),
             description='Number of actions per inference chunk'
         ),
         DeclareLaunchArgument(
             'chunk_size_threshold',
-            default_value='0.95',
+            default_value=str(client_cfg['chunk_size_threshold']),
             description='Threshold for requesting new chunk (0.0-1.0)'
         ),
         DeclareLaunchArgument(
             'aggregate_fn_name',
-            default_value='weighted_average',
+            default_value=client_cfg['aggregate_fn_name'],
             description='Chunk aggregation: weighted_average, latest_only, average, conservative'
         ),
         DeclareLaunchArgument(
             'obs_similarity_atol',
-            default_value='-1.0',
+            default_value=str(client_cfg['obs_similarity_atol']),
             description='Observation filtering tolerance (-1.0 to disable)'
         ),
 
-        # --- Action mux remapping ---
+        # --- Action mux remapping (launch-specific, no YAML source) ---
         DeclareLaunchArgument(
             'action_remap_from',
             default_value='/leader_arm/joint_states',
@@ -151,36 +179,53 @@ def generate_launch_description():
             default_value='/hil/policy/leader_arm/joint_states',
             description='Remapped action topic for policy output'
         ),
+
+        # --- HIL manager (defaults from rosetta_hil_manager.yaml) ---
         DeclareLaunchArgument(
             'policy_remap_prefix',
-            default_value='/hil/policy',
+            default_value=hil_cfg['policy_remap_prefix'],
             description='Topic prefix for remapped policy output (must match remap_to derivation)'
         ),
-
-        # --- Reward classifier ---
         DeclareLaunchArgument(
             'enable_reward_classifier',
-            default_value='false',
+            default_value=str(hil_cfg['enable_reward_classifier']).lower(),
             description='Enable reward classifier policy'
         ),
         DeclareLaunchArgument(
+            'feedback_rate_hz',
+            default_value=str(hil_cfg['feedback_rate_hz']),
+            description='Feedback publish rate (Hz) for all nodes'
+        ),
+        DeclareLaunchArgument(
+            'human_reward_positive',
+            default_value=str(hil_cfg['human_reward_positive']),
+            description='Reward value for human positive override'
+        ),
+        DeclareLaunchArgument(
+            'human_reward_negative',
+            default_value=str(hil_cfg['human_reward_negative']),
+            description='Reward value for human negative override'
+        ),
+
+        # --- Reward classifier (defaults from rosetta_hil_manager.yaml reward_classifier section) ---
+        DeclareLaunchArgument(
             'reward_classifier_contract_path',
-            default_value='',
+            default_value=reward_cfg.get('contract_path', ''),
             description='Contract YAML for reward classifier (defaults to contract_path)'
         ),
         DeclareLaunchArgument(
             'reward_classifier_pretrained_name_or_path',
-            default_value='',
+            default_value=reward_cfg.get('pretrained_name_or_path', ''),
             description='Path to trained reward classifier model'
         ),
         DeclareLaunchArgument(
             'reward_classifier_policy_type',
-            default_value='reward_classifier',
+            default_value=reward_cfg.get('policy_type', 'reward_classifier'),
             description='Policy type for reward classifier model'
         ),
         DeclareLaunchArgument(
             'reward_classifier_server_address',
-            default_value='127.0.0.1:8081',
+            default_value=reward_cfg.get('server_address', '127.0.0.1:8081'),
             description='Reward classifier policy server address (host:port)'
         ),
         DeclareLaunchArgument(
@@ -195,42 +240,25 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'reward_remap_prefix',
-            default_value='/hil/reward',
+            default_value=hil_cfg['reward_remap_prefix'],
             description='Topic prefix for remapped reward classifier output'
         ),
 
-        # --- Episode recorder ---
+        # --- Episode recorder (defaults from episode_recorder.yaml) ---
         DeclareLaunchArgument(
             'bag_base_dir',
-            default_value='/workspaces/rosetta_ws/datasets/bags',
+            default_value=recorder_cfg['bag_base_dir'],
             description='Directory for rosbag output'
         ),
         DeclareLaunchArgument(
             'storage_id',
-            default_value='mcap',
+            default_value=recorder_cfg['storage_id'],
             description='Rosbag format: mcap (recommended) or sqlite3'
         ),
         DeclareLaunchArgument(
             'default_max_duration',
-            default_value='300.0',
+            default_value=str(recorder_cfg['default_max_duration']),
             description='Max episode duration in seconds (recorder fallback)'
-        ),
-
-        # --- HIL manager ---
-        DeclareLaunchArgument(
-            'feedback_rate_hz',
-            default_value='30.0',
-            description='Feedback publish rate (Hz) for all nodes'
-        ),
-        DeclareLaunchArgument(
-            'human_reward_positive',
-            default_value='1.0',
-            description='Reward value for human positive override'
-        ),
-        DeclareLaunchArgument(
-            'human_reward_negative',
-            default_value='0.0',
-            description='Reward value for human negative override'
         ),
     ]
 
@@ -353,7 +381,6 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         parameters=[
-            default_hil_params,
             {
                 'contract_path': LaunchConfiguration('contract_path'),
                 'enable_reward_classifier': LaunchConfiguration('enable_reward_classifier'),
@@ -362,6 +389,9 @@ def generate_launch_description():
                 'human_reward_positive': LaunchConfiguration('human_reward_positive'),
                 'human_reward_negative': LaunchConfiguration('human_reward_negative'),
                 'feedback_rate_hz': LaunchConfiguration('feedback_rate_hz'),
+                'policy_action_name': hil_cfg['policy_action_name'],
+                'reward_classifier_action_name': hil_cfg['reward_classifier_action_name'],
+                'recorder_action_name': hil_cfg['recorder_action_name'],
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],
