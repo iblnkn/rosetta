@@ -20,6 +20,7 @@ install(PROGRAMS
   scripts/episode_recorder_node
   scripts/rosetta_client_node
   scripts/port_bags
+  scripts/rosetta_hil_manager_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
