@@ -1,6 +1,46 @@
 # CMakeLists.txt for rosetta package
 cmake_minimum_required(VERSION 3.16)
-project(rosetta NONE)
+project(rosetta)
+
+# Default to C++14
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 14)
+endif()
+
+# Find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rclpy REQUIRED)
+
+# Install Python modules
+ament_python_install_package(${PROJECT_NAME})
+
+# Install Python executables
+install(PROGRAMS
+  scripts/episode_recorder_node
+  scripts/rosetta_client_node
+  scripts/port_bags
+  scripts/rosetta_hil_manager_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch files
+install(DIRECTORY
+  launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# Install contract files
+install(DIRECTORY
+  contracts
+  DESTINATION share/${PROJECT_NAME}
+)
+
+# Install parameter files
+install(DIRECTORY
+  params
+  DESTINATION share/${PROJECT_NAME}
+)
 
 # Enable testing
 if(BUILD_TESTING)

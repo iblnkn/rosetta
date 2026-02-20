@@ -6,9 +6,11 @@
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <build_depend>rosetta_interfaces</build_depend>
+  <build_depend>rclpy</build_depend>
   
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosetta_interfaces</exec_depend>
@@ -39,6 +41,6 @@
   <test_depend>rclpy</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>
