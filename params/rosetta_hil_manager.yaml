@@ -1,0 +1,35 @@
+# Rosetta HIL Manager Node Parameters
+# This file is the source of truth for node configuration.
+#
+# Usage:
+#   ros2 launch rosetta rosetta_hil_launch.py
+#
+# Override parameters at launch:
+#   ros2 launch rosetta rosetta_hil_launch.py \
+#       enable_reward_classifier:=true
+
+hil_manager:
+  ros__parameters:
+    # Whether to use a reward classifier policy (requires separate contract + model)
+    enable_reward_classifier: false
+
+    # Action names for child node action clients
+    # These must match the namespaced action names from the launch file
+    policy_action_name: "/robot_policy/run_policy"
+    reward_classifier_action_name: "/reward_classifier/run_policy"
+    recorder_action_name: "/record_episode"
+
+    # Topic prefix applied to remapped policy output
+    # The robot policy rosetta_client_node publishes to {prefix}{original_topic}
+    # The HIL manager subscribes there and forwards to the original topic
+    policy_remap_prefix: "/hil/policy"
+
+    # Topic prefix applied to remapped reward classifier output
+    reward_remap_prefix: "/hil/reward"
+
+    # Reward values assigned when the human presses override buttons
+    human_reward_positive: 1.0
+    human_reward_negative: 0.0
+
+    # Rate at which to publish ManageEpisode feedback (Hz)
+    feedback_rate_hz: 30.0
