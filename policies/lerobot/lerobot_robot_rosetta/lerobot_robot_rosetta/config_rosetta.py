@@ -89,7 +89,11 @@ from rosetta.common.contract import (
     ActionStreamSpec,
     load_contract,
 )
-from rosetta.common.contract_utils import iter_observation_specs, iter_action_specs
+from rosetta.common.contract_utils import (
+    iter_observation_specs,
+    iter_action_specs,
+    iter_reward_as_action_specs,
+)
 
 
 @RobotConfig.register_subclass("rosetta")
@@ -99,6 +103,7 @@ class RosettaConfig(RobotConfig):
 
     config_path: str = ""
     fps: int | None = None
+    is_classifier: bool = False
 
     _contract: Contract | None = field(default=None, init=False, repr=False)
     _observation_specs: list[ObservationStreamSpec] | None = field(default=None, init=False, repr=False)
@@ -120,7 +125,10 @@ class RosettaConfig(RobotConfig):
             self.id = self._contract.robot_type
 
         self._observation_specs = list(iter_observation_specs(self._contract))
-        self._action_specs = list(iter_action_specs(self._contract))
+        if self.is_classifier:
+            self._action_specs = list(iter_reward_as_action_specs(self._contract))
+        else:
+            self._action_specs = list(iter_action_specs(self._contract))
 
     @property
     def contract(self) -> Contract:
