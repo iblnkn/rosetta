@@ -116,6 +116,13 @@ class RosettaClientNode(LifecycleNode):
             ParameterDescriptor(description="L2 norm tolerance for observation similarity (-1.0 to disable)")
         )
         self.declare_parameter(
+            "is_classifier", False,
+            ParameterDescriptor(
+                description="Use reward section as action output (for reward classifiers)",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
             "sim_time_multiplier", 1.0,
             ParameterDescriptor(
                 description="Multiplier for fps sent to LeRobot (contract_fps * sim_time_multiplier). "
@@ -165,7 +172,11 @@ class RosettaClientNode(LifecycleNode):
         # Create topic bridge (observation subscriptions + lifecycle action publishers)
         # Bridge uses contract fps (unscaled) for ROS2 timing (watchdog, etc.)
         # ROS2 clock respects use_sim_time and /clock, so watchdog operates in sim time
-        self._rosetta_config = RosettaConfig(config_path=self._contract_path)
+        is_classifier = self.get_parameter("is_classifier").value
+        self._rosetta_config = RosettaConfig(
+            id="rosetta", config_path=self._contract_path,
+            is_classifier=is_classifier,
+        )
         self._bridge = _TopicBridge(self._rosetta_config)
         self._bridge.setup(self)
 
@@ -287,10 +298,15 @@ class RosettaClientNode(LifecycleNode):
         server_address = self.get_parameter("server_address").value
         host, port = server_address.split(":")
 
-        self.get_logger().info(f"Launching local policy server on {host}:{port}...")
+        if self.get_parameter("is_classifier").value:
+            module = "rosetta.common.classifier_server"
+        else:
+            module = "lerobot.async_inference.policy_server"
+
+        self.get_logger().info(f"Launching {module} on {host}:{port}...")
 
         cmd = [
-            sys.executable, "-m", "lerobot.async_inference.policy_server",
+            sys.executable, "-m", module,
             f"--host={host}",
             f"--port={port}",
         ]
@@ -417,7 +433,9 @@ class RosettaClientNode(LifecycleNode):
     def _build_config(self, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters."""
         robot_config = RosettaConfig(
+            id="rosetta",
             config_path=self._contract_path,
+            is_classifier=self.get_parameter("is_classifier").value,
             # id is auto-populated from contract's robot_type (vortex_ctl)
             # use_sim_time=self.get_parameter("use_sim_time").value,
         )

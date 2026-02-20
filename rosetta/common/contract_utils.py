@@ -145,6 +145,12 @@ class StreamBuffer:
             if self.last_ts is None or ts_ns >= self.last_ts:
                 self.last_ts, self.last_val = ts_ns, val
 
+    def reset(self) -> None:
+        """Clear buffered data (e.g., between episodes)."""
+        with self._lock:
+            self.last_ts = None
+            self.last_val = None
+
     def sample(self, tick_ns: int) -> Any | None:
         """Sample according to policy at a given tick."""
         with self._lock:
@@ -420,6 +426,45 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
         items.append((a.publish_topic, kwargs, a))
 
     yield from _apply_namespaces(items, lambda a: a.key, ActionStreamSpec)
+
+
+def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
+    """Yield action stream specs derived from the contract's reward section.
+
+    Used when is_classifier=True so that a reward classifier's policy output
+    publishes to reward topics instead of action topics.
+    """
+    items: list[tuple[str, dict, ObservationSpec]] = []
+
+    for o in contract.rewards:
+        if o.decoder is None and o.type not in ENCODERS:
+            raise ContractValidationError(
+                f"No encoder registered for '{o.type}' in reward '{o.key}'. "
+                f"Add an encoder in encoders.py or provide a custom encoder."
+            )
+
+        names = list((o.selector or {}).get("names", []))
+        if not names:
+            names = ["data"]
+
+        kwargs = dict(
+            key="action",
+            topic=o.topic,
+            msg_type=o.type,
+            names=names,
+            fps=contract.fps,
+            stamp_src=contract.timestamp_source,
+            clamp=None,
+            safety_behavior="none",
+            qos=o.qos,
+            decoder=o.decoder,
+            encoder=None,
+            unit_conversion=o.unit_conversion,
+        )
+        items.append((o.topic, kwargs, o))
+
+    yield from _apply_namespaces(items, lambda o: "action", ActionStreamSpec)
+
 
 
 def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
