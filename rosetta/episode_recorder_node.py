@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -151,6 +152,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event = threading.Event()
         self._goal_handle = None
         self._cbg = ReentrantCallbackGroup()
+        self._last_bag_dir: Optional[Path] = None
         # Buffers for TRANSIENT_LOCAL messages (like /tf_static)
         # Each buffer is a deque limited by QoS history depth
         self._buffers: dict[str, deque] = {}
@@ -217,6 +219,14 @@ class EpisodeRecorderNode(LifecycleNode):
                 StartRecording,
                 "~/start_recording",
                 self._on_start_service,
+                callback_group=self._cbg,
+            )
+
+            # Service to delete the most recently completed bag directory.
+            self._delete_last_bag_service = self.create_service(
+                Trigger,
+                "~/delete_last_bag",
+                self._on_delete_last_bag_service,
                 callback_group=self._cbg,
             )
 
@@ -517,6 +527,34 @@ class EpisodeRecorderNode(LifecycleNode):
         response.message = "Recording started"
         return response
 
+    def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
+        """Delete the most recently completed bag directory."""
+        if self._is_recording:
+            response.success = False
+            response.message = "Cannot delete: recording in progress"
+            return response
+        if self._last_bag_dir is None:
+            response.success = False
+            response.message = "No bag to delete"
+            return response
+
+        bag_path = self._last_bag_dir
+        try:
+            if bag_path.exists():
+                shutil.rmtree(bag_path)
+                self._last_bag_dir = None
+                self.get_logger().info(f"Deleted bag: {bag_path}")
+                response.success = True
+                response.message = f"Deleted: {bag_path.name}"
+            else:
+                response.success = False
+                response.message = f"Bag path not found: {bag_path}"
+        except Exception as e:
+            self.get_logger().error(f"Failed to delete bag {bag_path}: {e}")
+            response.success = False
+            response.message = f"Delete failed: {e}"
+        return response
+
     def _service_record(self, prompt: str) -> None:
         """Recording loop for service-based starts (no action goal handle)."""
         bag_dir = self._create_bag_dir()
@@ -546,6 +584,7 @@ class EpisodeRecorderNode(LifecycleNode):
         except RuntimeError as e:
             self.get_logger().error(f"Metadata error: {e}")
 
+        self._last_bag_dir = bag_dir
         self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
         self._is_recording = False
 
@@ -623,6 +662,7 @@ class EpisodeRecorderNode(LifecycleNode):
             self._goal_handle = None
             return result
 
+        self._last_bag_dir = bag_dir
         result.messages_written = self._messages_written
         self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
 
