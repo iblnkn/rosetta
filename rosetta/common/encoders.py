@@ -285,6 +285,166 @@ def _enc_joint_state(
 
 
 # =============================================================================
+# JointTrajectory Encoder
+# =============================================================================
+
+
+@register_encoder("trajectory_msgs/msg/JointTrajectory")
+def _enc_joint_trajectory(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to trajectory_msgs/JointTrajectory (single-point trajectory).
+
+    With selector.names like ['position.joint1', 'velocity.joint2']:
+      - Maps values to specified fields by joint name
+    Without names:
+      - Maps action vector to positions with auto-generated names
+
+    time_from_start defaults to 0 (execute immediately).
+
+    Field name aliases (both singular and plural are accepted):
+      position / positions, velocity / velocities,
+      acceleration / accelerations, effort
+    """
+    traj_cls = get_message("trajectory_msgs/msg/JointTrajectory")
+    point_cls = get_message("trajectory_msgs/msg/JointTrajectoryPoint")
+    msg = traj_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    point = point_cls()  # time_from_start is zero-initialized
+
+    if not spec.names:
+        msg.joint_names = [f"joint_{i}" for i in range(len(arr))]
+        point.positions = arr.tolist()
+        msg.points = [point]
+        return msg
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    _FIELD_MAP = {
+        "position": "positions",
+        "positions": "positions",
+        "velocity": "velocities",
+        "velocities": "velocities",
+        "acceleration": "accelerations",
+        "accelerations": "accelerations",
+        "effort": "effort",
+    }
+
+    # Collect joint order and per-field assignments
+    joint_order: list[str] = []
+    seen_joints: set[str] = set()
+    field_to_joints: dict[str, dict[str, int]] = {}  # attr -> {joint_name -> arr_idx}
+
+    for i, path in enumerate(spec.names):
+        if "." in path:
+            field, joint_name = path.split(".", 1)
+        else:
+            field, joint_name = "position", path
+
+        attr = _FIELD_MAP.get(field)
+        if attr is None:
+            raise ValueError(
+                f"Unknown JointTrajectoryPoint field '{field}'. "
+                f"Valid fields: position, velocity, acceleration, effort"
+            )
+
+        field_to_joints.setdefault(attr, {})[joint_name] = i
+        if joint_name not in seen_joints:
+            joint_order.append(joint_name)
+            seen_joints.add(joint_name)
+
+    msg.joint_names = joint_order
+    n_joints = len(joint_order)
+    joint_to_idx = {name: i for i, name in enumerate(joint_order)}
+
+    for attr, joint_map in field_to_joints.items():
+        values = [0.0] * n_joints
+        for joint_name, arr_idx in joint_map.items():
+            values[joint_to_idx[joint_name]] = float(arr[arr_idx])
+        setattr(point, attr, values)
+
+    msg.points = [point]
+    return msg
+
+
+# =============================================================================
+# Joy Encoder
+# =============================================================================
+
+
+@register_encoder("sensor_msgs/msg/Joy")
+def _enc_joy(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to sensor_msgs/Joy.
+
+    With selector.names like ['axes.0', 'axes.1', 'buttons.0']:
+      - Maps values to axes/buttons by index
+    Without names:
+      - Maps action vector to axes
+
+    Button values are rounded to the nearest integer.
+    Selector syntax: "<field>.<index>" where field is "axes" or "buttons".
+    """
+    msg_cls = get_message("sensor_msgs/msg/Joy")
+    msg = msg_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
+
+    if not spec.names:
+        msg.axes = arr.tolist()
+        msg.buttons = []
+        return msg
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    axes_map: dict[int, int] = {}    # axis_idx -> arr_idx
+    buttons_map: dict[int, int] = {}  # button_idx -> arr_idx
+
+    for i, path in enumerate(spec.names):
+        if "." in path:
+            field, idx_str = path.split(".", 1)
+        else:
+            field, idx_str = "axes", path
+
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            raise ValueError(
+                f"Joy selector index must be an integer, got '{idx_str}' "
+                f"in selector '{path}'"
+            )
+
+        if field == "axes":
+            axes_map[idx] = i
+        elif field == "buttons":
+            buttons_map[idx] = i
+        else:
+            raise ValueError(
+                f"Unknown Joy field '{field}'. Valid fields: axes, buttons"
+            )
+
+    if axes_map:
+        axes = [0.0] * (max(axes_map) + 1)
+        for axis_idx, arr_idx in axes_map.items():
+            axes[axis_idx] = float(arr[arr_idx])
+        msg.axes = axes
+
+    if buttons_map:
+        buttons = [0] * (max(buttons_map) + 1)
+        for btn_idx, arr_idx in buttons_map.items():
+            buttons[btn_idx] = int(round(arr[arr_idx]))
+        msg.buttons = buttons
+
+    return msg
+
+
+# =============================================================================
 # MultiDOFCommand Encoder
 # =============================================================================
 

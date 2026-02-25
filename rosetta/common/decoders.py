@@ -454,6 +454,126 @@ def _dec_multidof_command(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 # =============================================================================
+# JointTrajectory Decoder
+# =============================================================================
+
+
+@register_decoder("trajectory_msgs/msg/JointTrajectory", dtype="float64")
+def _dec_joint_trajectory(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode trajectory_msgs/JointTrajectory (first point only).
+
+    With selector names like ["position.joint1", "velocity.joint2"]:
+      - Extracts specified fields by joint name from the first trajectory point
+    With bare names like ["joint1", "joint2"]:
+      - Defaults to position field from the first point
+    Without names:
+      - Returns all positions from the first point
+
+    Field name aliases (both singular and plural are accepted):
+      position / positions, velocity / velocities,
+      acceleration / accelerations, effort
+    """
+    if not msg.points:
+        return np.array([], dtype=np.float64)
+
+    point = msg.points[0]
+    joint_to_idx = {name: i for i, name in enumerate(msg.joint_names)}
+
+    if not spec.names:
+        return np.asarray(point.positions, dtype=np.float64)
+
+    _FIELD_MAP = {
+        "position": "positions",
+        "positions": "positions",
+        "velocity": "velocities",
+        "velocities": "velocities",
+        "acceleration": "accelerations",
+        "accelerations": "accelerations",
+        "effort": "effort",
+    }
+
+    out = []
+    for selector in spec.names:
+        if "." in selector:
+            field, joint_name = selector.split(".", 1)
+        else:
+            field, joint_name = "position", selector
+
+        attr = _FIELD_MAP.get(field)
+        if attr is None:
+            raise ValueError(
+                f"Unknown JointTrajectoryPoint field '{field}'. "
+                f"Valid fields: position, velocity, acceleration, effort"
+            )
+        if joint_name not in joint_to_idx:
+            raise ValueError(
+                f"Joint '{joint_name}' not in message. Available: {list(msg.joint_names)}"
+            )
+        idx = joint_to_idx[joint_name]
+        arr = getattr(point, attr)
+        if idx >= len(arr):
+            raise ValueError(f"Index {idx} out of range for '{field}' (len={len(arr)})")
+        out.append(float(arr[idx]))
+
+    return np.asarray(out, dtype=np.float64)
+
+
+# =============================================================================
+# Joy Decoder
+# =============================================================================
+
+
+@register_decoder("sensor_msgs/msg/Joy", dtype="float32")
+def _dec_joy(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode sensor_msgs/Joy.
+
+    With selector names like ["axes.0", "axes.1", "buttons.0"]:
+      - Extracts specific axes/buttons by index
+    Without names:
+      - Returns all axes as float32
+
+    Buttons are cast to float32 (0.0 / 1.0).
+    Selector syntax: "<field>.<index>" where field is "axes" or "buttons".
+    """
+    if not spec.names:
+        return np.asarray(msg.axes, dtype=np.float32)
+
+    out = []
+    for selector in spec.names:
+        if "." in selector:
+            field, idx_str = selector.split(".", 1)
+        else:
+            field, idx_str = "axes", selector
+
+        try:
+            idx = int(idx_str)
+        except ValueError:
+            raise ValueError(
+                f"Joy selector index must be an integer, got '{idx_str}' "
+                f"in selector '{selector}'"
+            )
+
+        if field == "axes":
+            if idx >= len(msg.axes):
+                raise IndexError(
+                    f"Axis index {idx} out of range (len={len(msg.axes)})"
+                )
+            out.append(float(msg.axes[idx]))
+        elif field == "buttons":
+            if idx >= len(msg.buttons):
+                raise IndexError(
+                    f"Button index {idx} out of range (len={len(msg.buttons)})"
+                )
+            out.append(float(msg.buttons[idx]))
+        else:
+            raise ValueError(
+                f"Unknown Joy field '{field}'. Valid fields: axes, buttons"
+            )
+
+    return np.asarray(out, dtype=np.float32)
+
+
+# =============================================================================
 # Array Decoders
 # =============================================================================
 
