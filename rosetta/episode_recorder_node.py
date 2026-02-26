@@ -164,75 +164,81 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Load contract, create subscriptions and action server."""
-        contract_path = self.get_parameter("contract_path").value
-        if not contract_path:
-            self.get_logger().error("contract_path parameter required")
-            return TransitionCallbackReturn.FAILURE
-
         try:
-            self._contract = load_contract(contract_path)
+            contract_path = self.get_parameter("contract_path").value
+            if not contract_path:
+                self.get_logger().error("contract_path parameter required")
+                return TransitionCallbackReturn.FAILURE
+
+            try:
+                self._contract = load_contract(contract_path)
+            except Exception as e:
+                self.get_logger().error(f"Failed to load contract: {e}")
+                return TransitionCallbackReturn.FAILURE
+
+            self._bag_base = Path(self.get_parameter("bag_base_dir").value)
+            self._bag_base.mkdir(parents=True, exist_ok=True)
+            self._storage_id = self.get_parameter("storage_id").value
+            self._default_max_duration = self.get_parameter("default_max_duration").value
+            self._feedback_rate_hz = self.get_parameter("feedback_rate_hz").value
+
+            # Build topic list from contract
+            self._topics = self._build_topic_list()
+
+            # Create subscriptions (callbacks no-op when not recording)
+            for topic, type_str, qos, buffering_strategy in self._topics:
+                sub = self._create_sub(topic, type_str, qos, buffering_strategy)
+                self._subs[topic] = sub
+
+            # Create action server
+            self._action_server = ActionServer(
+                self,
+                RecordEpisode,
+                "record_episode",
+                execute_callback=self._execute,
+                goal_callback=self._on_goal,
+                cancel_callback=self._on_cancel,
+                callback_group=self._cbg,
+            )
+
+            # Service to allow external callers to cancel an active recording
+            # Useful for users who can't (or don't want to) interact with the
+            # action protocol directly. This sets the internal stop event and
+            # attempts to transition the current goal to the canceled state.
+            self._cancel_service = self.create_service(
+                Trigger,
+                "~/cancel_recording",
+                self._on_cancel_service,
+                callback_group=self._cbg,
+            )
+
+            # Service to start recording without using the ROS2 action protocol.
+            # Useful for Foxglove extensions and other clients that cannot call
+            # the hidden _action/* services.
+            self._start_service = self.create_service(
+                StartRecording,
+                "~/start_recording",
+                self._on_start_service,
+                callback_group=self._cbg,
+            )
+
+            # Service to delete the most recently completed bag directory.
+            self._delete_last_bag_service = self.create_service(
+                Trigger,
+                "~/delete_last_bag",
+                self._on_delete_last_bag_service,
+                callback_group=self._cbg,
+            )
+
+            self.get_logger().info(
+                f"Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}"
+            )
+            return TransitionCallbackReturn.SUCCESS
         except Exception as e:
-            self.get_logger().error(f"Failed to load contract: {e}")
+            self.get_logger().error(f"Configuration failed: {e}", throttle_duration_sec=1.0)
+            import traceback
+            self.get_logger().error(f"Traceback: {traceback.format_exc()}", throttle_duration_sec=1.0)
             return TransitionCallbackReturn.FAILURE
-
-        self._bag_base = Path(self.get_parameter("bag_base_dir").value)
-        self._bag_base.mkdir(parents=True, exist_ok=True)
-        self._storage_id = self.get_parameter("storage_id").value
-        self._default_max_duration = self.get_parameter("default_max_duration").value
-        self._feedback_rate_hz = self.get_parameter("feedback_rate_hz").value
-
-        # Build topic list from contract
-        self._topics = self._build_topic_list()
-
-        # Create subscriptions (callbacks no-op when not recording)
-        for topic, type_str, qos, buffering_strategy in self._topics:
-            sub = self._create_sub(topic, type_str, qos, buffering_strategy)
-            self._subs[topic] = sub
-
-        # Create action server
-        self._action_server = ActionServer(
-            self,
-            RecordEpisode,
-            "record_episode",
-            execute_callback=self._execute,
-            goal_callback=self._on_goal,
-            cancel_callback=self._on_cancel,
-            callback_group=self._cbg,
-        )
-
-        # Service to allow external callers to cancel an active recording
-        # Useful for users who can't (or don't want to) interact with the
-        # action protocol directly. This sets the internal stop event and
-        # attempts to transition the current goal to the canceled state.
-        self._cancel_service = self.create_service(
-            Trigger,
-            "~/cancel_recording",
-            self._on_cancel_service,
-            callback_group=self._cbg,
-        )
-
-        # Service to start recording without using the ROS2 action protocol.
-        # Useful for Foxglove extensions and other clients that cannot call
-        # the hidden _action/* services.
-        self._start_service = self.create_service(
-            StartRecording,
-            "~/start_recording",
-            self._on_start_service,
-            callback_group=self._cbg,
-        )
-
-        # Service to delete the most recently completed bag directory.
-        self._delete_last_bag_service = self.create_service(
-            Trigger,
-            "~/delete_last_bag",
-            self._on_delete_last_bag_service,
-            callback_group=self._cbg,
-        )
-
-        self.get_logger().info(
-            f"Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}"
-        )
-        return TransitionCallbackReturn.SUCCESS
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Enable goal acceptance."""
