@@ -456,7 +456,11 @@ class RosettaClientNode(LifecycleNode):
         #
         contract_fps = robot_config.fps
         sim_multiplier = self.get_parameter("sim_time_multiplier").value
-        control_loop_fps = int(contract_fps * sim_multiplier)
+        use_sim_time = self.get_parameter("use_sim_time").value
+        if use_sim_time:
+            control_loop_fps = int(contract_fps * sim_multiplier)
+        else:
+            control_loop_fps = contract_fps
         
         if sim_multiplier != 1.0:
             self.get_logger().info(
