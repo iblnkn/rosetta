@@ -508,3 +508,52 @@ def _enc_multidof_command(
             msg.values_dot.append(float(arr[values_dot_map[d]]))
 
     return msg
+
+
+# =============================================================================
+# J1939 Encoders
+# =============================================================================
+
+
+@register_encoder("j1939_msgs/msg/EngineRPM")
+def _enc_engine_rpm(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to j1939_msgs/EngineRPM.
+
+    With selector names like ["engine_rpm", "engine_on"]:
+      - Maps values to specified fields
+    Without names:
+      - First value -> engine_rpm, second value (if present) -> engine_on
+
+    engine_on is treated as bool (nonzero = True).
+    Valid field names: engine_rpm, engine_on
+    """
+    msg_cls = get_message("j1939_msgs/msg/EngineRPM")
+    msg = msg_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+
+    if not spec.names:
+        if len(arr) >= 1:
+            msg.engine_rpm = float(arr[0])
+        if len(arr) >= 2:
+            msg.engine_on = bool(arr[1])
+        return msg
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    for i, name in enumerate(spec.names):
+        if name == "engine_rpm":
+            msg.engine_rpm = float(arr[i])
+        elif name == "engine_on":
+            msg.engine_on = bool(arr[i])
+        else:
+            raise ValueError(
+                f"Unknown EngineRPM field '{name}'. "
+                f"Valid fields: engine_rpm, engine_on"
+            )
+
+    return msg

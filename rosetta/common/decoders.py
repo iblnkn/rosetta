@@ -637,3 +637,39 @@ def _dec_string(msg: Any, spec: ObservationStreamSpec) -> str:
     """Decode std_msgs/String to Python string."""
     _ = spec  # Unused
     return str(msg.data)
+
+
+# =============================================================================
+# J1939 Decoders
+# =============================================================================
+
+
+@register_decoder("j1939_msgs/msg/EngineRPM", dtype="float64")
+def _dec_engine_rpm(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode j1939_msgs/EngineRPM.
+
+    With selector names like ["engine_rpm", "engine_on"]:
+      - Extracts specified fields
+    Without names:
+      - Returns [engine_rpm, engine_on] where engine_on is 0.0 or 1.0
+
+    Valid field names: engine_rpm, engine_on
+    """
+    if not spec.names:
+        return np.array([
+            float(msg.engine_rpm),
+            float(msg.engine_on),
+        ], dtype=np.float64)
+
+    out = []
+    for name in spec.names:
+        if name == "engine_rpm":
+            out.append(float(msg.engine_rpm))
+        elif name == "engine_on":
+            out.append(float(msg.engine_on))
+        else:
+            raise ValueError(
+                f"Unknown EngineRPM field '{name}'. "
+                f"Valid fields: engine_rpm, engine_on"
+            )
+    return np.asarray(out, dtype=np.float64)
