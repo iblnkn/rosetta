@@ -1,0 +1,12 @@
+name: Git Pull Request Lint
+
+on: [pull_request]
+
+jobs:
+  lint-git-pull-request:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@v4
+      - name: Lint commits, branches, and pull requests
+        uses: Develop-SF/gitlint-action@v1.1.0
