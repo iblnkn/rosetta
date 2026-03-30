@@ -128,6 +128,81 @@ def _enc_twist_stamped(
 
 
 # =============================================================================
+# Vector3 Encoder
+# =============================================================================
+
+
+@register_encoder("geometry_msgs/msg/Vector3")
+def _enc_vector3(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to geometry_msgs/Vector3.
+
+    With selector.names like ['x', 'y', 'z']: sets specified fields
+    Without names: sets all three fields [x, y, z]
+    """
+    _ = stamp_ns  # Unused - message type has no header
+    msg_cls = get_message("geometry_msgs/msg/Vector3")
+    msg = msg_cls()
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+
+    if not spec.names:
+        if len(arr) != 3:
+            raise ValueError(f"Vector3 requires 3 values, got {len(arr)}")
+        msg.x = float(arr[0])
+        msg.y = float(arr[1])
+        msg.z = float(arr[2])
+        return msg
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    for i, path in enumerate(spec.names):
+        dot_set(msg, path, arr[i])
+
+    return msg
+
+
+# =============================================================================
+# Vector3Stamped Encoder
+# =============================================================================
+
+
+@register_encoder("geometry_msgs/msg/Vector3Stamped")
+def _enc_vector3_stamped(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to geometry_msgs/Vector3Stamped.
+
+    Same selector syntax as Vector3 - the stamped wrapper is transparent.
+    With selector.names like ['x', 'y', 'z']: sets specified fields
+    Without names: sets all three fields [x, y, z]
+    """
+    msg_cls = get_message("geometry_msgs/msg/Vector3Stamped")
+    msg = msg_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+
+    if not spec.names:
+        if len(arr) != 3:
+            raise ValueError(f"Vector3Stamped requires 3 values, got {len(arr)}")
+        msg.vector.x = float(arr[0])
+        msg.vector.y = float(arr[1])
+        msg.vector.z = float(arr[2])
+        return msg
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    for i, path in enumerate(spec.names):
+        dot_set(msg.vector, path, arr[i])
+
+    return msg
+
+
+# =============================================================================
 # Scalar Encoders
 # =============================================================================
 

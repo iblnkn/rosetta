@@ -409,6 +409,45 @@ def _dec_twist_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 # =============================================================================
+# Vector3 Decoder
+# =============================================================================
+
+
+@register_decoder("geometry_msgs/msg/Vector3", dtype="float64")
+def _dec_vector3(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode geometry_msgs/Vector3.
+
+    With selector names: extracts specified dotted paths
+    Without names: returns [x, y, z]
+    """
+    if not spec.names:
+        return np.array([msg.x, msg.y, msg.z], dtype=np.float64)
+
+    return np.asarray([float(dot_get(msg, name)) for name in spec.names], dtype=np.float64)
+
+
+# =============================================================================
+# Vector3Stamped Decoder
+# =============================================================================
+
+
+@register_decoder("geometry_msgs/msg/Vector3Stamped", dtype="float64")
+def _dec_vector3_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode geometry_msgs/Vector3Stamped.
+
+    Same selector syntax as Vector3 - the stamped wrapper is transparent.
+    With selector names: extracts specified dotted paths from inner vector
+    Without names: returns [x, y, z]
+    """
+    if not spec.names:
+        return np.array([msg.vector.x, msg.vector.y, msg.vector.z], dtype=np.float64)
+
+    return np.asarray(
+        [float(dot_get(msg.vector, name)) for name in spec.names], dtype=np.float64
+    )
+
+
+# =============================================================================
 # MultiDOFCommand Decoder
 # =============================================================================
 
