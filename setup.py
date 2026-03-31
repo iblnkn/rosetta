@@ -25,6 +25,8 @@ setup(
         (os.path.join('share', package_name, 'contracts'), glob('contracts/*.yaml')),
         # Include all parameter files
         (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
+        # Include inference profile files
+        (os.path.join('share', package_name, 'profiles'), glob('profiles/*.yaml')),
     ],
     install_requires=['setuptools', 'numpy', 'pyyaml', 'rclpy'],
     zip_safe=True,

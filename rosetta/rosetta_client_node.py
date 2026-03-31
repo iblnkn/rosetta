@@ -299,7 +299,7 @@ class RosettaClientNode(LifecycleNode):
         host, port = server_address.split(":")
 
         if self.get_parameter("is_classifier").value:
-            module = "rosetta.common.classifier_server"
+            module = "rosetta.common.aux_model_server"
         else:
             module = "lerobot.async_inference.policy_server"
 

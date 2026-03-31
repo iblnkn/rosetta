@@ -52,7 +52,8 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.conditions import IfCondition
-from launch.event_handlers import OnExecutionComplete, OnProcessStart
+from launch.event_handlers import OnProcessStart
+from launch_ros.event_handlers import OnStateTransition
 from launch.events import matches_action
 from launch.substitutions import (
     EqualsSubstitution,
@@ -438,9 +439,10 @@ def generate_launch_description():
         )
         lifecycle_events.append(
             RegisterEventHandler(
-                OnExecutionComplete(
-                    target_action=configure_event,
-                    on_completion=[activate_event],
+                OnStateTransition(
+                    target_lifecycle_node=node,
+                    goal_state='inactive',  # trigger when node reaches INACTIVE (configure finished)
+                    entities=[activate_event],
                 )
             )
         )
@@ -476,9 +478,10 @@ def generate_launch_description():
     )
     lifecycle_events.append(
         RegisterEventHandler(
-            OnExecutionComplete(
-                target_action=reward_configure_event,
-                on_completion=[reward_activate_event],
+            OnStateTransition(
+                target_lifecycle_node=reward_classifier_node,
+                goal_state='inactive',  # trigger when node reaches INACTIVE (configure finished)
+                entities=[reward_activate_event],
             )
         )
     )

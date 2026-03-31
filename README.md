@@ -149,6 +149,48 @@ ros2 action send_goal /rosetta_client/run_policy \
     rosetta_interfaces/action/RunPolicy "{prompt: 'pick up red block'}"
 ```
 
+### Auxiliary Model Server Profiles (LeRobot + VLM)
+
+The auxiliary model server supports profile-driven backends. Start it with
+`--inference-profile` to choose model type and output parsing behavior.
+
+```bash
+# LeRobot classifier backend (legacy-compatible)
+python -m rosetta.common.aux_model_server \
+  --host=127.0.0.1 \
+  --port=8081 \
+  --inference-profile /workspaces/rosetta_ws/src/action/rosetta/profiles/lerobot_classifier_default.yaml
+```
+
+```bash
+# SmolVLM2 with success/failure label mapping
+python -m rosetta.common.aux_model_server \
+  --host=127.0.0.1 \
+  --port=8081 \
+  --inference-profile /workspaces/rosetta_ws/src/action/rosetta/profiles/transformers_vlm_labelmap.yaml
+```
+
+```bash
+# Qwen3-VL-8B with success/failure label mapping
+python -m rosetta.common.aux_model_server \
+  --host=127.0.0.1 \
+  --port=8081 \
+  --inference-profile /workspaces/rosetta_ws/src/action/rosetta/profiles/transformers_vlm_qwen3_vl_labelmap.yaml
+```
+
+```bash
+# VLM numeric score parsing via regex (extract first float from model output)
+python -m rosetta.common.aux_model_server \
+  --host=127.0.0.1 \
+  --port=8081 \
+  --inference-profile /workspaces/rosetta_ws/src/action/rosetta/profiles/transformers_vlm_regex_float.yaml
+```
+
+Notes:
+- `transformers_vlm` profiles require `transformers` and `Pillow` in the environment.
+- Switch camera input by editing `inputs.image_keys` in the selected profile.
+- `rosetta.common.classifier_server` remains as a deprecated compatibility alias.
+
 ---
 
 ## Core Concepts

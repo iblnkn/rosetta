@@ -1,0 +1,52 @@
+version: 1
+
+server:
+  queue:
+    strategy: latest_only
+    maxsize: 1
+  timeout_s: 3.0
+  on_error: emit_default
+
+backend:
+  kind: transformers_vlm
+  model_id: HuggingFaceTB/SmolVLM2-2.2B-Instruct
+  device: cuda
+  dtype: bfloat16
+  trust_remote_code: false
+
+inputs:
+  image_keys:
+    - observation.images.front
+  text_source: task_prompt
+  image_resize: null
+
+inference:
+  mode: generate
+  prompt_template: |
+    You are a reward classifier for robot behavior.
+    Determine if the current frame indicates task success.
+    Task: {task}
+    Reply with exactly one token: success or failure.
+  generation:
+    max_new_tokens: 8
+    temperature: 0.0
+    do_sample: false
+
+postprocess:
+  parser: label_map
+  label_map:
+    success: 1.0
+    failure: 0.0
+  default_value: 0.0
+  binary_threshold: 0.5
+
+output:
+  kind: tensor
+  tensor:
+    dtype: float32
+    shape: [1]
+  timestep_policy: obs_plus_one
+
+validation:
+  require_nonempty_images: true
+  max_latency_ms: 3000

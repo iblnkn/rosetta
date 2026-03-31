@@ -1,0 +1,42 @@
+version: 1
+
+server:
+  queue:
+    strategy: latest_only
+    maxsize: 1
+  timeout_s: 2.0
+  on_error: emit_default
+
+backend:
+  kind: lerobot_classifier
+
+inputs:
+  image_keys: null
+  state_keys: null
+  text_source: task_prompt
+  text_literal: ""
+  image_resize: null
+
+inference:
+  mode: classify
+  prompt_template: ""
+  generation: {}
+
+postprocess:
+  parser: label_map
+  label_map:
+    success: 1.0
+    failure: 0.0
+  default_value: 0.0
+  binary_threshold: 0.5
+
+output:
+  kind: tensor
+  tensor:
+    dtype: float32
+    shape: [1]
+  timestep_policy: obs_plus_one
+
+validation:
+  require_nonempty_images: true
+  max_latency_ms: 2000

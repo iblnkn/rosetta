@@ -83,6 +83,11 @@ from .ros2_utils import (
     qos_profile_from_dict,
     stamp_from_header_ns,
 )
+from .inference_profile import (
+    InferenceProfile,
+    InferenceProfileValidationError,
+    load_inference_profile,
+)
 
 __all__ = [
     # Contract types and loading
@@ -133,4 +138,8 @@ __all__ = [
     "get_message_timestamp_ns",
     "qos_profile_from_dict",
     "stamp_from_header_ns",
+    # Inference profile
+    "InferenceProfile",
+    "InferenceProfileValidationError",
+    "load_inference_profile",
 ]
