@@ -48,7 +48,7 @@ from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackRet
 from rcl_interfaces.msg import ParameterDescriptor
 from rosidl_runtime_py.utilities import get_message
 
-from std_msgs.msg import Int8
+from std_msgs.msg import Float64, Int8, Int32
 from std_srvs.srv import SetBool, Trigger
 
 from rosetta.common.contract import load_contract
@@ -176,11 +176,18 @@ class RosettaHilManagerNode(LifecycleNode):
         self._stop_requested = False
         self._start_requested = False
 
+        # Intervention tracking stats (guarded by _mux_lock)
+        self._intervention_count = 0
+        self._total_intervention_duration = 0.0
+        self._current_intervention_start_time: float | None = None
+
         # Subscriptions and publishers for muxing
         self._mux_subs: list = []
         self._command_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
         self._reward_publishers: dict[str, tuple] = {}   # original_topic -> (msg_cls, publisher)
         self._intervention_pub = None
+        self._intervention_count_pub = None
+        self._intervention_duration_pub = None
         self._episode_service = None
         self._stop_service = None
         self._intervention_service = None
@@ -197,6 +204,64 @@ class RosettaHilManagerNode(LifecycleNode):
         self._sub_cbg = ReentrantCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
+
+    # ====================================================================
+    # Lifecycle callbacks
+    # ====================================================================
+
+    # ====================================================================
+    # Intervention tracking helpers
+    # ====================================================================
+
+    def _update_intervention_stats(self, new_control_source: str) -> None:
+        """Update intervention statistics when control source changes.
+        
+        Must be called with _mux_lock held.
+        """
+        old_source = self._control_source
+        
+        # Switching from policy to teleop - intervention starts
+        if old_source == "policy" and new_control_source == "teleop":
+            self._intervention_count += 1
+            self._current_intervention_start_time = time.time()
+            self.get_logger().debug(
+                f"Intervention started (count: {self._intervention_count})"
+            )
+            self._publish_intervention_stats()
+        
+        # Switching from teleop to policy - intervention ends
+        elif old_source == "teleop" and new_control_source == "policy":
+            if self._current_intervention_start_time is not None:
+                duration = time.time() - self._current_intervention_start_time
+                self._total_intervention_duration += duration
+                self._current_intervention_start_time = None
+                self.get_logger().debug(
+                    f"Intervention ended (duration: {duration:.2f}s, total: {self._total_intervention_duration:.2f}s)"
+                )
+                self._publish_intervention_stats()
+
+    def _reset_intervention_stats(self) -> None:
+        """Reset intervention tracking statistics for a new episode.
+        
+        Must be called with _mux_lock held.
+        """
+        self._intervention_count = 0
+        self._total_intervention_duration = 0.0
+        self._current_intervention_start_time = None
+        self.get_logger().info("Intervention stats reset")
+
+    def _publish_intervention_stats(self) -> None:
+        """Publish current intervention statistics."""
+        if self._intervention_count_pub is None or self._intervention_duration_pub is None:
+            return
+        
+        count_msg = Int32()
+        count_msg.data = self._intervention_count
+        self._intervention_count_pub.publish(count_msg)
+        
+        duration_msg = Float64()
+        duration_msg.data = self._total_intervention_duration
+        self._intervention_duration_pub.publish(duration_msg)
 
     # ====================================================================
     # Lifecycle callbacks
@@ -311,6 +376,10 @@ class RosettaHilManagerNode(LifecycleNode):
 
         # --- HIL intervention publisher ---
         self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
+        
+        # --- Intervention stats publishers ---
+        self._intervention_count_pub = self.create_publisher(Int32, "/hil_manager/intervention_count", 10)
+        self._intervention_duration_pub = self.create_publisher(Float64, "/hil_manager/intervention_duration", 10)
 
         # --- Service wrapper (for callers that don't support actions) ---
         self._episode_service = self.create_service(
@@ -436,6 +505,14 @@ class RosettaHilManagerNode(LifecycleNode):
         if self._intervention_pub is not None:
             self.destroy_publisher(self._intervention_pub)
             self._intervention_pub = None
+        
+        if self._intervention_count_pub is not None:
+            self.destroy_publisher(self._intervention_count_pub)
+            self._intervention_count_pub = None
+        
+        if self._intervention_duration_pub is not None:
+            self.destroy_publisher(self._intervention_duration_pub)
+            self._intervention_duration_pub = None
 
         if self._episode_service is not None:
             self.destroy_service(self._episode_service)
@@ -517,6 +594,7 @@ class RosettaHilManagerNode(LifecycleNode):
                 if event_name == "is_intervention":
                     with self._mux_lock:
                         if self._control_source == "teleop":
+                            self._update_intervention_stats("policy")
                             self._control_source = "policy"
                             self.get_logger().info("Mux: teleop -> policy (intervention released)")
                 elif event_name in ("success", "failure"):
@@ -530,6 +608,7 @@ class RosettaHilManagerNode(LifecycleNode):
             if event_name == "is_intervention":
                 with self._mux_lock:
                     if self._control_source != "teleop":
+                        self._update_intervention_stats("teleop")
                         self._control_source = "teleop"
                         self.get_logger().info("Mux: policy -> teleop (human intervention)")
 
@@ -653,10 +732,12 @@ class RosettaHilManagerNode(LifecycleNode):
         self, request: SetBool.Request, response: SetBool.Response
     ) -> SetBool.Response:
         """Service: switch mux between policy (False) and teleop (True)."""
+        new_source = "teleop" if request.data else "policy"
         with self._mux_lock:
-            self._control_source = "teleop" if request.data else "policy"
+            self._update_intervention_stats(new_source)
+            self._control_source = new_source
         response.success = True
-        response.message = f"Control source: {'teleop' if request.data else 'policy'}"
+        response.message = f"Control source: {new_source}"
         self.get_logger().info(response.message)
         return response
 
@@ -711,6 +792,7 @@ class RosettaHilManagerNode(LifecycleNode):
             self._human_reward_override = False
             self._stop_requested = False
             self._start_requested = False
+            self._reset_intervention_stats()
 
         enable_reward = self.get_parameter("enable_reward_classifier").value
         cancelled = False
@@ -838,6 +920,9 @@ class RosettaHilManagerNode(LifecycleNode):
                 feedback.status = "running"
                 feedback.messages_written = 0  # Updated from recorder feedback if available
                 goal_handle.publish_feedback(feedback)
+            
+            # Publish intervention stats
+            self._publish_intervention_stats()
 
             time.sleep(feedback_interval)
 
