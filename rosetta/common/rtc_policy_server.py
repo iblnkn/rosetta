@@ -308,10 +308,26 @@ class RTCPolicyServer(PolicyServer):
             if k in stack_keys
         }
 
+        # Spacing / freshness diagnostics. Each client tick stamps
+        # raw_obs["_capture_time"] = time.time(); missing entries (e.g. legacy
+        # clients) show up as NaN.
+        capture_times = [raw.get("_capture_time", float("nan")) for raw in recent]
+        deltas_ms = [
+            (capture_times[i] - capture_times[i - 1]) * 1000.0
+            for i in range(1, len(capture_times))
+        ]
+        latest_age_ms = (
+            (time.time() - capture_times[-1]) * 1000.0
+            if capture_times and capture_times[-1] == capture_times[-1]  # non-NaN
+            else float("nan")
+        )
+
         self.logger.info(
             f"obs history: hist_len_sent={len(history)}, "
             f"n_obs_steps={n_obs_steps}, used={len(recent)}, "
-            f"stacked_keys={sorted(stacked.keys())}"
+            f"stacked_keys={sorted(stacked.keys())}, "
+            f"deltas_ms={[round(d, 2) for d in deltas_ms]}, "
+            f"newest_age_ms={latest_age_ms:.1f}"
         )
         return stacked
 

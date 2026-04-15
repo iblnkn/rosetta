@@ -405,6 +405,9 @@ def _patched_control_loop(self, task: str, verbose: bool = False):
         # 30 Hz, get_observation() just assembles the latest cached messages.
         tick_raw_obs = self.robot.get_observation()
         tick_raw_obs["task"] = task
+        # Stamp for server-side spacing / freshness diagnostics. Not a
+        # contract feature, so raw_observation_to_observation drops it.
+        tick_raw_obs["_capture_time"] = time.time()
         self._obs_history.append(tick_raw_obs)
 
         # Control loop: (1) Performing actions, when available
