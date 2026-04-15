@@ -87,11 +87,16 @@ def is_jazzy_or_newer() -> bool:
     - rosbag2_py uses QoS objects instead of YAML strings in TopicMetadata
     - LifecycleNode supports enable_logger_service parameter
     
+    ROS2 distro names are alphabetical (humble < jazzy < kilted < ...),
+    so any distro name >= "jazzy" (including "rolling") is considered newer.
+    Only known pre-Jazzy distros (humble, iron, galactic, foxy, etc.) return False.
+    
     Returns:
-        True if Jazzy/Rolling or newer, False otherwise (Humble, etc.)
+        True if Jazzy/Rolling/Kilted or newer, False otherwise (Humble, etc.)
     """
     distro = detect_ros_distro()
-    return distro in ("jazzy", "rolling")
+    _PRE_JAZZY = {"humble", "iron", "galactic", "foxy", "eloquent", "dashing", "crystal", "bouncy", "ardent"}
+    return distro not in _PRE_JAZZY
 
 
 def extract_qos_numeric_values(q: QoSProfile | int) -> dict[str, int]:
