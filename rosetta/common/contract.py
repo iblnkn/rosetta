@@ -284,6 +284,7 @@ class ActionStreamSpec(StreamSpec):
 
     clamp: tuple[float, float] | None
     safety_behavior: str
+    full_names: list[str]
     qos: dict[str, Any] | None = None
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path

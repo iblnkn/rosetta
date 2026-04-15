@@ -389,14 +389,18 @@ def _enc_joint_trajectory(
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
     point = point_cls()  # time_from_start is zero-initialized
 
-    if not spec.names:
+    selector_names = list(spec.full_names or spec.names)
+
+    if not selector_names:
         msg.joint_names = [f"joint_{i}" for i in range(len(arr))]
         point.positions = arr.tolist()
         msg.points = [point]
         return msg
 
-    if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+    if len(selector_names) != len(arr):
+        raise ValueError(
+            f"selector length ({len(selector_names)}) != action length ({len(arr)})"
+        )
 
     _FIELD_MAP = {
         "position": "positions",
@@ -413,7 +417,7 @@ def _enc_joint_trajectory(
     seen_joints: set[str] = set()
     field_to_joints: dict[str, dict[str, int]] = {}  # attr -> {joint_name -> arr_idx}
 
-    for i, path in enumerate(spec.names):
+    for i, path in enumerate(selector_names):
         if "." in path:
             field, joint_name = path.split(".", 1)
         else:

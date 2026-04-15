@@ -403,7 +403,23 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
                 f"Add an encoder in encoders.py or provide a custom encoder."
             )
 
-        names = list((a.selector or {}).get("names", []))
+        selector = a.selector or {}
+        names = list(selector.get("names", []))
+        full_names = list(selector.get("full_names", names))
+
+        if a.type == "trajectory_msgs/msg/JointTrajectory":
+            missing_from_full = [name for name in names if name not in full_names]
+            if missing_from_full:
+                raise ContractValidationError(
+                    f"Action '{a.key}' has selector.names entries not present in selector.full_names: "
+                    f"{missing_from_full}"
+                )
+        elif "full_names" in selector and full_names != names:
+            raise ContractValidationError(
+                f"selector.full_names is currently supported only for "
+                f"trajectory_msgs/msg/JointTrajectory (action '{a.key}', type '{a.type}')."
+            )
+
         clamp = None
         if a.from_tensor and "clamp" in a.from_tensor:
             lo, hi = a.from_tensor["clamp"]
@@ -418,6 +434,7 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
             stamp_src=contract.timestamp_source,
             clamp=clamp,
             safety_behavior=(a.safety_behavior or "none").lower(),
+            full_names=full_names,
             qos=a.publish_qos,
             decoder=a.decoder,
             encoder=a.encoder,
@@ -456,6 +473,7 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
             stamp_src=contract.timestamp_source,
             clamp=None,
             safety_behavior="none",
+            full_names=names,
             qos=o.qos,
             decoder=o.decoder,
             encoder=None,

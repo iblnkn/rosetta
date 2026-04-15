@@ -11,17 +11,28 @@
 
 ## Table of Contents
 
-- [Recent Changes](#recent-changes)
+- [Table of Contents](#table-of-contents)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
   - [What is LeRobot?](#what-is-lerobot)
   - [What is Rosetta?](#what-is-rosetta)
 - [Architecture](#architecture)
+  - [LeRobot Plugin Architecture](#lerobot-plugin-architecture)
+  - [ROS2 Lifecycle Integration](#ros2-lifecycle-integration)
+  - [Policy Inference](#policy-inference)
+  - [rosetta\_ws Workspace](#rosetta_ws-workspace)
 - [The Contract](#the-contract)
 - [Recording Episodes](#recording-episodes)
   - [Why Record to Bag Files?](#why-record-to-bag-files)
 - [Converting Bags to Datasets](#converting-bags-to-datasets)
+  - [Relationship to LeRobot](#relationship-to-lerobot)
+  - [Basic Usage](#basic-usage)
 - [Training a Policy](#training-a-policy)
+  - [Quick Start: ACT](#quick-start-act)
+  - [Fine-tuning VLA Models](#fine-tuning-vla-models)
+  - [Multi-GPU Training](#multi-gpu-training)
+  - [Resume Training](#resume-training)
+  - [Upload to HuggingFace Hub](#upload-to-huggingface-hub)
   - [Supported Policies](#supported-policies)
 - [Deploying Policies](#deploying-policies)
 - [Contract Reference](#contract-reference)
@@ -35,11 +46,24 @@
   - [Alignment Strategies](#alignment-strategies)
   - [Supported Message Types](#supported-message-types)
   - [Custom Encoders/Decoders (Experimental)](#custom-encodersdecoders-experimental)
+    - [Method 1: Specify in Contract (Recommended)](#method-1-specify-in-contract-recommended)
+    - [Method 2: Global Registration](#method-2-global-registration)
+    - [Function Signatures](#function-signatures)
+    - [When Each Is Used](#when-each-is-used)
 - [LeRobot Data Model Reference](#lerobot-data-model-reference)
   - [Key System](#key-system)
+    - [How LeRobot classifies keys](#how-lerobot-classifies-keys)
+    - [Convention vs. compatibility](#convention-vs-compatibility)
   - [EnvTransition](#envtransition)
+    - [Observation (`observation.*`)](#observation-observation)
+    - [Action (`action*`)](#action-action)
+    - [Task and Language](#task-and-language)
+    - [Reward and Episode Signals](#reward-and-episode-signals)
+    - [Complementary Data](#complementary-data)
+    - [Info](#info)
   - [Data Types](#data-types)
   - [Policy Feature Compatibility](#policy-feature-compatibility)
+    - [What this means for your contract](#what-this-means-for-your-contract)
 - [License](#license)
 
 <a id="recent-changes"></a>
@@ -602,6 +626,20 @@ actions:
     selector:
       names: [position.j1, position.j2]
     safety_behavior: hold  # none, hold, zeros
+
+# JointTrajectory can publish a superset schema with selector.full_names.
+# Values missing from selector.names are filled using safety_behavior:
+#   - zeros/none -> 0.0
+#   - hold -> last published value (fallback 0.0 until first publish)
+actions:
+  - key: action
+    publish:
+      topic: /joint_trajectory_commands
+      type: trajectory_msgs/msg/JointTrajectory
+    selector:
+      names: [effort.j1, effort.j2]
+      full_names: [effort.j1, effort.j2, effort.j3]
+    safety_behavior: zeros
 ```
 
 ### Teleop
