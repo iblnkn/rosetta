@@ -33,6 +33,7 @@ from pprint import pformat
 import draccus
 import grpc
 import torch
+from torch import Tensor
 from concurrent import futures
 
 # Register SNSDiffusionConfig before anything loads a checkpoint
@@ -48,6 +49,8 @@ from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
+
+from rosetta.common.obs_history import TimedObservationWithHistory
 
 logger = logging.getLogger(__name__)
 
@@ -106,41 +109,36 @@ class RTCPolicyServer(PolicyServer):
         rtc_cfg = getattr(rtc_config, "rtc_config", None) if rtc_config else None
         return rtc_cfg is not None and getattr(rtc_cfg, "enabled", False)
 
-    def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
+    def _predict_action_chunk(
+        self, observation_t: TimedObservation | TimedObservationWithHistory
+    ) -> list[TimedAction]:
         """Predict an action chunk with RTC support.
 
         Pipeline:
-        1. Prepare observation (same as upstream)
-        2. Apply preprocessor
-        3. Build RTC kwargs (prev_chunk_left_over, inference_delay)
-        4. Run policy inference with RTC kwargs
-        5. Merge into ActionQueue (original + postprocessed)
-        6. Apply postprocessor
-        7. Convert to TimedAction list
+        1. Build ``(B, n_obs_steps, ...)`` observations from client-sent obs history
+        2. Build RTC kwargs (prev_chunk_left_over, inference_delay)
+        3. Run policy inference with RTC kwargs
+        4. Merge into ActionQueue (original + postprocessed)
+        5. Apply postprocessor
+        6. Convert to TimedAction list
         """
-        from lerobot.async_inference.helpers import (
-            Observation,
-            raw_observation_to_observation,
-        )
-
         self._ensure_action_queue()
 
-        """1. Prepare observation"""
+        """1. Build stacked observations from client history.
+
+        The client attaches a rolling window of raw obs captured at control
+        rate. We convert + preprocess each, stack per-camera images, then
+        stack along dim=1 into a (B, n_obs_steps, ...) tensor per key — the
+        shape the diffusion model was trained on. This bypasses the policy's
+        internal deque entirely (which would otherwise carry ~1 s-spaced
+        inter-chunk obs, out of training distribution).
+        """
         start_prepare = time.perf_counter()
-        observation: Observation = raw_observation_to_observation(
-            observation_t.get_observation(),
-            self.lerobot_features,
-            self.policy_image_features,
-        )
+        observations = self._build_stacked_observations(observation_t)
+        self.last_processed_obs: TimedObservation = observation_t
         prepare_time = time.perf_counter() - start_prepare
 
-        """2. Apply preprocessor"""
-        start_preprocess = time.perf_counter()
-        observation = self.preprocessor(observation)
-        self.last_processed_obs: TimedObservation = observation_t
-        preprocessing_time = time.perf_counter() - start_preprocess
-
-        """3. Build RTC kwargs"""
+        """2. Build RTC kwargs"""
         rtc_kwargs = {}
         action_index_before = None
 
@@ -157,9 +155,11 @@ class RTCPolicyServer(PolicyServer):
             rtc_kwargs["prev_chunk_left_over"] = prev_chunk_left_over
 
             # Compute inference_delay from the last measured inference time
-            inference_delay = math.ceil(
-                self._last_inference_time / self.config.environment_dt
-            ) if self._last_inference_time > 0 else 0
+            inference_delay = (
+                math.ceil(self._last_inference_time / self.config.environment_dt)
+                if self._last_inference_time > 0
+                else 0
+            )
             rtc_kwargs["inference_delay"] = inference_delay
 
             # Optionally pass execution_horizon (falls back to config default in RTCProcessor)
@@ -171,9 +171,9 @@ class RTCPolicyServer(PolicyServer):
                 f"action_index_before={action_index_before}"
             )
 
-        """4. Get action chunk"""
+        """3. Get action chunk"""
         start_inference = time.perf_counter()
-        action_tensor = self._get_action_chunk_with_kwargs(observation, **rtc_kwargs)
+        action_tensor = self._get_action_chunk_with_kwargs(observations, **rtc_kwargs)
         inference_time = time.perf_counter() - start_inference
         self._last_inference_time = inference_time
         self.logger.info(
@@ -183,7 +183,7 @@ class RTCPolicyServer(PolicyServer):
         # Keep original actions (model-space) before postprocessing for ActionQueue
         original_actions = action_tensor.squeeze(0).clone()
 
-        """5. Apply postprocessor"""
+        """4. Apply postprocessor"""
         start_postprocess = time.perf_counter()
         _, chunk_size, _ = action_tensor.shape
 
@@ -199,7 +199,7 @@ class RTCPolicyServer(PolicyServer):
         # Postprocessed actions for ActionQueue
         processed_actions_2d = action_tensor.clone()
 
-        """6. Merge into ActionQueue"""
+        """5. Merge into ActionQueue"""
         if self._action_queue is not None:
             inference_delay = rtc_kwargs.get("inference_delay", 0)
             # Upstream `eval_with_real_robot.py` has a robot thread popping
@@ -218,9 +218,7 @@ class RTCPolicyServer(PolicyServer):
                 real_delay=inference_delay,
                 action_index_before_inference=action_index_before,
             )
-            self.logger.debug(
-                f"ActionQueue merged: qsize={self._action_queue.qsize()}"
-            )
+            self.logger.debug(f"ActionQueue merged: qsize={self._action_queue.qsize()}")
 
         # Record when this chunk was produced so the next cycle can
         # estimate how many actions the client consumed in the meantime.
@@ -228,9 +226,11 @@ class RTCPolicyServer(PolicyServer):
 
         action_tensor = action_tensor.detach().cpu()
 
-        """7. Convert to TimedAction list"""
+        """6. Convert to TimedAction list"""
         action_chunk = self._time_action_chunk(
-            observation_t.get_timestamp(), list(action_tensor), observation_t.get_timestep()
+            observation_t.get_timestamp(),
+            list(action_tensor),
+            observation_t.get_timestep(),
         )
         postprocess_stops = time.perf_counter()
         postprocessing_time = postprocess_stops - start_postprocess
@@ -243,7 +243,6 @@ class RTCPolicyServer(PolicyServer):
         self.logger.debug(
             f"Observation {observation_t.get_timestep()} | "
             f"Prepare time: {1000 * prepare_time:.2f}ms | "
-            f"Preprocessing time: {1000 * preprocessing_time:.2f}ms | "
             f"Inference time: {1000 * inference_time:.2f}ms | "
             f"Postprocessing time: {1000 * postprocessing_time:.2f}ms | "
             f"Total time: {1000 * (postprocess_stops - start_prepare):.2f}ms"
@@ -252,13 +251,69 @@ class RTCPolicyServer(PolicyServer):
         return action_chunk
 
     def _get_action_chunk_with_kwargs(
-        self, observation: dict[str, torch.Tensor], **kwargs
+        self, observations: dict[str, torch.Tensor], **kwargs
     ) -> torch.Tensor:
         """Get an action chunk, passing RTC kwargs through to predict_action_chunk."""
-        chunk = self.policy.predict_action_chunk(observation, **kwargs)
+        chunk = self.policy.predict_action_chunk(observations, **kwargs)
         if chunk.ndim != 3:
             chunk = chunk.unsqueeze(0)
         return chunk[:, : self.actions_per_chunk, :]
+
+    def _build_stacked_observations(
+        self,
+        observation_t: TimedObservation | TimedObservationWithHistory,
+    ) -> dict[str, Tensor]:
+        """Build ``(B, n_obs_steps, ...)`` observations from client-sent history.
+
+        Steps per history entry:
+          1. ``raw_observation_to_observation`` (feature selection + tensorize).
+          2. ``self.preprocessor`` (normalize, batch-dim, device move).
+          3. Stack per-camera images into ``OBS_IMAGES``.
+
+        Then stack all ``n_obs_steps`` entries along ``dim=1`` — this is the
+        shape the diffusion model was trained on (33 ms-spaced history). If
+        the client sent fewer than ``n_obs_steps`` entries (ramp-up), left-pad
+        by repeating the oldest entry.
+        """
+        from lerobot.async_inference.helpers import raw_observation_to_observation
+        from lerobot.utils.constants import OBS_IMAGES
+
+        n_obs_steps = getattr(self.policy.config, "n_obs_steps", 1)
+        image_features = getattr(self.policy.config, "image_features", None)
+
+        history = getattr(observation_t, "history", None) or [
+            observation_t.get_observation()
+        ]
+        recent = list(history[-n_obs_steps:])
+        if len(recent) < n_obs_steps:
+            recent = [recent[0]] * (n_obs_steps - len(recent)) + recent
+
+        per_step: list[dict[str, Tensor]] = []
+        for raw_obs in recent:
+            obs_i = raw_observation_to_observation(
+                raw_obs, self.lerobot_features, self.policy_image_features
+            )
+            obs_i = self.preprocessor(obs_i)
+            if image_features:
+                obs_i = dict(obs_i)
+                obs_i[OBS_IMAGES] = torch.stack(
+                    [obs_i[k] for k in image_features], dim=-4
+                )
+            per_step.append(obs_i)
+
+        stack_keys = {"observation.state", "observation.environment_state", OBS_IMAGES}
+        stacked: dict[str, Tensor] = {
+            k: torch.stack([step[k] for step in per_step], dim=1)
+            for k in per_step[-1]
+            if k in stack_keys
+        }
+
+        self.logger.info(
+            f"obs history: hist_len_sent={len(history)}, "
+            f"n_obs_steps={n_obs_steps}, used={len(recent)}, "
+            f"stacked_keys={sorted(stacked.keys())}"
+        )
+        return stacked
 
     def _simulate_client_consumption(self) -> None:
         """Advance ``ActionQueue.last_index`` to match estimated client consumption.
