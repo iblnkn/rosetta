@@ -1,3 +1,4 @@
+
 """LeRobot async inference policy server entrypoint for Rosetta.
 
 Importing ``lerobot_policy_sns_diffusion`` registers the ``SNSDiffusionConfig``

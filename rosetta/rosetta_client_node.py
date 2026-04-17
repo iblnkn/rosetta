@@ -55,6 +55,12 @@ from lerobot_robot_rosetta.rosetta import _TopicBridge
 
 from .common.ros2_utils import is_jazzy_or_newer
 from .common import processors as _processors  # noqa: F401
+from .common.policy_registry import (
+    PolicyBundle,
+    PolicyRegistryError,
+    load_registry,
+    validate_pretrained,
+)
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -110,7 +116,8 @@ class RosettaClientNode(LifecycleNode):
             "pretrained_name_or_path",
             "",
             ParameterDescriptor(
-                description="Path or HF repo ID of trained policy", read_only=True
+                description="Default path or HF repo ID of trained policy. "
+                "Per-goal override available via RunPolicy.pretrained_name_or_path."
             ),
         )
         self.declare_parameter(
@@ -124,7 +131,8 @@ class RosettaClientNode(LifecycleNode):
             "policy_type",
             "act",
             ParameterDescriptor(
-                description="Policy architecture (act, diffusion, etc.)", read_only=True
+                description="Default policy architecture (act, diffusion, sns_diffusion, ...). "
+                "Per-goal override available via RunPolicy.policy_type."
             ),
         )
         self.declare_parameter(
@@ -198,9 +206,21 @@ class RosettaClientNode(LifecycleNode):
                 read_only=True,
             ),
         )
+        self.declare_parameter(
+            "policy_registry_path",
+            "",
+            ParameterDescriptor(
+                description="Path to policy registry YAML. "
+                "If non-empty, RunPolicy.policy_name can address bundled policy configs.",
+                read_only=True,
+            ),
+        )
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
         self._pretrained: str | None = None
+        self._active_pretrained: str = ""
+        self._active_policy_name: str = ""
+        self._policy_registry: dict[str, PolicyBundle] = {}
         self._server_process: subprocess.Popen | None = None
         self._client: RobotClient | None = None
         self._active_goal = None
@@ -223,18 +243,26 @@ class RosettaClientNode(LifecycleNode):
         if not self._contract_path:
             self.get_logger().error("contract_path parameter required")
             return TransitionCallbackReturn.FAILURE
-        if not self._pretrained:
-            self.get_logger().error("pretrained_name_or_path parameter required")
-            return TransitionCallbackReturn.FAILURE
-        # Distinguish local paths from HF repo IDs (e.g. "user/model").
-        # Local paths start with /, ./, or ../
-        _looks_local = self._pretrained.startswith(("/", "./", "../"))
-        if _looks_local and not os.path.isdir(self._pretrained):
-            self.get_logger().error(
-                f"Local model path does not exist: {self._pretrained}. "
-                "Use a HuggingFace repo ID (e.g. 'user/model') or a valid local directory."
+        # pretrained_name_or_path may be empty at node level: callers can supply
+        # it per-goal via RunPolicy.pretrained_name_or_path or policy_name instead.
+        if self._pretrained:
+            err = validate_pretrained(self._pretrained)
+            if err is not None:
+                self.get_logger().error(f"Invalid default pretrained: {err}")
+                return TransitionCallbackReturn.FAILURE
+
+        registry_path = self.get_parameter("policy_registry_path").value
+        if registry_path:
+            try:
+                self._policy_registry = load_registry(registry_path)
+            except PolicyRegistryError as e:
+                self.get_logger().error(f"Failed to load policy registry: {e}")
+                return TransitionCallbackReturn.FAILURE
+            self.get_logger().info(
+                f"Loaded policy registry from {registry_path} "
+                f"with {len(self._policy_registry)} entries: "
+                f"{sorted(self._policy_registry.keys())}"
             )
-            return TransitionCallbackReturn.FAILURE
 
         # Create topic bridge (observation subscriptions + lifecycle action publishers)
         # Bridge uses contract fps (unscaled) for ROS2 timing (watchdog, etc.)
@@ -441,10 +469,25 @@ class RosettaClientNode(LifecycleNode):
         task = goal_handle.request.prompt
         result = RunPolicy.Result()
 
-        self.get_logger().info(f"Starting: task='{task}'")
+        bundle, err = self._resolve_policy_bundle(goal_handle.request)
+        if err is not None:
+            result.success = False
+            result.message = err
+            self.get_logger().error(err)
+            return self._finish(goal_handle, result)
+
+        self._active_pretrained = bundle.pretrained_name_or_path
+        self._active_policy_name = goal_handle.request.policy_name
+
+        self.get_logger().info(
+            f"Starting: task='{task}' "
+            f"policy_name='{self._active_policy_name}' "
+            f"policy_type={bundle.policy_type} "
+            f"pretrained={bundle.pretrained_name_or_path}"
+        )
 
         try:
-            config = self._build_config(task)
+            config = self._build_config(task, bundle)
             client = RobotClient(config)
             self._client = client
             processor = self._build_observation_processor()
@@ -507,10 +550,58 @@ class RosettaClientNode(LifecycleNode):
             with client.latest_action_lock:
                 feedback.published_actions = max(0, client.latest_action)
             feedback.status = "executing"
+            feedback.active_pretrained = self._active_pretrained
+            feedback.active_policy_name = self._active_policy_name
             goal_handle.publish_feedback(feedback)
 
-    def _build_config(self, task: str) -> RobotClientConfig:
-        """Build RobotClientConfig from ROS2 parameters."""
+    def _resolve_policy_bundle(
+        self, request: RunPolicy.Goal
+    ) -> tuple[PolicyBundle | None, str | None]:
+        """Resolve request into a PolicyBundle, applying explicit > registry > default.
+
+        Returns ``(bundle, None)`` on success or ``(None, error_message)`` on failure.
+        """
+        # Start from registry entry if a name was supplied.
+        if request.policy_name:
+            if request.policy_name not in self._policy_registry:
+                available = sorted(self._policy_registry.keys()) or "<empty registry>"
+                return None, (
+                    f"Unknown policy_name '{request.policy_name}'. "
+                    f"Available: {available}"
+                )
+            bundle = PolicyBundle(
+                **vars(self._policy_registry[request.policy_name])
+            )
+        else:
+            bundle = PolicyBundle(
+                pretrained_name_or_path="",
+                policy_type=self.get_parameter("policy_type").value,
+            )
+
+        # Explicit goal fields override registry/default.
+        if request.pretrained_name_or_path:
+            bundle.pretrained_name_or_path = request.pretrained_name_or_path
+        if request.policy_type:
+            bundle.policy_type = request.policy_type
+
+        # Final fallback for pretrained path: node default.
+        if not bundle.pretrained_name_or_path and self._pretrained:
+            bundle.pretrained_name_or_path = self._pretrained
+
+        if not bundle.pretrained_name_or_path:
+            return None, (
+                "No pretrained_name_or_path: supply RunPolicy.pretrained_name_or_path, "
+                "a registered policy_name, or set the node default param"
+            )
+
+        err = validate_pretrained(bundle.pretrained_name_or_path)
+        if err is not None:
+            return None, f"Rejected goal: {err}"
+
+        return bundle, None
+
+    def _build_config(self, task: str, bundle: PolicyBundle) -> RobotClientConfig:
+        """Build RobotClientConfig from ROS2 parameters and a resolved PolicyBundle."""
         robot_config = RosettaConfig(
             id="rosetta",
             config_path=self._contract_path,
@@ -544,17 +635,34 @@ class RosettaClientNode(LifecycleNode):
                 f"control loop fps={control_loop_fps}Hz (wall time)"
             )
 
+        # Bundle fields override node-level defaults when provided.
+        actions_per_chunk = (
+            bundle.actions_per_chunk
+            if bundle.actions_per_chunk is not None
+            else self.get_parameter("actions_per_chunk").value
+        )
+        chunk_size_threshold = (
+            bundle.chunk_size_threshold
+            if bundle.chunk_size_threshold is not None
+            else self.get_parameter("chunk_size_threshold").value
+        )
+        aggregate_fn_name = (
+            bundle.aggregate_fn_name
+            if bundle.aggregate_fn_name is not None
+            else self.get_parameter("aggregate_fn_name").value
+        )
+
         config_kwargs = dict(
             robot=robot_config,
             server_address=self.get_parameter("server_address").value,
-            policy_type=self.get_parameter("policy_type").value,
-            pretrained_name_or_path=self._pretrained,
+            policy_type=bundle.policy_type,
+            pretrained_name_or_path=bundle.pretrained_name_or_path,
             policy_device=self.get_parameter("policy_device").value,
             task=task,
             fps=control_loop_fps,  # Wall-time polling rate for control_loop()
-            actions_per_chunk=self.get_parameter("actions_per_chunk").value,
-            chunk_size_threshold=self.get_parameter("chunk_size_threshold").value,
-            aggregate_fn_name=self.get_parameter("aggregate_fn_name").value,
+            actions_per_chunk=actions_per_chunk,
+            chunk_size_threshold=chunk_size_threshold,
+            aggregate_fn_name=aggregate_fn_name,
         )
 
         # obs_similarity_atol: controls observation filtering in the policy server.
@@ -588,6 +696,8 @@ class RosettaClientNode(LifecycleNode):
         """Clean up and set goal status."""
         self._client = None
         self._active_goal = None
+        self._active_pretrained = ""
+        self._active_policy_name = ""
 
         if goal_handle.is_cancel_requested:
             goal_handle.canceled()

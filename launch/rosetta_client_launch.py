@@ -68,6 +68,7 @@ def launch_setup(context, *args, **kwargs):
     contract_path = LaunchConfiguration('contract_path').perform(context)
     pretrained_name_or_path = LaunchConfiguration('pretrained_name_or_path').perform(context)
     policy_type = LaunchConfiguration('policy_type').perform(context)
+    policy_registry_path = LaunchConfiguration('policy_registry_path').perform(context)
     server_address = LaunchConfiguration('server_address').perform(context)
     launch_local_server = LaunchConfiguration('launch_local_server').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
@@ -84,6 +85,9 @@ def launch_setup(context, *args, **kwargs):
     
     if policy_type:  # Only add if non-empty
         overrides['policy_type'] = policy_type
+
+    if policy_registry_path:  # Only add if non-empty
+        overrides['policy_registry_path'] = policy_registry_path
     
     if server_address:  # Only add if non-empty
         overrides['server_address'] = server_address
@@ -182,6 +186,11 @@ def generate_launch_description():
             'policy_type',
             default_value='',  # Empty = use value from params file
             description='Policy architecture type (act, diffusion, etc., empty = use params file value)'
+        ),
+        DeclareLaunchArgument(
+            'policy_registry_path',
+            default_value='',  # Empty = use value from params file (or disabled)
+            description='Path to policy registry YAML. If set, RunPolicy.policy_name can address bundled policy configs. Empty = use params file value.'
         ),
         # Server configuration
         DeclareLaunchArgument(
