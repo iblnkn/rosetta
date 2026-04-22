@@ -401,7 +401,26 @@ class RosettaClientNode(LifecycleNode):
             # then delegates to lerobot's async-inference serve().
             module = "rosetta.common.policy_server"
 
-        self.get_logger().info(f"Launching {module} on {host}:{port}...")
+        # Forward the control-loop fps so the server's environment_dt matches
+        # the client. Without this the server defaults to 30 Hz, which (a)
+        # makes TimedAction timestamps and FPSTracker logs wrong, and (b)
+        # miscalibrates the RTC server's queue-consumption simulation and
+        # inference_delay computation.
+        contract_fps = (
+            self._rosetta_config.fps if self._rosetta_config is not None else 30
+        )
+        sim_multiplier = self.get_parameter("sim_time_multiplier").value
+        server_fps = max(1, int(contract_fps * sim_multiplier))
+
+        # Also forward inference_latency. The server's GetActions rate limiter
+        # pads each call to at least this many seconds. The default is 1/30
+        # regardless of --fps.
+        server_inference_latency = 1.0 / server_fps
+
+        self.get_logger().info(
+            f"Launching {module} on {host}:{port} "
+            f"(fps={server_fps}, inference_latency={server_inference_latency:.4f}s)..."
+        )
 
         cmd = [
             sys.executable,
@@ -409,6 +428,8 @@ class RosettaClientNode(LifecycleNode):
             module,
             f"--host={host}",
             f"--port={port}",
+            f"--fps={server_fps}",
+            f"--inference_latency={server_inference_latency}",
         ]
         self._server_process = subprocess.Popen(cmd, env=os.environ.copy())
         atexit.register(self._stop_policy_server)
@@ -569,9 +590,7 @@ class RosettaClientNode(LifecycleNode):
                     f"Unknown policy_name '{request.policy_name}'. "
                     f"Available: {available}"
                 )
-            bundle = PolicyBundle(
-                **vars(self._policy_registry[request.policy_name])
-            )
+            bundle = PolicyBundle(**vars(self._policy_registry[request.policy_name]))
         else:
             bundle = PolicyBundle(
                 pretrained_name_or_path="",
