@@ -114,7 +114,7 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [480, 640]
+      shape: [480, 640]
 
 actions:
   - key: action
@@ -645,7 +645,7 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [224, 224]  # [height, width]
+      shape: [224, 224]  # [height, width]
 ```
 
 Multiple topics can share the same `key`. Values are concatenated (see [The Contract](#the-contract)).
@@ -1122,7 +1122,7 @@ observations:
   - key: observation.images.top     # At least 1 image required by most policies
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [480, 640] }
+    image: { shape: [480, 640] }
 
 actions:
   - key: action                     # Required by all action policies
@@ -1144,7 +1144,7 @@ observations:
   - key: observation.images.wrist.right
     topic: /wrist_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [512, 512] }
+    image: { shape: [512, 512] }
 ```
 
 

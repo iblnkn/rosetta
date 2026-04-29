@@ -232,8 +232,12 @@ def decode_ros_image(
 
 @register_decoder("sensor_msgs/msg/Image", dtype="video")
 def _dec_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """Decode sensor_msgs/Image to HWC uint8 RGB."""
-    return decode_ros_image(msg, spec.image_encoding, spec.image_resize)
+    """Decode sensor_msgs/Image to HWC uint8 RGB.
+
+    Note: contract ``image.shape`` only declares the dataset feature shape.
+    Actual crop/resize is handled by the observation processor pipeline.
+    """
+    return decode_ros_image(msg, spec.image_encoding, resize_hw=None)
 
 
 @register_decoder("sensor_msgs/msg/CompressedImage", dtype="video")
@@ -251,8 +255,8 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     else:
         img = np.array(Image.open(io.BytesIO(msg.data)).convert("RGB"))
 
-    if spec.image_resize:
-        img = _nearest_resize(img, spec.image_resize[0], spec.image_resize[1])
+    # Note: contract ``image.shape`` only declares the dataset feature shape.
+    # Actual crop/resize is handled by the observation processor pipeline.
 
     return img.astype(np.uint8)
 

@@ -266,7 +266,7 @@ class ObservationStreamSpec(StreamSpec):
     """Resolved observation stream configuration for runtime use."""
 
     is_image: bool
-    image_resize: tuple[int, int] | None
+    image_shape: tuple[int, int] | None  # [height, width] of the dataset feature
     image_encoding: str
     image_channels: int
     resample_policy: str

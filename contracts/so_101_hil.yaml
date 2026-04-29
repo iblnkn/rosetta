@@ -8,7 +8,7 @@ observations:
     topic: /front_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [512, 512]
+      shape: [512, 512]
     align: {strategy: hold, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -16,7 +16,7 @@ observations:
     topic: /top_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [512, 512]
+      shape: [512, 512]
     align: {strategy: hold, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -24,7 +24,7 @@ observations:
     topic: /wrist_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [512, 512]
+      shape: [512, 512]
     align: {strategy: hold, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 

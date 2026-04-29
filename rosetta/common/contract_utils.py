@@ -65,9 +65,9 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
         raise ValueError(f"Spec '{spec.key}' has no dtype")
 
     if dtype in ("video", "image"):
-        if not spec.image_resize:
-            raise ValueError(f"Image spec '{spec.key}' must have image_resize")
-        h, w = spec.image_resize
+        if not spec.image_shape:
+            raise ValueError(f"Image spec '{spec.key}' must have image_shape")
+        h, w = spec.image_shape
         return {"dtype": "video", "shape": (h, w, 3), "names": ["height", "width", "channels"]}
 
     if dtype == "string":
@@ -96,7 +96,7 @@ def zeros_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
         - Vectors: (N,) with dtype from spec
     """
     if spec.is_image:
-        h, w = spec.image_resize
+        h, w = spec.image_shape
         return np.zeros((h, w, spec.image_channels), dtype=np.uint8)
 
     dtype_map = {
@@ -331,17 +331,20 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             )
 
         # Parse image config
-        resize = None
+        img_shape = None
         encoding = "bgr8"
         if o.image:
-            r = o.image.get("resize")
+            # "shape" is the canonical key; "resize" is accepted for backward compat
+            r = o.image.get("shape") or o.image.get("resize")
             if r and len(r) == 2:
-                resize = (int(r[0]), int(r[1]))
+                img_shape = (int(r[0]), int(r[1]))
             if "encoding" in o.image:
                 encoding = str(o.image["encoding"]).lower()
 
-        if is_image and resize is None:
-            raise ContractValidationError(f"Image observation '{o.key}' must specify image.resize")
+        if is_image and img_shape is None:
+            raise ContractValidationError(
+                f"Image observation '{o.key}' must specify image.shape [height, width]"
+            )
 
         channels = _validate_image_encoding(encoding)
         if o.image and "channels" in o.image:
@@ -373,7 +376,7 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             names=names,
             fps=contract.fps,
             is_image=is_image,
-            image_resize=resize,
+            image_shape=img_shape,
             image_encoding=encoding,
             image_channels=channels,
             resample_policy=al.strategy,
@@ -488,7 +491,7 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
                 names=names,
                 fps=contract.fps,
                 is_image=False,
-                image_resize=None,
+                image_shape=None,
                 image_encoding="",
                 image_channels=0,
                 resample_policy=al.strategy,
@@ -545,7 +548,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             names=names,
             fps=contract.fps,
             is_image=False,
-            image_resize=None,
+            image_shape=None,
             image_encoding="",
             image_channels=0,
             resample_policy=al.strategy,
