@@ -432,6 +432,39 @@ def _dec_point_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 # =============================================================================
+# PoseStamped Decoder
+# =============================================================================
+
+
+@register_decoder("geometry_msgs/msg/PoseStamped", dtype="float64")
+def _dec_pose_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode geometry_msgs/PoseStamped.
+
+    With selector names: extracts specified dotted paths from the message
+      e.g. ['pose.position.x', 'pose.orientation.w']
+    Without names: returns [position(3), orientation_quat(4)]
+    """
+    if not spec.names:
+        return np.array(
+            [
+                msg.pose.position.x,
+                msg.pose.position.y,
+                msg.pose.position.z,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ],
+            dtype=np.float64,
+        )
+
+    return np.asarray(
+        [float(dot_get(msg, name)) for name in spec.names],
+        dtype=np.float64,
+    )
+
+
+# =============================================================================
 # MultiDOFCommand Decoder
 # =============================================================================
 
