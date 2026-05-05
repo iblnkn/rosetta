@@ -26,6 +26,8 @@ Usage (standalone):
 
 import logging
 import math
+import os
+import pickle  # nosec
 import time
 from dataclasses import asdict
 from pprint import pformat
@@ -38,19 +40,35 @@ from concurrent import futures
 
 # Register SNSDiffusionConfig before anything loads a checkpoint
 import lerobot_policy_sns_diffusion  # noqa: F401
+import lerobot_policy_deepmimic_bc  # noqa: F401
+from lerobot_policy_deepmimic_bc.processor_deepmimic_bc import (
+    make_deepmimic_bc_pre_post_processors,
+)
 
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.constants import SUPPORTED_POLICIES
-from lerobot.async_inference.helpers import TimedAction, TimedObservation, get_logger
+from lerobot.async_inference.helpers import (
+    RemotePolicyConfig,
+    TimedAction,
+    TimedObservation,
+    get_logger,
+)
 from lerobot.async_inference.policy_server import PolicyServer
+from lerobot.policies.factory import get_policy_class
 from lerobot.policies.rtc.action_queue import ActionQueue
 from lerobot.policies.rtc.configuration_rtc import RTCConfig
+from lerobot.processor.rename_processor import RenameObservationsProcessorStep
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
 
 from rosetta.common.obs_history import TimedObservationWithHistory
+
+# Standalone checkpoint extensions handled by deepmimic_bc.from_pretrained.
+# Upstream PolicyServer's make_pre_post_processors cannot read processor JSONs
+# from these paths, so we build the processor pipelines in-process instead.
+_STANDALONE_CKPT_EXTS = (".pt", ".pth", ".ckpt")
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +91,89 @@ class RTCPolicyServer(PolicyServer):
         self._action_queue: ActionQueue | None = None
         self._last_inference_time: float = 0.0
         self._last_chunk_sent_at: float = 0.0  # wall time when last chunk was sent
+
+    def SendPolicyInstructions(self, request, context):  # noqa: N802
+        """Load policy + processors, with a fast path for standalone .pt checkpoints.
+
+        Upstream ``PolicyServer.SendPolicyInstructions`` always feeds the
+        pretrained path to ``make_pre_post_processors``, which assumes the
+        path is either an HF directory or a JSON file. For plugins like
+        ``deepmimic_bc`` whose checkpoint is a single ``.pt``/``.pth``/``.ckpt``,
+        that loader tries to read the pickle bytes as JSON and crashes with
+        ``'utf-8' codec can't decode byte 0x80``.
+
+        For those paths we build the processor pipelines in-process via the
+        plugin's own factory and apply the same ``rename_map`` / device
+        overrides that the upstream loader would have applied. Other paths
+        fall through to the upstream implementation unchanged.
+        """
+        if not self.running:
+            self.logger.warning("Server is not running. Ignoring policy instructions.")
+            return services_pb2.Empty()
+
+        policy_specs = pickle.loads(request.data)  # nosec
+        if not isinstance(policy_specs, RemotePolicyConfig):
+            raise TypeError(
+                f"Policy specs must be a RemotePolicyConfig. Got {type(policy_specs)}"
+            )
+
+        path = str(policy_specs.pretrained_name_or_path)
+        is_standalone_ckpt = (
+            os.path.isfile(path) and path.lower().endswith(_STANDALONE_CKPT_EXTS)
+        )
+        if not is_standalone_ckpt:
+            return super().SendPolicyInstructions(request, context)
+
+        if policy_specs.policy_type not in SUPPORTED_POLICIES:
+            raise ValueError(
+                f"Policy type {policy_specs.policy_type} not supported. "
+                f"Supported policies: {SUPPORTED_POLICIES}"
+            )
+
+        client_id = context.peer()
+        self.logger.info(
+            f"Receiving policy instructions from {client_id} | "
+            f"Policy type: {policy_specs.policy_type} | "
+            f"Pretrained name or path: {path} | "
+            f"Actions per chunk: {policy_specs.actions_per_chunk} | "
+            f"Device: {policy_specs.device} (standalone-ckpt fast path)"
+        )
+
+        self.device = policy_specs.device
+        self.policy_type = policy_specs.policy_type
+        self.lerobot_features = policy_specs.lerobot_features
+        self.actions_per_chunk = policy_specs.actions_per_chunk
+
+        policy_class = get_policy_class(self.policy_type)
+
+        start = time.perf_counter()
+        self.policy = policy_class.from_pretrained(path, device=self.device)
+        self.policy.to(self.device)
+        # Make sure config.device matches the runtime device so processor
+        # factories that read it (e.g. DeviceProcessorStep) end up correct.
+        if hasattr(self.policy.config, "device"):
+            self.policy.config.device = self.device
+
+        if self.policy_type == "deepmimic_bc":
+            self.preprocessor, self.postprocessor = make_deepmimic_bc_pre_post_processors(
+                self.policy.config
+            )
+        else:
+            raise NotImplementedError(
+                f"Standalone checkpoint loading is only wired up for "
+                f"'deepmimic_bc'; got policy_type={self.policy_type!r}."
+            )
+
+        # Apply rename_map override (matches upstream behavior).
+        for step in getattr(self.preprocessor, "steps", []):
+            if isinstance(step, RenameObservationsProcessorStep):
+                step.rename_map = dict(policy_specs.rename_map or {})
+
+        end = time.perf_counter()
+        self.logger.info(
+            f"Time taken to put policy on {self.device}: {end - start:.4f} seconds"
+        )
+        return services_pb2.Empty()
 
     def _reset_server(self) -> None:
         """Flush server state when new client connects."""
@@ -281,6 +382,19 @@ class RTCPolicyServer(PolicyServer):
         n_obs_steps = getattr(self.policy.config, "n_obs_steps", 1)
         image_features = getattr(self.policy.config, "image_features", None)
 
+        # State-only policies (e.g. deepmimic_bc without RGB) declare no
+        # image_features. The client still publishes camera frames because
+        # the contract has them, and upstream ``prepare_raw_observation``
+        # would then KeyError trying to look those keys up in the empty
+        # ``policy_image_features``. Strip image entries from lerobot_features
+        # for the conversion in that case so only state features round-trip.
+        lerobot_features = self.lerobot_features
+        if not image_features:
+            lerobot_features = {
+                k: v for k, v in self.lerobot_features.items()
+                if not k.startswith(OBS_IMAGES)
+            }
+
         history = getattr(observation_t, "history", None) or [
             observation_t.get_observation()
         ]
@@ -291,7 +405,7 @@ class RTCPolicyServer(PolicyServer):
         per_step: list[dict[str, Tensor]] = []
         for raw_obs in recent:
             obs_i = raw_observation_to_observation(
-                raw_obs, self.lerobot_features, self.policy_image_features
+                raw_obs, lerobot_features, self.policy_image_features
             )
             obs_i = self.preprocessor(obs_i)
             if image_features:

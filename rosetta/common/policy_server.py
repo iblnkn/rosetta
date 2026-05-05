@@ -17,6 +17,8 @@ entry point, this one-line shim is the minimum glue needed.
 """
 
 import lerobot_policy_sns_diffusion  # noqa: F401 - registers config subclass
+import lerobot_policy_deepmimic_bc  # noqa: F401
+
 from rosetta.common.rtc_policy_server import serve
 
 
