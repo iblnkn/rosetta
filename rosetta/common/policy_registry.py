@@ -33,6 +33,8 @@ class PolicyBundle:
     actions_per_chunk: int | None = None
     chunk_size_threshold: float | None = None
     aggregate_fn_name: str | None = None
+    observation_processor_path: str | None = None
+    contract_path: str | None = None
 
 
 def validate_pretrained(path: str) -> str | None:
@@ -66,6 +68,8 @@ _OPTIONAL_FIELDS: dict[str, type] = {
     "actions_per_chunk": int,
     "chunk_size_threshold": float,
     "aggregate_fn_name": str,
+    "observation_processor_path": str,
+    "contract_path": str,
 }
 
 
@@ -114,9 +118,15 @@ def load_registry(path: str) -> dict[str, PolicyBundle]:
           <name>:
             pretrained_name_or_path: ...
             policy_type: ...
-            actions_per_chunk: 32           # optional
-            chunk_size_threshold: 0.7       # optional
-            aggregate_fn_name: latest_only  # optional
+            actions_per_chunk: 32                 # optional
+            chunk_size_threshold: 0.7             # optional
+            aggregate_fn_name: latest_only        # optional
+            observation_processor_path: /path/    # optional, dir with
+                                                  # robot_observation_processor.json
+            contract_path: /path/contract.yaml    # optional, swaps the
+                                                  # node's topic bridge
+                                                  # to a different contract
+                                                  # at goal time
     """
     if not os.path.isfile(path):
         raise PolicyRegistryError(f"Registry file not found: {path}")

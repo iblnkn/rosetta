@@ -497,6 +497,13 @@ class RosettaClientNode(LifecycleNode):
             self.get_logger().error(err)
             return self._finish(goal_handle, result)
 
+        swap_err = self._swap_contract_if_needed(bundle.contract_path)
+        if swap_err is not None:
+            result.success = False
+            result.message = swap_err
+            self.get_logger().error(swap_err)
+            return self._finish(goal_handle, result)
+
         self._active_pretrained = bundle.pretrained_name_or_path
         self._active_policy_name = goal_handle.request.policy_name
 
@@ -511,9 +518,10 @@ class RosettaClientNode(LifecycleNode):
             config = self._build_config(task, bundle)
             client = RobotClient(config)
             self._client = client
-            processor = self._build_observation_processor()
-            if processor is not None:
-                client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
+            processor = self._build_observation_processor(
+                bundle.observation_processor_path
+            )
+            client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
 
             if not client.start():
                 result.success = False
@@ -616,6 +624,37 @@ class RosettaClientNode(LifecycleNode):
         err = validate_pretrained(bundle.pretrained_name_or_path)
         if err is not None:
             return None, f"Rejected goal: {err}"
+
+        # Resolve observation processor: registry entry > node-level default.
+        # Required: running without a processor causes image-shape mismatches
+        # at inference time, so reject the goal here rather than crashing later.
+        if not bundle.observation_processor_path:
+            node_default = self.get_parameter("observation_processor_path").value
+            if node_default:
+                bundle.observation_processor_path = node_default
+
+        if not bundle.observation_processor_path:
+            entry_hint = (
+                f"registry entry '{request.policy_name}'"
+                if request.policy_name
+                else "the resolved policy"
+            )
+            return None, (
+                f"No observation_processor_path resolved for {entry_hint}. "
+                "Set 'observation_processor_path' on the registry entry or "
+                "the node-level default in rosetta_client.yaml. Running "
+                "without a processor causes image-shape mismatches."
+            )
+
+        # Resolve contract: registry entry > launch-time node default. We
+        # fall back to the launch-time param (not self._contract_path) so
+        # that a goal without a registry override always swings back to the
+        # default contract rather than inheriting a previously-swapped one.
+        # The node default is guaranteed non-empty by on_configure. The
+        # actual bridge swap (when this differs from the currently-loaded
+        # contract) happens at the start of _execute.
+        if not bundle.contract_path:
+            bundle.contract_path = self.get_parameter("contract_path").value
 
         return bundle, None
 
@@ -728,16 +767,74 @@ class RosettaClientNode(LifecycleNode):
         self.get_logger().info(f"Finished: {result.message}")
         return result
 
-    def _build_observation_processor(self) -> RobotProcessorPipeline | None:
-        """Load observation processor from ROS2 parameter, or return None."""
-        processor_path = self.get_parameter("observation_processor_path").value
+    def _swap_contract_if_needed(self, target_contract_path: str) -> str | None:
+        """Rebuild the topic bridge if the resolved contract differs from current.
 
-        if not processor_path:
-            self.get_logger().debug("No observation_processor_path set, skipping")
+        Called between goals (``_on_goal`` rejects when ``_active_goal`` is set,
+        so no goal is in flight here). On a swap we send a safety action on the
+        old bridge, tear it down, and build a new ``RosettaConfig`` +
+        ``_TopicBridge`` against ``target_contract_path``.
+
+        Returns ``None`` on success or no-op, or an error string on failure.
+        On failure the node is left without a bridge — recover via lifecycle
+        cleanup → configure → activate (or restart).
+
+        Note: subscribers will see the lifecycle action publishers disappear
+        and reappear; the new bridge needs a brief warmup before
+        ``StreamBuffer`` returns real (non-zero) observations.
+        """
+        if target_contract_path == self._contract_path:
             return None
 
-        self.get_logger().info(f"Loading observation processor from: {processor_path}")
+        self.get_logger().info(
+            f"Swapping contract: {self._contract_path} -> {target_contract_path}"
+        )
 
+        if self._bridge is not None:
+            try:
+                self._bridge.send_safety_action()
+            except Exception as e:
+                self.get_logger().warning(
+                    f"send_safety_action() failed during contract swap: {e}"
+                )
+            self._bridge.teardown()
+            self._bridge = None
+            self._rosetta_config = None
+
+        try:
+            is_classifier = self.get_parameter("is_classifier").value
+            new_config = RosettaConfig(
+                id="rosetta",
+                config_path=target_contract_path,
+                is_classifier=is_classifier,
+            )
+            new_bridge = _TopicBridge(new_config)
+            new_bridge.setup(self)
+        except Exception as e:
+            return (
+                f"Failed to load contract '{target_contract_path}': {e}. "
+                "Node has no active bridge; lifecycle-cleanup and reconfigure "
+                "to recover."
+            )
+
+        self._rosetta_config = new_config
+        self._bridge = new_bridge
+        self._contract_path = target_contract_path
+        self.get_logger().info(f"Contract swap complete: {target_contract_path}")
+        return None
+
+    def _build_observation_processor(
+        self, processor_path: str
+    ) -> RobotProcessorPipeline:
+        """Load the observation processor from the resolved path.
+
+        ``processor_path`` is guaranteed non-empty by ``_resolve_policy_bundle``,
+        which rejects goals that lack a processor (running without one causes
+        image-shape mismatches downstream).
+        """
+        self.get_logger().info(
+            f"Loading observation processor from: {processor_path}"
+        )
         return RobotProcessorPipeline.from_pretrained(
             processor_path,
             config_filename="robot_observation_processor.json",
