@@ -810,6 +810,12 @@ class RosettaClientNode(LifecycleNode):
             )
             new_bridge = _TopicBridge(new_config)
             new_bridge.setup(self)
+            # setup() creates lifecycle publishers in the inactive state. The
+            # node is already active here (swap only runs between goals), so
+            # the framework will not auto-activate them — do it ourselves,
+            # otherwise pub.publish() is a silent no-op.
+            if new_bridge.is_active:
+                new_bridge.activate_publishers()
         except Exception as e:
             return (
                 f"Failed to load contract '{target_contract_path}': {e}. "
