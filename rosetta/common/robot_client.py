@@ -34,7 +34,7 @@ from rosetta.common.obs_history import TimedObservationWithHistory
 
 # Rolling obs-history window length on the client. Must be >= any deployed
 # policy's n_obs_steps. The server trims to policy.config.n_obs_steps.
-_OBS_HISTORY_MAXLEN = 2
+_OBS_HISTORY_MAXLEN = 4
 
 # ---------------------------------------------------------------------------
 # 1. Patch RobotClient.__init__ — add _observation_pending event
