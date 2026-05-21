@@ -108,9 +108,8 @@ ros2 launch rosetta episode_recorder_launch.py contract_path:=contract.yaml
 ```
 
 ```bash
-# Terminal 2: Trigger recording
-ros2 action send_goal /episode_recorder/record_episode \
-    rosetta_interfaces/action/RecordEpisode "{prompt: 'pick up red block'}"
+# Terminal 2: Keyboard controller (r=start, s=save, d=discard, t=set prompt, q=quit)
+ros2 run rosetta episode_keyboard_node
 ```
 
 > **How many episodes?** Plan on recording **50–200+ demonstrations** depending on task complexity. More diverse, high-quality demonstrations tend to produce better policies. For practical data collection tips, see [Collecting Your Dataset](https://abenstirling.com/lerobot/) and [Improving Your Robotics AI Model](https://docs.phospho.ai/learn/improve-robotics-ai-model).
@@ -296,11 +295,52 @@ The `episode_recorder_node` is a convenience node that records contract-specifie
 ros2 launch rosetta episode_recorder_launch.py contract_path:=/path/to/contract.yaml
 ```
 
-Trigger recording:
+### Controlling Recording
+
+#### Option A — Keyboard controller (recommended)
+
+The `episode_keyboard_node` lets you start, stop, and discard episodes with single key presses. Run it in a **second terminal** while the recorder is running:
+
+```bash
+ros2 run rosetta episode_keyboard_node
+```
+
+Or via launch (supports optional arguments):
+
+```bash
+ros2 launch rosetta episode_keyboard_launch.py \
+    default_prompt:="pick up the cube"
+```
+
+| Key | Action |
+|-----|--------|
+| `r` / `→` | Start recording |
+| `s` / `←` | Stop and save |
+| `d` / `⌫` | Discard episode (stop + delete bag) |
+| `t` | Edit task prompt for the next episode |
+| `h` / `?` | Help |
+| `q` | Quit |
+
+Launch arguments for `episode_keyboard_launch.py`:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `recorder_ns` | `/episode_recorder` | Namespace of the recorder node |
+| `default_prompt` | `` | Initial task prompt used when starting recordings |
+
+#### Option B — ROS2 action
+
+For scripted or automated workflows, trigger recording directly via the action interface:
 
 ```bash
 ros2 action send_goal /episode_recorder/record_episode \
     rosetta_interfaces/action/RecordEpisode "{prompt: 'task description'}"
+```
+
+Stop by sending `Ctrl-C` to the `send_goal` command, or via the cancel service:
+
+```bash
+ros2 service call /episode_recorder/cancel_recording std_srvs/srv/Trigger
 ```
 
 **Parameters** (all available as launch arguments):
