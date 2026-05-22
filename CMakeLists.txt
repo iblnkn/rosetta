@@ -17,6 +17,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
+  scripts/episode_keyboard_node
   scripts/episode_recorder_node
   scripts/rosetta_client_node
   scripts/port_bags
