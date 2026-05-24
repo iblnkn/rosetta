@@ -62,14 +62,10 @@ def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile | None:
         DurabilityPolicy.TRANSIENT_LOCAL if dur == 'transient_local' else DurabilityPolicy.VOLATILE
     )
     return QoSProfile(
-        reliability=ReliabilityPolicy.BEST_EFFORT
-        if rel == 'best_effort'
-        else ReliabilityPolicy.RELIABLE,
-        history=HistoryPolicy.KEEP_ALL if hist == 'keep_all' else HistoryPolicy.KEEP_LAST,
+        reliability=reliability,
+        history=history,
         depth=depth,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL
-        if dur == 'transient_local'
-        else DurabilityPolicy.VOLATILE,
+        durability=durability,
     )
 
 
