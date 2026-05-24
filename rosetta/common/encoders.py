@@ -31,10 +31,9 @@ from typing import Any
 import numpy as np
 from rosidl_runtime_py.utilities import get_message
 
-from .converters import register_encoder
 from .contract import ActionStreamSpec
+from .converters import register_encoder
 from .ros2_utils import dot_set
-
 
 # =============================================================================
 # Helper Functions
@@ -64,27 +63,23 @@ def _set_header_stamp(msg, stamp_ns: int | None) -> None:
 # =============================================================================
 
 
-@register_encoder("geometry_msgs/msg/Twist")
-def _enc_twist(
-    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
-) -> Any:
-    """Encode to geometry_msgs/Twist.
+@register_encoder('geometry_msgs/msg/Twist')
+def _enc_twist(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None) -> Any:
+    """
+    Encode to geometry_msgs/Twist.
 
     Requires selector.names like ['linear.x', 'angular.z'].
     """
     if not spec.names:
-        raise ValueError(
-            "Twist encoder requires selector.names "
-            "(e.g., ['linear.x', 'angular.z'])"
-        )
+        raise ValueError("Twist encoder requires selector.names (e.g., ['linear.x', 'angular.z'])")
 
-    msg_cls = get_message("geometry_msgs/msg/Twist")
+    msg_cls = get_message('geometry_msgs/msg/Twist')
     msg = msg_cls()
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
     for i, path in enumerate(spec.names):
         dot_set(msg, path, arr[i])
@@ -97,29 +92,29 @@ def _enc_twist(
 # =============================================================================
 
 
-@register_encoder("geometry_msgs/msg/TwistStamped")
+@register_encoder('geometry_msgs/msg/TwistStamped')
 def _enc_twist_stamped(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
-    """Encode to geometry_msgs/TwistStamped.
+    """
+    Encode to geometry_msgs/TwistStamped.
 
     Requires selector.names like ['linear.x', 'angular.z'].
     Same selector syntax as Twist - the stamped wrapper is transparent.
     """
     if not spec.names:
         raise ValueError(
-            "TwistStamped encoder requires selector.names "
-            "(e.g., ['linear.x', 'angular.z'])"
+            "TwistStamped encoder requires selector.names (e.g., ['linear.x', 'angular.z'])"
         )
 
-    msg_cls = get_message("geometry_msgs/msg/TwistStamped")
+    msg_cls = get_message('geometry_msgs/msg/TwistStamped')
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
     for i, path in enumerate(spec.names):
         dot_set(msg.twist, path, arr[i])
@@ -131,45 +126,46 @@ def _enc_twist_stamped(
 # Scalar Encoders
 # =============================================================================
 
+
 # Be carefull. Float 32 and Float64 have no header
-@register_encoder("std_msgs/msg/Float32")
+@register_encoder('std_msgs/msg/Float32')
 def _enc_float32(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
     """Encode to std_msgs/Float32 (scalar)."""
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("std_msgs/msg/Float32")
+    msg_cls = get_message('std_msgs/msg/Float32')
     msg = msg_cls()
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
     msg.data = float(arr[0])
     return msg
 
 
-@register_encoder("std_msgs/msg/Float64")
+@register_encoder('std_msgs/msg/Float64')
 def _enc_float64(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
     """Encode to std_msgs/Float64 (scalar)."""
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("std_msgs/msg/Float64")
+    msg_cls = get_message('std_msgs/msg/Float64')
     msg = msg_cls()
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
     msg.data = float(arr[0])
     return msg
-    
-    
+
+
 # =============================================================================
 # Array Encoders
 # =============================================================================
 
 
-@register_encoder("std_msgs/msg/Float32MultiArray")
+@register_encoder('std_msgs/msg/Float32MultiArray')
 def _enc_float32_array(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
     """Encode to std_msgs/Float32MultiArray."""
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("std_msgs/msg/Float32MultiArray")
+    msg_cls = get_message('std_msgs/msg/Float32MultiArray')
     msg = msg_cls()
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
@@ -178,13 +174,13 @@ def _enc_float32_array(
     return msg
 
 
-@register_encoder("std_msgs/msg/Float64MultiArray")
+@register_encoder('std_msgs/msg/Float64MultiArray')
 def _enc_float64_array(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
     """Encode to std_msgs/Float64MultiArray."""
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("std_msgs/msg/Float64MultiArray")
+    msg_cls = get_message('std_msgs/msg/Float64MultiArray')
     msg = msg_cls()
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
@@ -193,13 +189,13 @@ def _enc_float64_array(
     return msg
 
 
-@register_encoder("std_msgs/msg/Int32MultiArray")
+@register_encoder('std_msgs/msg/Int32MultiArray')
 def _enc_int32_array(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
     """Encode to std_msgs/Int32MultiArray."""
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("std_msgs/msg/Int32MultiArray")
+    msg_cls = get_message('std_msgs/msg/Int32MultiArray')
     msg = msg_cls()
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.int32).flatten(), spec.clamp)
@@ -213,18 +209,19 @@ def _enc_int32_array(
 # =============================================================================
 
 
-@register_encoder("sensor_msgs/msg/JointState")
+@register_encoder('sensor_msgs/msg/JointState')
 def _enc_joint_state(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
-    """Encode to sensor_msgs/JointState.
+    """
+    Encode to sensor_msgs/JointState.
 
     With selector.names like ['position.joint1', 'velocity.joint2']:
       - Maps values to specified fields by joint name
     Without names:
       - Maps action vector to positions with auto-generated names
     """
-    msg_cls = get_message("sensor_msgs/msg/JointState")
+    msg_cls = get_message('sensor_msgs/msg/JointState')
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
@@ -232,14 +229,14 @@ def _enc_joint_state(
 
     if not spec.names:
         # Default: all values go to position
-        msg.name = [f"joint_{i}" for i in range(len(arr))]
+        msg.name = [f'joint_{i}' for i in range(len(arr))]
         msg.position = arr.tolist()
         msg.velocity = []
         msg.effort = []
         return msg
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
     # Parse names like "position.shoulder_pan", "velocity.elbow"
     field_to_joints: dict[str, dict[str, int]] = {}  # field -> {joint_name -> arr_index}
@@ -247,10 +244,10 @@ def _enc_joint_state(
     seen_joints: set[str] = set()
 
     for i, path in enumerate(spec.names):
-        if "." in path:
-            field, joint_name = path.split(".", 1)
+        if '.' in path:
+            field, joint_name = path.split('.', 1)
         else:
-            field, joint_name = "position", path
+            field, joint_name = 'position', path
 
         field_to_joints.setdefault(field, {})[joint_name] = i
 
@@ -269,11 +266,11 @@ def _enc_joint_state(
 
     # Fill arrays
     for field, joint_map in field_to_joints.items():
-        if field == "position":
+        if field == 'position':
             target = msg.position
-        elif field == "velocity":
+        elif field == 'velocity':
             target = msg.velocity
-        elif field == "effort":
+        elif field == 'effort':
             target = msg.effort
         else:
             raise ValueError(f"Unknown JointState field '{field}'")
@@ -289,11 +286,12 @@ def _enc_joint_state(
 # =============================================================================
 
 
-@register_encoder("trajectory_msgs/msg/JointTrajectory")
+@register_encoder('trajectory_msgs/msg/JointTrajectory')
 def _enc_joint_trajectory(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
-    """Encode to trajectory_msgs/JointTrajectory (single-point trajectory).
+    """
+    Encode to trajectory_msgs/JointTrajectory (single-point trajectory).
 
     With selector.names like ['position.joint1', 'velocity.joint2']:
       - Maps values to specified fields by joint name
@@ -306,8 +304,8 @@ def _enc_joint_trajectory(
       position / positions, velocity / velocities,
       acceleration / accelerations, effort
     """
-    traj_cls = get_message("trajectory_msgs/msg/JointTrajectory")
-    point_cls = get_message("trajectory_msgs/msg/JointTrajectoryPoint")
+    traj_cls = get_message('trajectory_msgs/msg/JointTrajectory')
+    point_cls = get_message('trajectory_msgs/msg/JointTrajectoryPoint')
     msg = traj_cls()
     _set_header_stamp(msg, stamp_ns)
 
@@ -315,22 +313,22 @@ def _enc_joint_trajectory(
     point = point_cls()  # time_from_start is zero-initialized
 
     if not spec.names:
-        msg.joint_names = [f"joint_{i}" for i in range(len(arr))]
+        msg.joint_names = [f'joint_{i}' for i in range(len(arr))]
         point.positions = arr.tolist()
         msg.points = [point]
         return msg
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
     _FIELD_MAP = {
-        "position": "positions",
-        "positions": "positions",
-        "velocity": "velocities",
-        "velocities": "velocities",
-        "acceleration": "accelerations",
-        "accelerations": "accelerations",
-        "effort": "effort",
+        'position': 'positions',
+        'positions': 'positions',
+        'velocity': 'velocities',
+        'velocities': 'velocities',
+        'acceleration': 'accelerations',
+        'accelerations': 'accelerations',
+        'effort': 'effort',
     }
 
     # Collect joint order and per-field assignments
@@ -339,16 +337,16 @@ def _enc_joint_trajectory(
     field_to_joints: dict[str, dict[str, int]] = {}  # attr -> {joint_name -> arr_idx}
 
     for i, path in enumerate(spec.names):
-        if "." in path:
-            field, joint_name = path.split(".", 1)
+        if '.' in path:
+            field, joint_name = path.split('.', 1)
         else:
-            field, joint_name = "position", path
+            field, joint_name = 'position', path
 
         attr = _FIELD_MAP.get(field)
         if attr is None:
             raise ValueError(
                 f"Unknown JointTrajectoryPoint field '{field}'. "
-                f"Valid fields: position, velocity, acceleration, effort"
+                f'Valid fields: position, velocity, acceleration, effort'
             )
 
         field_to_joints.setdefault(attr, {})[joint_name] = i
@@ -375,11 +373,10 @@ def _enc_joint_trajectory(
 # =============================================================================
 
 
-@register_encoder("sensor_msgs/msg/Joy")
-def _enc_joy(
-    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
-) -> Any:
-    """Encode to sensor_msgs/Joy.
+@register_encoder('sensor_msgs/msg/Joy')
+def _enc_joy(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None) -> Any:
+    """
+    Encode to sensor_msgs/Joy.
 
     With selector.names like ['axes.0', 'axes.1', 'buttons.0']:
       - Maps values to axes/buttons by index
@@ -389,7 +386,7 @@ def _enc_joy(
     Button values are rounded to the nearest integer.
     Selector syntax: "<field>.<index>" where field is "axes" or "buttons".
     """
-    msg_cls = get_message("sensor_msgs/msg/Joy")
+    msg_cls = get_message('sensor_msgs/msg/Joy')
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
@@ -401,33 +398,30 @@ def _enc_joy(
         return msg
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
-    axes_map: dict[int, int] = {}    # axis_idx -> arr_idx
+    axes_map: dict[int, int] = {}  # axis_idx -> arr_idx
     buttons_map: dict[int, int] = {}  # button_idx -> arr_idx
 
     for i, path in enumerate(spec.names):
-        if "." in path:
-            field, idx_str = path.split(".", 1)
+        if '.' in path:
+            field, idx_str = path.split('.', 1)
         else:
-            field, idx_str = "axes", path
+            field, idx_str = 'axes', path
 
         try:
             idx = int(idx_str)
         except ValueError:
             raise ValueError(
-                f"Joy selector index must be an integer, got '{idx_str}' "
-                f"in selector '{path}'"
+                f"Joy selector index must be an integer, got '{idx_str}' in selector '{path}'"
             )
 
-        if field == "axes":
+        if field == 'axes':
             axes_map[idx] = i
-        elif field == "buttons":
+        elif field == 'buttons':
             buttons_map[idx] = i
         else:
-            raise ValueError(
-                f"Unknown Joy field '{field}'. Valid fields: axes, buttons"
-            )
+            raise ValueError(f"Unknown Joy field '{field}'. Valid fields: axes, buttons")
 
     if axes_map:
         axes = [0.0] * (max(axes_map) + 1)
@@ -449,11 +443,12 @@ def _enc_joy(
 # =============================================================================
 
 
-@register_encoder("control_msgs/msg/MultiDOFCommand")
+@register_encoder('control_msgs/msg/MultiDOFCommand')
 def _enc_multidof_command(
     action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
 ) -> Any:
-    """Encode to control_msgs/MultiDOFCommand.
+    """
+    Encode to control_msgs/MultiDOFCommand.
 
     With selector.names like ['values.joint1', 'values_dot.joint1']:
       - Maps values to specified DOF fields by name
@@ -461,19 +456,19 @@ def _enc_multidof_command(
       - Maps action vector to values with auto-generated names
     """
     _ = stamp_ns  # Unused - message type has no header
-    msg_cls = get_message("control_msgs/msg/MultiDOFCommand")
+    msg_cls = get_message('control_msgs/msg/MultiDOFCommand')
     msg = msg_cls()
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
 
     if not spec.names:
-        msg.dof_names = [f"dof_{i}" for i in range(len(arr))]
+        msg.dof_names = [f'dof_{i}' for i in range(len(arr))]
         msg.values = arr.tolist()
         msg.values_dot = []
         return msg
 
     if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+        raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
 
     # Parse names: "values.foo" -> values[foo], "values_dot.bar" -> values_dot[bar]
     values_map: dict[str, int] = {}  # dof_name -> arr_index
@@ -482,10 +477,10 @@ def _enc_multidof_command(
     seen_dofs: set[str] = set()
 
     for i, name in enumerate(spec.names):
-        if name.startswith("values_dot."):
+        if name.startswith('values_dot.'):
             dof_name = name[11:]
             values_dot_map[dof_name] = i
-        elif name.startswith("values."):
+        elif name.startswith('values.'):
             dof_name = name[7:]
             values_map[dof_name] = i
         else:

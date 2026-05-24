@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
+r"""
 Launch file for the Rosetta HIL system.
 
 Launches 4 nodes:
@@ -47,7 +47,6 @@ Usage:
 
 import os
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
@@ -62,6 +61,7 @@ from launch.substitutions import (
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
+import yaml
 
 
 def _yaml_params(path, node_name):
@@ -72,6 +72,7 @@ def _yaml_params(path, node_name):
 
 
 def generate_launch_description():
+    """Generate the launch description for the human-in-the-loop system."""
     rosetta_share = get_package_share_directory('rosetta')
 
     default_contract = os.path.join(rosetta_share, 'contracts', 'so_101_hil.yaml')  # fallback only
@@ -95,9 +96,18 @@ def generate_launch_description():
 
     hil_cfg = _section('hil_manager')
     contract_path_default = hil_full.get('contract_path', default_contract)
-    client_cfg = {**_yaml_params(default_rosetta_params, 'rosetta_client'), **_section('robot_policy')}
-    recorder_cfg = {**_yaml_params(default_recorder_params, 'episode_recorder'), **_section('episode_recorder')}
-    reward_cfg = {**_yaml_params(default_rosetta_params, 'rosetta_client'), **_section('reward_classifier')}
+    client_cfg = {
+        **_yaml_params(default_rosetta_params, 'rosetta_client'),
+        **_section('robot_policy'),
+    }
+    recorder_cfg = {
+        **_yaml_params(default_recorder_params, 'episode_recorder'),
+        **_section('episode_recorder'),
+    }
+    reward_cfg = {
+        **_yaml_params(default_rosetta_params, 'rosetta_client'),
+        **_section('reward_classifier'),
+    }
 
     # ==================================================================
     # Launch arguments
@@ -108,157 +118,152 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'contract_path',
             default_value=contract_path_default,
-            description='Path to HIL contract YAML file'
+            description='Path to HIL contract YAML file',
         ),
         DeclareLaunchArgument(
             'log_level',
             default_value='info',
-            description='Logging level (debug, info, warn, error)'
+            description='Logging level (debug, info, warn, error)',
         ),
         DeclareLaunchArgument(
             'configure',
             default_value='true',
-            description='Whether to auto-configure nodes on startup'
+            description='Whether to auto-configure nodes on startup',
         ),
         DeclareLaunchArgument(
             'activate',
             default_value='true',
-            description='Whether to auto-activate nodes on startup (requires configure:=true)'
+            description='Whether to auto-activate nodes on startup (requires configure:=true)',
         ),
-
         # --- Robot policy (defaults from rosetta_client.yaml) ---
         DeclareLaunchArgument(
             'pretrained_name_or_path',
             default_value=client_cfg['pretrained_name_or_path'],
-            description='HuggingFace model ID or local path to trained policy model'
+            description='HuggingFace model ID or local path to trained policy model',
         ),
         DeclareLaunchArgument(
             'server_address',
             default_value=client_cfg['server_address'],
-            description='LeRobot policy server address (host:port)'
+            description='LeRobot policy server address (host:port)',
         ),
         DeclareLaunchArgument(
             'policy_type',
             default_value=client_cfg['policy_type'],
-            description='Policy type: act, smolvla, diffusion, pi0, pi05, etc.'
+            description='Policy type: act, smolvla, diffusion, pi0, pi05, etc.',
         ),
         DeclareLaunchArgument(
             'policy_device',
             default_value=client_cfg['policy_device'],
-            description='Inference device: cuda, cpu, mps, or cuda:0'
+            description='Inference device: cuda, cpu, mps, or cuda:0',
         ),
         DeclareLaunchArgument(
             'actions_per_chunk',
             default_value=str(client_cfg['actions_per_chunk']),
-            description='Number of actions per inference chunk'
+            description='Number of actions per inference chunk',
         ),
         DeclareLaunchArgument(
             'chunk_size_threshold',
             default_value=str(client_cfg['chunk_size_threshold']),
-            description='Threshold for requesting new chunk (0.0-1.0)'
+            description='Threshold for requesting new chunk (0.0-1.0)',
         ),
         DeclareLaunchArgument(
             'aggregate_fn_name',
             default_value=client_cfg['aggregate_fn_name'],
-            description='Chunk aggregation: weighted_average, latest_only, average, conservative'
+            description='Chunk aggregation: weighted_average, latest_only, average, conservative',
         ),
         DeclareLaunchArgument(
             'obs_similarity_atol',
             default_value=str(client_cfg['obs_similarity_atol']),
-            description='Observation filtering tolerance (-1.0 to disable)'
+            description='Observation filtering tolerance (-1.0 to disable)',
         ),
-
         # --- Action mux remapping (launch-specific, no YAML source) ---
         DeclareLaunchArgument(
             'action_remap_from',
             default_value='/leader_arm/joint_states',
-            description='Original action topic to remap (from contract)'
+            description='Original action topic to remap (from contract)',
         ),
         DeclareLaunchArgument(
             'action_remap_to',
             default_value='/hil/policy/leader_arm/joint_states',
-            description='Remapped action topic for policy output'
+            description='Remapped action topic for policy output',
         ),
-
         # --- HIL manager (defaults from rosetta_hil_manager.yaml) ---
         DeclareLaunchArgument(
             'policy_remap_prefix',
             default_value=hil_cfg['policy_remap_prefix'],
-            description='Topic prefix for remapped policy output (must match remap_to derivation)'
+            description='Topic prefix for remapped policy output (must match remap_to derivation)',
         ),
         DeclareLaunchArgument(
             'enable_reward_classifier',
             default_value=str(hil_cfg['enable_reward_classifier']).lower(),
-            description='Enable reward classifier policy'
+            description='Enable reward classifier policy',
         ),
         DeclareLaunchArgument(
             'feedback_rate_hz',
             default_value=str(hil_cfg['feedback_rate_hz']),
-            description='Feedback publish rate (Hz) for all nodes'
+            description='Feedback publish rate (Hz) for all nodes',
         ),
         DeclareLaunchArgument(
             'human_reward_positive',
             default_value=str(hil_cfg['human_reward_positive']),
-            description='Reward value for human positive override'
+            description='Reward value for human positive override',
         ),
         DeclareLaunchArgument(
             'human_reward_negative',
             default_value=str(hil_cfg['human_reward_negative']),
-            description='Reward value for human negative override'
+            description='Reward value for human negative override',
         ),
-
-        # --- Reward classifier (defaults from rosetta_hil_manager.yaml reward_classifier section) ---
+        # --- Reward classifier (defaults from rosetta_hil_manager.yaml) ---
         DeclareLaunchArgument(
             'reward_classifier_contract_path',
             default_value=reward_cfg.get('contract_path', ''),
-            description='Contract YAML for reward classifier (defaults to contract_path)'
+            description='Contract YAML for reward classifier (defaults to contract_path)',
         ),
         DeclareLaunchArgument(
             'reward_classifier_pretrained_name_or_path',
             default_value=reward_cfg.get('pretrained_name_or_path', ''),
-            description='Path to trained reward classifier model'
+            description='Path to trained reward classifier model',
         ),
         DeclareLaunchArgument(
             'reward_classifier_policy_type',
             default_value=reward_cfg.get('policy_type', 'reward_classifier'),
-            description='Policy type for reward classifier model'
+            description='Policy type for reward classifier model',
         ),
         DeclareLaunchArgument(
             'reward_classifier_server_address',
             default_value=reward_cfg.get('server_address', '127.0.0.1:8081'),
-            description='Reward classifier policy server address (host:port)'
+            description='Reward classifier policy server address (host:port)',
         ),
         DeclareLaunchArgument(
             'reward_remap_from',
             default_value='/reward',
-            description='Original reward topic to remap (from contract rewards section)'
+            description='Original reward topic to remap (from contract rewards section)',
         ),
         DeclareLaunchArgument(
             'reward_remap_to',
             default_value='/hil/reward/reward',
-            description='Remapped reward topic for classifier output'
+            description='Remapped reward topic for classifier output',
         ),
         DeclareLaunchArgument(
             'reward_remap_prefix',
             default_value=hil_cfg['reward_remap_prefix'],
-            description='Topic prefix for remapped reward classifier output'
+            description='Topic prefix for remapped reward classifier output',
         ),
-
         # --- Episode recorder (defaults from episode_recorder.yaml) ---
         DeclareLaunchArgument(
             'bag_base_dir',
             default_value=recorder_cfg['bag_base_dir'],
-            description='Directory for rosbag output'
+            description='Directory for rosbag output',
         ),
         DeclareLaunchArgument(
             'storage_id',
             default_value=recorder_cfg['storage_id'],
-            description='Rosbag format: mcap (recommended) or sqlite3'
+            description='Rosbag format: mcap (recommended) or sqlite3',
         ),
         DeclareLaunchArgument(
             'default_max_duration',
             default_value=str(recorder_cfg['default_max_duration']),
-            description='Max episode duration in seconds (recorder fallback)'
+            description='Max episode duration in seconds (recorder fallback)',
         ),
     ]
 
@@ -275,8 +280,7 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         remappings=[
-            (LaunchConfiguration('action_remap_from'),
-             LaunchConfiguration('action_remap_to')),
+            (LaunchConfiguration('action_remap_from'), LaunchConfiguration('action_remap_to')),
         ],
         parameters=[
             default_rosetta_params,
@@ -302,11 +306,17 @@ def generate_launch_description():
     # ==================================================================
 
     # Use main contract_path when reward_classifier_contract_path is empty
-    reward_contract = PythonExpression([
-        "'", LaunchConfiguration('reward_classifier_contract_path'), "' if '",
-        LaunchConfiguration('reward_classifier_contract_path'),
-        "' else '", LaunchConfiguration('contract_path'), "'",
-    ])
+    reward_contract = PythonExpression(
+        [
+            "'",
+            LaunchConfiguration('reward_classifier_contract_path'),
+            "' if '",
+            LaunchConfiguration('reward_classifier_contract_path'),
+            "' else '",
+            LaunchConfiguration('contract_path'),
+            "'",
+        ]
+    )
 
     reward_classifier_node = LifecycleNode(
         package='rosetta',
@@ -319,8 +329,7 @@ def generate_launch_description():
             EqualsSubstitution(LaunchConfiguration('enable_reward_classifier'), 'true')
         ),
         remappings=[
-            (LaunchConfiguration('reward_remap_from'),
-             LaunchConfiguration('reward_remap_to')),
+            (LaunchConfiguration('reward_remap_from'), LaunchConfiguration('reward_remap_to')),
         ],
         parameters=[
             default_rosetta_params,
@@ -413,9 +422,7 @@ def generate_launch_description():
                 lifecycle_node_matcher=matches_action(node),
                 transition_id=Transition.TRANSITION_CONFIGURE,
             ),
-            condition=IfCondition(
-                EqualsSubstitution(LaunchConfiguration('configure'), 'true')
-            ),
+            condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
         )
 
         activate_event = EmitEvent(
@@ -423,9 +430,7 @@ def generate_launch_description():
                 lifecycle_node_matcher=matches_action(node),
                 transition_id=Transition.TRANSITION_ACTIVATE,
             ),
-            condition=IfCondition(
-                EqualsSubstitution(LaunchConfiguration('activate'), 'true')
-            ),
+            condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
         )
 
         lifecycle_events.append(
@@ -451,9 +456,7 @@ def generate_launch_description():
             lifecycle_node_matcher=matches_action(reward_classifier_node),
             transition_id=Transition.TRANSITION_CONFIGURE,
         ),
-        condition=IfCondition(
-            EqualsSubstitution(LaunchConfiguration('configure'), 'true')
-        ),
+        condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
     )
 
     reward_activate_event = EmitEvent(
@@ -461,9 +464,7 @@ def generate_launch_description():
             lifecycle_node_matcher=matches_action(reward_classifier_node),
             transition_id=Transition.TRANSITION_ACTIVATE,
         ),
-        condition=IfCondition(
-            EqualsSubstitution(LaunchConfiguration('activate'), 'true')
-        ),
+        condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
     )
 
     lifecycle_events.append(

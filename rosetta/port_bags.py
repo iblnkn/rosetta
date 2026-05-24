@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
+r"""
 ROS2 bag → LeRobot dataset porting script.
 
 Converts rosbag recordings to LeRobot datasets using contract-driven decoding.
@@ -46,21 +46,21 @@ from __future__ import annotations
 
 import argparse
 import logging
-import time
 from pathlib import Path
+import time
 from typing import Any
-
-import numpy as np
-import rosbag2_py
-import yaml
-from rclpy.serialization import deserialize_message
-from rosidl_runtime_py.utilities import get_message
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.utils.utils import get_elapsed_time_in_days_hours_minutes_seconds
+import numpy as np
+from rclpy.serialization import deserialize_message
+import rosbag2_py
+from rosidl_runtime_py.utilities import get_message
+import yaml
 
-from .common.converters import DTYPES, decode_value, get_decoder_dtype
-from .common.contract import ObservationStreamSpec, StreamSpec, load_contract
+from .common import decoders as _decoders  # noqa: F401, E402
+from .common import encoders as _encoders  # noqa: F401, E402
+from .common.contract import load_contract, ObservationStreamSpec, StreamSpec
 from .common.contract_utils import (
     build_feature,
     get_namespaced_names,
@@ -68,16 +68,13 @@ from .common.contract_utils import (
     StreamBuffer,
     zeros_for_spec,
 )
+from .common.converters import decode_value, DTYPES, get_decoder_dtype
 from .common.ros2_utils import get_message_timestamp_ns
 
 # Bag metadata keys
-BAG_METADATA_KEY = "rosbag2_bagfile_information"
-BAG_CUSTOM_DATA_KEY = "custom_data"
-BAG_PROMPT_KEY = "lerobot.operator_prompt"
-# Import decoders/encoders to register them
-from .common import decoders as _decoders  # noqa: F401
-from .common import encoders as _encoders  # noqa: F401
-
+BAG_METADATA_KEY = 'rosbag2_bagfile_information'
+BAG_CUSTOM_DATA_KEY = 'custom_data'
+BAG_PROMPT_KEY = 'lerobot.operator_prompt'
 
 # ---------- Bag discovery ----------
 
@@ -85,11 +82,10 @@ from .common import encoders as _encoders  # noqa: F401
 def find_bag_dirs(raw_dir: Path) -> list[Path]:
     """Find all bag directories (identified by metadata.yaml)."""
     bag_dirs = sorted(
-        p.parent for p in raw_dir.rglob("metadata.yaml")
-        if (p.parent / "metadata.yaml").exists()
+        p.parent for p in raw_dir.rglob('metadata.yaml') if (p.parent / 'metadata.yaml').exists()
     )
     if not bag_dirs:
-        raise RuntimeError(f"No bag directories found in {raw_dir}")
+        raise RuntimeError(f'No bag directories found in {raw_dir}')
     return bag_dirs
 
 
@@ -98,7 +94,7 @@ def find_bag_dirs(raw_dir: Path) -> list[Path]:
 
 def _read_bag_metadata(bag_dir: Path) -> dict[str, Any]:
     """Read bag metadata.yaml."""
-    meta_path = bag_dir / "metadata.yaml"
+    meta_path = bag_dir / 'metadata.yaml'
     if not meta_path.exists():
         return {}
     with meta_path.open() as f:
@@ -110,8 +106,8 @@ def _read_prompt(meta: dict[str, Any]) -> str:
     info = meta.get(BAG_METADATA_KEY, {})
     custom_data = info.get(BAG_CUSTOM_DATA_KEY, {})
     if isinstance(custom_data, dict):
-        return custom_data.get(BAG_PROMPT_KEY, "")
-    return ""
+        return custom_data.get(BAG_PROMPT_KEY, '')
+    return ''
 
 
 def _get_topic_types(reader: rosbag2_py.SequentialReader) -> dict[str, str]:
@@ -123,34 +119,38 @@ def _build_buffers(
     specs: list[StreamSpec],
     topic_types: dict[str, str],
 ) -> dict[str, tuple[StreamSpec, StreamBuffer]]:
-    """Create StreamBuffers keyed by topic.
+    """
+    Create StreamBuffers keyed by topic.
 
-    Returns:
+    Returns
+    -------
         Topic-keyed dict: topic -> (spec, buffer), preserving insertion order.
+
     """
     buffers: dict[str, tuple[StreamSpec, StreamBuffer]] = {}
 
     for spec in specs:
         if spec.topic not in topic_types:
-            logging.warning("Topic %s not in bag, skipping %s", spec.topic, spec.key)
+            logging.warning('Topic %s not in bag, skipping %s', spec.topic, spec.key)
             continue
 
         if isinstance(spec, ObservationStreamSpec):
             buffer = StreamBuffer.from_spec(spec)
         else:
             step_ns = int(1e9 / spec.fps) if spec.fps > 0 else int(1e9 / 30)
-            buffer = StreamBuffer(policy="hold", step_ns=step_ns, tol_ns=0)
+            buffer = StreamBuffer(policy='hold', step_ns=step_ns, tol_ns=0)
 
         buffers[spec.topic] = (spec, buffer)
 
     if not buffers:
-        raise RuntimeError("No contract topics found in bag")
+        raise RuntimeError('No contract topics found in bag')
 
     return buffers
 
 
 def _build_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
-    """Build LeRobot feature definitions from contract specs.
+    """
+    Build LeRobot feature definitions from contract specs.
 
     Specs sharing the same key are aggregated (names concatenated for vectors).
     """
@@ -164,10 +164,10 @@ def _build_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
         first = key_specs[0]
         dtype = DTYPES[first.msg_type]
 
-        if dtype in ("video", "image"):
+        if dtype in ('video', 'image'):
             # Images: no aggregation
             features[key] = build_feature(first)
-        elif dtype == "string":
+        elif dtype == 'string':
             # Strings: no aggregation
             features[key] = build_feature(first)
         else:
@@ -177,15 +177,15 @@ def _build_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
                 all_names.extend(get_namespaced_names(spec))
             n = len(all_names) or 1
             features[key] = {
-                "dtype": dtype,
-                "shape": (n,),
-                "names": all_names if all_names else None,
+                'dtype': dtype,
+                'shape': (n,),
+                'names': all_names if all_names else None,
             }
 
     # Frame boundary markers
-    features["is_first"] = {"dtype": "bool", "shape": (1,), "names": None}
-    features["is_last"] = {"dtype": "bool", "shape": (1,), "names": None}
-    features["is_terminal"] = {"dtype": "bool", "shape": (1,), "names": None}
+    features['is_first'] = {'dtype': 'bool', 'shape': (1,), 'names': None}
+    features['is_last'] = {'dtype': 'bool', 'shape': (1,), 'names': None}
+    features['is_terminal'] = {'dtype': 'bool', 'shape': (1,), 'names': None}
 
     return features
 
@@ -203,11 +203,11 @@ def _get_bag_time_bounds_ns(reader: rosbag2_py.SequentialReader) -> tuple[int, i
 
 # Map LeRobot dtype strings to numpy dtypes
 DTYPE_MAP = {
-    "float32": np.float32,
-    "float64": np.float64,
-    "int32": np.int32,
-    "int64": np.int64,
-    "bool": bool,
+    'float32': np.float32,
+    'float64': np.float64,
+    'int32': np.int32,
+    'int64': np.int64,
+    'bool': bool,
 }
 
 
@@ -215,7 +215,8 @@ def _sample_frame(
     tick_ns: int,
     buffers: dict[str, tuple[StreamSpec, StreamBuffer]],
 ) -> dict[str, Any]:
-    """Sample a single frame from buffers at the given tick time.
+    """
+    Sample a single frame from buffers at the given tick time.
 
     Specs sharing the same key are aggregated (concatenated in insertion order).
     """
@@ -237,12 +238,16 @@ def _sample_frame(
                 frame[key] = zeros_for_spec(spec)
             else:
                 frame[key] = np.asarray(val, dtype=np.uint8)
-        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype == "string":
+        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype == 'string':
             # String: pass through
             spec, buffer = items[0]
             val = buffer.sample(tick_ns)
-            frame[key] = str(val) if val is not None else ""
-        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype in ("bool", "int32", "int64"):
+            frame[key] = str(val) if val is not None else ''
+        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype in (
+            'bool',
+            'int32',
+            'int64',
+        ):
             # Scalar types: single value
             spec, buffer = items[0]
             val = buffer.sample(tick_ns)
@@ -261,7 +266,9 @@ def _sample_frame(
                 dtype_str = get_decoder_dtype(first_spec.msg_type)
 
             if dtype_str not in DTYPE_MAP:
-                raise ValueError(f"Unsupported dtype '{dtype_str}' for key '{key}'. Add to DTYPE_MAP.")
+                raise ValueError(
+                    f"Unsupported dtype '{dtype_str}' for key '{key}'. Add to DTYPE_MAP."
+                )
             np_dtype = DTYPE_MAP[dtype_str]
 
             values = []
@@ -279,7 +286,8 @@ def _sample_frame(
 
 
 def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
-    """Stream LeRobot frames from a bag file.
+    """
+    Stream LeRobot frames from a bag file.
 
     Uses StreamBuffer for resampling (identical to live inference).
     Specs sharing the same key are aggregated into single tensors.
@@ -289,15 +297,15 @@ def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
 
     meta = _read_bag_metadata(bag_dir)
     info = meta.get(BAG_METADATA_KEY, {})
-    storage_id = info.get("storage_identifier", "mcap")
+    storage_id = info.get('storage_identifier', 'mcap')
     prompt = _read_prompt(meta)
 
     reader = rosbag2_py.SequentialReader()
     reader.open(
         rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage_id),
         rosbag2_py.ConverterOptions(
-            input_serialization_format="cdr",
-            output_serialization_format="cdr",
+            input_serialization_format='cdr',
+            output_serialization_format='cdr',
         ),
     )
 
@@ -317,10 +325,10 @@ def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
         # Emit frames whose tick time has passed
         while current_tick_idx < n_frames and bag_ns >= current_tick_ns:
             frame = _sample_frame(current_tick_ns, buffers)
-            frame["is_first"] = np.array([current_tick_idx == 0], dtype=bool)
-            frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
-            frame["is_terminal"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
-            frame["task"] = prompt
+            frame['is_first'] = np.array([current_tick_idx == 0], dtype=bool)
+            frame['is_last'] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
+            frame['is_terminal'] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
+            frame['task'] = prompt
 
             yield frame
 
@@ -333,14 +341,11 @@ def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
             msg = deserialize_message(data, get_message(spec.msg_type))
 
             ts, used_fallback = get_message_timestamp_ns(msg, spec, bag_ns)
-            if (
-                spec.stamp_src == "header"
-                and used_fallback
-                and spec.key not in header_warned
-            ):
+            if spec.stamp_src == 'header' and used_fallback and spec.key not in header_warned:
                 logging.warning(
                     "Header stamp unavailable for '%s' in %s, using bag receive time",
-                    spec.key, bag_dir.name,
+                    spec.key,
+                    bag_dir.name,
                 )
                 header_warned.add(spec.key)
             val = decode_value(msg, spec)
@@ -350,10 +355,10 @@ def _stream_frames_from_bag(bag_dir: Path, specs: list[StreamSpec]):
     # Emit remaining frames
     while current_tick_idx < n_frames:
         frame = _sample_frame(current_tick_ns, buffers)
-        frame["is_first"] = np.array([current_tick_idx == 0], dtype=bool)
-        frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
-        frame["is_terminal"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
-        frame["task"] = prompt
+        frame['is_first'] = np.array([current_tick_idx == 0], dtype=bool)
+        frame['is_last'] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
+        frame['is_terminal'] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
+        frame['task'] = prompt
 
         yield frame
 
@@ -372,21 +377,22 @@ def port_bags(
     push_to_hub: bool = False,
     num_shards: int | None = None,
     shard_index: int | None = None,
-    vcodec: str = "libsvtav1",
+    vcodec: str = 'libsvtav1',
 ):
     """
     Port ROS2 bags to LeRobot dataset format.
 
     Args:
-        raw_dir: Directory containing bag subdirectories.
-        repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset").
-        contract_path: Path to Rosetta contract YAML.
-        root: Output directory for dataset. Defaults to ~/.cache/huggingface/lerobot.
-        push_to_hub: Whether to upload to HuggingFace Hub after porting.
-        num_shards: Total number of shards for parallel processing.
-        shard_index: Index of this shard (0 to num_shards-1).
-        vcodec: Video codec for encoding. Options: 'libsvtav1' (default, good compression),
-            'libx264'/'h264' (fast), 'hevc', 'h264_nvenc' (GPU).
+    ----
+    raw_dir: Directory containing bag subdirectories.
+    repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset").
+    contract_path: Path to Rosetta contract YAML.
+    root: Output directory for dataset.
+    push_to_hub: Whether to upload to HuggingFace Hub after porting.
+    num_shards: Total number of shards for parallel processing.
+    shard_index: Index of this shard (0 to num_shards-1).
+    vcodec: Video codec for encoding (libsvtav1, libx264, hevc, etc.).
+
     """
     contract = load_contract(contract_path)
     specs = list(iter_specs(contract))
@@ -394,22 +400,22 @@ def port_bags(
 
     all_bag_dirs = find_bag_dirs(raw_dir)
     total_bags = len(all_bag_dirs)
-    logging.info("Found %d bags in %s", total_bags, raw_dir)
+    logging.info('Found %d bags in %s', total_bags, raw_dir)
 
     # Select shard subset if sharding
     if num_shards is not None:
         if shard_index is None:
-            raise ValueError("shard_index required when num_shards is specified")
+            raise ValueError('shard_index required when num_shards is specified')
         if shard_index >= num_shards:
-            raise ValueError(f"shard_index ({shard_index}) >= num_shards ({num_shards})")
+            raise ValueError(f'shard_index ({shard_index}) >= num_shards ({num_shards})')
 
         bag_dirs = all_bag_dirs[shard_index::num_shards]
-        logging.info("Shard %d/%d: processing %d bags", shard_index, num_shards, len(bag_dirs))
+        logging.info('Shard %d/%d: processing %d bags', shard_index, num_shards, len(bag_dirs))
     else:
         bag_dirs = all_bag_dirs
 
     if not bag_dirs:
-        logging.warning("No bags to process in this shard")
+        logging.warning('No bags to process in this shard')
         return
 
     # LeRobot uses root directly as dataset path, so append repo_id
@@ -433,8 +439,8 @@ def port_bags(
         d, h, m, s = get_elapsed_time_in_days_hours_minutes_seconds(elapsed_time)
 
         logging.info(
-            f"{episode_index} / {num_episodes} episodes processed "
-            f"(after {d} days, {h} hours, {m} minutes, {s:.3f} seconds)"
+            f'{episode_index} / {num_episodes} episodes processed '
+            f'(after {d} days, {h} hours, {m} minutes, {s:.3f} seconds)'
         )
 
         try:
@@ -445,33 +451,33 @@ def port_bags(
 
             lerobot_dataset.save_episode()
             successful += 1
-            logging.info("  -> %d frames from %s", frame_count, bag_dir.name)
+            logging.info('  -> %d frames from %s', frame_count, bag_dir.name)
 
         except Exception as e:
             failed.append((bag_dir, str(e)))
-            logging.error("  -> FAILED %s: %s", bag_dir.name, e)
+            logging.error('  -> FAILED %s: %s', bag_dir.name, e)
             continue
 
     elapsed_time = time.time() - start_time
     d, h, m, s = get_elapsed_time_in_days_hours_minutes_seconds(elapsed_time)
     logging.info(
-        f"\nCompleted: {successful}/{num_episodes} episodes "
-        f"({len(failed)} failed) in {d}d {h}h {m}m {s:.1f}s"
+        f'\nCompleted: {successful}/{num_episodes} episodes '
+        f'({len(failed)} failed) in {d}d {h}h {m}m {s:.1f}s'
     )
 
     if failed:
-        logging.warning("Failed bags:")
+        logging.warning('Failed bags:')
         for bag_dir, error in failed:
-            logging.warning("  - %s: %s", bag_dir.name, error)
+            logging.warning('  - %s: %s', bag_dir.name, error)
 
     if successful == 0:
-        raise RuntimeError(f"All {num_episodes} bags failed to convert")
+        raise RuntimeError(f'All {num_episodes} bags failed to convert')
 
     lerobot_dataset.finalize()
 
     if push_to_hub:
         lerobot_dataset.push_to_hub(
-            tags=["rosetta", "rosbag"],
+            tags=['rosetta', 'rosbag'],
             private=False,
         )
 
@@ -481,44 +487,50 @@ def port_bags(
 
 def main():
     """CLI entry point."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    parser = argparse.ArgumentParser(
-        description="Port ROS2 bags to LeRobot dataset"
-    )
+    parser = argparse.ArgumentParser(description='Port ROS2 bags to LeRobot dataset')
 
     parser.add_argument(
-        "--raw-dir", type=Path, required=True,
-        help="Directory containing bag subdirectories"
+        '--raw-dir', type=Path, required=True, help='Directory containing bag subdirectories'
     )
     parser.add_argument(
-        "--repo-id", type=str, default=None,
-        help="HuggingFace repository ID (e.g., my_org/my_dataset). Defaults to raw-dir name."
+        '--repo-id',
+        type=str,
+        default=None,
+        help='HuggingFace repository ID (e.g., my_org/my_dataset). Defaults to raw-dir name.',
+    )
+    parser.add_argument('--contract', type=Path, required=True, help='Rosetta contract YAML path')
+    parser.add_argument(
+        '--root',
+        type=Path,
+        default=None,
+        help=(
+            'Parent directory for datasets. Dataset saved to '
+            'root/repo-id. (default: ~/.cache/huggingface/lerobot)'
+        ),
     )
     parser.add_argument(
-        "--contract", type=Path, required=True,
-        help="Rosetta contract YAML path"
+        '--push-to-hub', action='store_true', help='Upload to HuggingFace Hub after porting'
     )
     parser.add_argument(
-        "--root", type=Path, default=None,
-        help="Parent directory for datasets. Dataset saved to root/repo-id. (default: ~/.cache/huggingface/lerobot)"
+        '--num-shards',
+        type=int,
+        default=None,
+        help='Total number of shards for parallel processing',
     )
     parser.add_argument(
-        "--push-to-hub", action="store_true",
-        help="Upload to HuggingFace Hub after porting"
+        '--shard-index', type=int, default=None, help='Index of this shard (0 to num-shards-1)'
     )
     parser.add_argument(
-        "--num-shards", type=int, default=None,
-        help="Total number of shards for parallel processing"
-    )
-    parser.add_argument(
-        "--shard-index", type=int, default=None,
-        help="Index of this shard (0 to num-shards-1)"
-    )
-    parser.add_argument(
-        "--vcodec", type=str, default="libsvtav1",
-        choices=["libsvtav1", "libx264", "h264", "hevc", "h264_nvenc"],
-        help="Video codec for encoding (default: libsvtav1). Use libx264/h264 for faster encoding."
+        '--vcodec',
+        type=str,
+        default='libsvtav1',
+        choices=['libsvtav1', 'libx264', 'h264', 'hevc', 'h264_nvenc'],
+        help=(
+            'Video codec for encoding (default: libsvtav1). '
+            'Use libx264/h264 for faster encoding.'
+        ),
     )
 
     args = parser.parse_args()
@@ -537,11 +549,11 @@ def main():
             vcodec=args.vcodec,
         )
     except KeyboardInterrupt:
-        logging.info("\nInterrupted by user")
+        logging.info('\nInterrupted by user')
     except Exception as e:
-        logging.error("Error: %s", e)
+        logging.error('Error: %s', e)
         raise
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -29,14 +29,14 @@ Usage:
 
 from __future__ import annotations
 
+from collections import deque
+from pathlib import Path
 import shutil
 import threading
 import time
-from pathlib import Path
-from typing import Any
-from collections import deque
-from typing import Optional
+from typing import Any, Optional
 
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -44,39 +44,31 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.qos import (
     QoSProfile,
-    HistoryPolicy,
-    ReliabilityPolicy,
-    DurabilityPolicy,
-    LivelinessPolicy,
 )
 from rclpy.serialization import serialize_message
-
 import rosbag2_py
-import yaml
-from rcl_interfaces.msg import ParameterDescriptor
-from std_srvs.srv import Trigger
-from rosidl_runtime_py.utilities import get_message
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.srv import StartRecording
+from rosidl_runtime_py.utilities import get_message
+from std_srvs.srv import Trigger
+import yaml
 
-# Import contract utilities
-from .common.contract import load_contract
 from .common import decoders as _decoders  # noqa: F401 - registers decoders
 from .common import encoders as _encoders  # noqa: F401 - registers encoders
+from .common.contract import load_contract
 from .common.contract_utils import iter_specs
 from .common.ros2_utils import (
-    qos_profile_from_dict,
-    detect_ros_distro,
-    is_jazzy_or_newer,
     extract_qos_numeric_values,
-    is_transient_local,
     get_qos_depth,
+    is_jazzy_or_newer,
+    is_transient_local,
+    qos_profile_from_dict,
 )
 
 # Bag metadata keys
-BAG_METADATA_KEY = "rosbag2_bagfile_information"
-BAG_CUSTOM_DATA_KEY = "custom_data"
-BAG_PROMPT_KEY = "lerobot.operator_prompt"
+BAG_METADATA_KEY = 'rosbag2_bagfile_information'
+BAG_CUSTOM_DATA_KEY = 'custom_data'
+BAG_PROMPT_KEY = 'lerobot.operator_prompt'
 
 # ---------- Constants ----------
 
@@ -102,35 +94,41 @@ class EpisodeRecorderNode(LifecycleNode):
     """
 
     def __init__(self):
+        """Initialize the episode recorder node and declare parameters."""
         # Initialize with enable_logger_service on Jazzy (not supported in Humble)
         # The logger service allows runtime configuration of log levels via
         # ros2 service call /node_name/set_logger_level ...
         # In Humble, logger services are always enabled by default.
         if _IS_JAZZY:
-            super().__init__("episode_recorder", enable_logger_service=True)
+            super().__init__('episode_recorder', enable_logger_service=True)
         else:
-            super().__init__("episode_recorder")
+            super().__init__('episode_recorder')
 
         # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
-            "contract_path", "",
-            ParameterDescriptor(description="Path to contract YAML file", read_only=True)
+            'contract_path',
+            '',
+            ParameterDescriptor(description='Path to contract YAML file', read_only=True),
         )
         self.declare_parameter(
-            "bag_base_dir", "/workspaces/rosetta_ws/datasets/bags",
-            ParameterDescriptor(description="Base directory for bag storage", read_only=True)
+            'bag_base_dir',
+            '/workspaces/rosetta_ws/datasets/bags',
+            ParameterDescriptor(description='Base directory for bag storage', read_only=True),
         )
         self.declare_parameter(
-            "storage_id", "mcap",
-            ParameterDescriptor(description="Bag storage format (mcap, sqlite3)", read_only=True)
+            'storage_id',
+            'mcap',
+            ParameterDescriptor(description='Bag storage format (mcap, sqlite3)', read_only=True),
         )
         self.declare_parameter(
-            "default_max_duration", 300.0,
-            ParameterDescriptor(description="Maximum recording duration in seconds")
+            'default_max_duration',
+            300.0,
+            ParameterDescriptor(description='Maximum recording duration in seconds'),
         )
         self.declare_parameter(
-            "feedback_rate_hz", 2.0,
-            ParameterDescriptor(description="Rate for publishing action feedback")
+            'feedback_rate_hz',
+            2.0,
+            ParameterDescriptor(description='Rate for publishing action feedback'),
         )
 
         # Initialize state variables (resources created in lifecycle callbacks)
@@ -139,7 +137,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._storage_id: str | None = None
         self._default_max_duration: float = 300.0
         self._feedback_rate_hz: float = 2.0
-        self._topics: list[tuple[str, str, QoSProfile | int, str]] = []  # (topic, type, qos, buffering_strategy)
+        self._topics: list[
+            tuple[str, str, QoSProfile | int, str]
+        ] = []  # (topic, type, qos, buffering_strategy)
         self._subs: dict[str, Any] = {}  # topic -> subscription object
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
@@ -158,29 +158,29 @@ class EpisodeRecorderNode(LifecycleNode):
         self._buffers: dict[str, deque] = {}
         self._buffer_lock = threading.Lock()
 
-        self.get_logger().info("Node created (unconfigured)")
+        self.get_logger().info('Node created (unconfigured)')
 
     # -------------------- Lifecycle callbacks --------------------
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Load contract, create subscriptions and action server."""
         try:
-            contract_path = self.get_parameter("contract_path").value
+            contract_path = self.get_parameter('contract_path').value
             if not contract_path:
-                self.get_logger().error("contract_path parameter required")
+                self.get_logger().error('contract_path parameter required')
                 return TransitionCallbackReturn.FAILURE
 
             try:
                 self._contract = load_contract(contract_path)
             except Exception as e:
-                self.get_logger().error(f"Failed to load contract: {e}")
+                self.get_logger().error(f'Failed to load contract: {e}')
                 return TransitionCallbackReturn.FAILURE
 
-            self._bag_base = Path(self.get_parameter("bag_base_dir").value)
+            self._bag_base = Path(self.get_parameter('bag_base_dir').value)
             self._bag_base.mkdir(parents=True, exist_ok=True)
-            self._storage_id = self.get_parameter("storage_id").value
-            self._default_max_duration = self.get_parameter("default_max_duration").value
-            self._feedback_rate_hz = self.get_parameter("feedback_rate_hz").value
+            self._storage_id = self.get_parameter('storage_id').value
+            self._default_max_duration = self.get_parameter('default_max_duration').value
+            self._feedback_rate_hz = self.get_parameter('feedback_rate_hz').value
 
             # Build topic list from contract
             self._topics = self._build_topic_list()
@@ -194,7 +194,7 @@ class EpisodeRecorderNode(LifecycleNode):
             self._action_server = ActionServer(
                 self,
                 RecordEpisode,
-                "record_episode",
+                'record_episode',
                 execute_callback=self._execute,
                 goal_callback=self._on_goal,
                 cancel_callback=self._on_cancel,
@@ -207,7 +207,7 @@ class EpisodeRecorderNode(LifecycleNode):
             # attempts to transition the current goal to the canceled state.
             self._cancel_service = self.create_service(
                 Trigger,
-                "~/cancel_recording",
+                '~/cancel_recording',
                 self._on_cancel_service,
                 callback_group=self._cbg,
             )
@@ -217,7 +217,7 @@ class EpisodeRecorderNode(LifecycleNode):
             # the hidden _action/* services.
             self._start_service = self.create_service(
                 StartRecording,
-                "~/start_recording",
+                '~/start_recording',
                 self._on_start_service,
                 callback_group=self._cbg,
             )
@@ -225,25 +225,28 @@ class EpisodeRecorderNode(LifecycleNode):
             # Service to delete the most recently completed bag directory.
             self._delete_last_bag_service = self.create_service(
                 Trigger,
-                "~/delete_last_bag",
+                '~/delete_last_bag',
                 self._on_delete_last_bag_service,
                 callback_group=self._cbg,
             )
 
             self.get_logger().info(
-                f"Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}"
+                f'Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}'
             )
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
-            self.get_logger().error(f"Configuration failed: {e}", throttle_duration_sec=1.0)
+            self.get_logger().error(f'Configuration failed: {e}', throttle_duration_sec=1.0)
             import traceback
-            self.get_logger().error(f"Traceback: {traceback.format_exc()}", throttle_duration_sec=1.0)
+
+            self.get_logger().error(
+                f'Traceback: {traceback.format_exc()}', throttle_duration_sec=1.0
+            )
             return TransitionCallbackReturn.FAILURE
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Enable goal acceptance."""
         self._accepting_goals = True
-        self.get_logger().info("Activated and ready for recording")
+        self.get_logger().info('Activated and ready for recording')
         return super().on_activate(state)
 
     def on_deactivate(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -252,7 +255,7 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Stop any in-progress recording
         if self._is_recording:
-            self.get_logger().info("Stopping in-progress recording...")
+            self.get_logger().info('Stopping in-progress recording...')
             self._stop_event.set()
 
             # Wait for recording to complete
@@ -262,9 +265,9 @@ class EpisodeRecorderNode(LifecycleNode):
                 time.sleep(0.1)
 
             if self._is_recording:
-                self.get_logger().warning("Recording did not stop within timeout")
+                self.get_logger().warning('Recording did not stop within timeout')
 
-        self.get_logger().info("Deactivated")
+        self.get_logger().info('Deactivated')
         return super().on_deactivate(state)
 
     def on_cleanup(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -283,11 +286,11 @@ class EpisodeRecorderNode(LifecycleNode):
         self._contract = None
         self._topics = []
 
-        self.get_logger().info("Cleaned up")
+        self.get_logger().info('Cleaned up')
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        """Final cleanup before destruction."""
+        """Clean up resources before destruction."""
         self._accepting_goals = False
         self._stop_event.set()
         self._close_writer()
@@ -302,46 +305,48 @@ class EpisodeRecorderNode(LifecycleNode):
             self.destroy_action_server(self._action_server)
             self._action_server = None
 
-        self.get_logger().info("Shutdown complete")
+        self.get_logger().info('Shutdown complete')
         return TransitionCallbackReturn.SUCCESS
 
     def on_error(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Handle errors by cleaning up resources."""
-        self.get_logger().error(f"Error occurred in state: {state.label}")
+        self.get_logger().error(f'Error occurred in state: {state.label}')
 
         try:
             self._accepting_goals = False
             self._stop_event.set()
             self._close_writer()
         except Exception as e:
-            self.get_logger().error(f"Error during cleanup: {e}")
+            self.get_logger().error(f'Error during cleanup: {e}')
 
         return TransitionCallbackReturn.SUCCESS
 
     # -------------------- Topic and subscription management --------------------
 
     def _build_topic_list(self) -> list[tuple[str, str, QoSProfile | int, str]]:
-        """Extract topics from contract.
+        """
+        Extract topics from contract.
 
         Includes:
         - Observation and action topics (from iter_specs)
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
-        
+
         Returns:
             List of (topic, type_str, qos, buffering_strategy) tuples
+
         """
         topics: list[tuple[str, str, QoSProfile | int, str]] = []
 
         for spec in iter_specs(self._contract):
             qos = qos_profile_from_dict(spec.qos) or 10
             # Default buffering strategy for observation/action topics
-            topics.append((spec.topic, spec.msg_type, qos, "no_buffer"))
+            topics.append((spec.topic, spec.msg_type, qos, 'no_buffer'))
 
         # Task topics
         for task in self._contract.tasks or []:
             qos = qos_profile_from_dict(task.qos) or 10
-            topics.append((task.topic, task.type, qos, "no_buffer"))
+            topics.append((task.topic, task.type, qos, 'no_buffer'))
 
         # Adjunct topics (record-only, no key mapping) - these can have buffering strategies
         for adj in self._contract.adjunct or []:
@@ -351,46 +356,48 @@ class EpisodeRecorderNode(LifecycleNode):
             if buffering_strategy is None:
                 # Auto-detect: use accumulate for transient_local, no_buffer otherwise
                 if is_transient_local(qos):
-                    buffering_strategy = "accumulate"
+                    buffering_strategy = 'accumulate'
                 else:
-                    buffering_strategy = "no_buffer"
-            
+                    buffering_strategy = 'no_buffer'
+
             topics.append((adj.topic, adj.type, qos, buffering_strategy))
 
         # If node is running with simulation time enabled, record the /clock
         # topic so playback can drive sim time. Use a safe get in case the
         # parameter wasn't declared by the launcher.
         try:
-            use_sim = bool(self.get_parameter("use_sim_time").value)
+            use_sim = bool(self.get_parameter('use_sim_time').value)
         except Exception:
             use_sim = False
 
         if use_sim:
             # Use the standard ROS2 clock message type. QoS depth 10 is a
             # reasonable default for clock topic traffic.
-            topics.append(("/clock", "rosgraph_msgs/msg/Clock", 10, "no_buffer"))
+            topics.append(('/clock', 'rosgraph_msgs/msg/Clock', 10, 'no_buffer'))
 
         return topics
 
-    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str):
+    def _create_sub(
+        self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str
+    ):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
-        
+
         # Helper to extract header timestamp (used for buffering and deduplication)
         def get_header_stamp_ns(msg: Any) -> Optional[int]:
             """Extract header.stamp as nanoseconds, or None if not present."""
             try:
                 # Try msg.header first (most common)
-                hdr = getattr(msg, "header", None)
-                if hdr is not None and hasattr(hdr, "stamp"):
+                hdr = getattr(msg, 'header', None)
+                if hdr is not None and hasattr(hdr, 'stamp'):
                     ts = hdr.stamp
-                    return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+                    return int(ts.sec) * 1_000_000_000 + int(getattr(ts, 'nanosec', 0))
                 # Try msg.transforms[0].header for TFMessage
-                if hasattr(msg, "transforms") and len(getattr(msg, "transforms", [])) > 0:
-                    fh = getattr(msg.transforms[0], "header", None)
-                    if fh is not None and hasattr(fh, "stamp"):
+                if hasattr(msg, 'transforms') and len(getattr(msg, 'transforms', [])) > 0:
+                    fh = getattr(msg.transforms[0], 'header', None)
+                    if fh is not None and hasattr(fh, 'stamp'):
                         ts = fh.stamp
-                        return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+                        return int(ts.sec) * 1_000_000_000 + int(getattr(ts, 'nanosec', 0))
             except Exception:
                 pass
             return None
@@ -404,16 +411,18 @@ class EpisodeRecorderNode(LifecycleNode):
                 history_depth = get_qos_depth(qos)
 
                 # Only buffer if TRANSIENT_LOCAL and strategy is not no_buffer
-                if is_tl and buffering_strategy != "no_buffer":
+                if is_tl and buffering_strategy != 'no_buffer':
                     try:
                         serialized = serialize_message(msg)
                         if len(serialized) <= MAX_BUFFER_BYTES:
                             header_stamp = get_header_stamp_ns(msg)
-                            
+
                             with self._buffer_lock:
                                 if _topic not in self._buffers:
                                     self._buffers[_topic] = deque()
-                                self._buffers[_topic].append((serialized, timestamp_ns, header_stamp))
+                                self._buffers[_topic].append(
+                                    (serialized, timestamp_ns, header_stamp)
+                                )
                                 # Enforce history depth limit
                                 while len(self._buffers[_topic]) > history_depth:
                                     self._buffers[_topic].popleft()
@@ -435,7 +444,7 @@ class EpisodeRecorderNode(LifecycleNode):
                     )
                     self._messages_written += 1
                 except Exception as e:
-                    self.get_logger().error(f"Write failed on {_topic}: {e}")
+                    self.get_logger().error(f'Write failed on {_topic}: {e}')
                     self._stop_event.set()
 
         return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
@@ -444,24 +453,25 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def _on_goal(self, goal_request) -> GoalResponse:
         """Accept if active and not already recording."""
-        self.get_logger().info("Received goal request")
+        self.get_logger().info('Received goal request')
         if not self._accepting_goals:
-            self.get_logger().warning("Rejected: node not active")
+            self.get_logger().warning('Rejected: node not active')
             return GoalResponse.REJECT
         if self._is_recording:
-            self.get_logger().warning("Rejected: already recording")
+            self.get_logger().warning('Rejected: already recording')
             return GoalResponse.REJECT
-        self.get_logger().info("Goal accepted")
+        self.get_logger().info('Goal accepted')
         return GoalResponse.ACCEPT
 
     def _on_cancel(self, _goal_handle) -> CancelResponse:
         """Accept or reject a client request to cancel an action."""
-        self.get_logger().info("Received cancel request")
+        self.get_logger().info('Received cancel request')
         self._stop_event.set()
         return CancelResponse.ACCEPT
 
     def _on_cancel_service(self, request, response):
-        """Handle external Trigger service call to cancel recording.
+        """
+        Handle external Trigger service call to cancel recording.
 
         Sets the internal stop event and attempts to transition the active
         goal to the canceled state. Returns a Trigger response indicating
@@ -469,10 +479,10 @@ class EpisodeRecorderNode(LifecycleNode):
         """
         if not self._is_recording:
             response.success = False
-            response.message = "No active recording"
+            response.message = 'No active recording'
             return response
 
-        self.get_logger().info("cancel_recording service called: stopping recording")
+        self.get_logger().info('cancel_recording service called: stopping recording')
         # Signal the recording loop to stop
         self._stop_event.set()
 
@@ -484,14 +494,15 @@ class EpisodeRecorderNode(LifecycleNode):
                 # checks is_cancel_requested and will perform its own cleanup.
                 self._goal_handle.canceled()
             except Exception as e:
-                self.get_logger().debug(f"Failed to cancel goal handle: {e}")
+                self.get_logger().debug(f'Failed to cancel goal handle: {e}')
 
         response.success = True
-        response.message = "Cancel requested"
+        response.message = 'Cancel requested'
         return response
 
     def _on_start_service(self, request, response):
-        """Handle StartRecording service call.
+        """
+        Handle StartRecording service call.
 
         Starts recording directly without the ROS2 action protocol.
         This is the primary interface for Foxglove extensions since the
@@ -499,15 +510,15 @@ class EpisodeRecorderNode(LifecycleNode):
         """
         if not self._accepting_goals:
             response.accepted = False
-            response.message = "Node not active"
+            response.message = 'Node not active'
             return response
 
         if self._is_recording:
             response.accepted = False
-            response.message = "Already recording"
+            response.message = 'Already recording'
             return response
 
-        prompt = request.prompt or ""
+        prompt = request.prompt or ''
         self.get_logger().info(f"start_recording service called: prompt='{prompt}'")
 
         # Start recording in a background thread (mirrors _execute logic)
@@ -515,7 +526,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._messages_written = 0
         self._goal_handle = None  # No action goal for service-based recording
         self._is_recording = True  # Set recording flag immediately to start writing live messages
-        
+
         record_thread = threading.Thread(
             target=self._service_record,
             args=(prompt,),
@@ -524,18 +535,20 @@ class EpisodeRecorderNode(LifecycleNode):
         record_thread.start()
 
         response.accepted = True
-        response.message = "Recording started"
+        response.message = 'Recording started'
         return response
 
-    def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
+    def _on_delete_last_bag_service(
+        self, _request, response: Trigger.Response
+    ) -> Trigger.Response:
         """Delete the most recently completed bag directory."""
         if self._is_recording:
             response.success = False
-            response.message = "Cannot delete: recording in progress"
+            response.message = 'Cannot delete: recording in progress'
             return response
         if self._last_bag_dir is None:
             response.success = False
-            response.message = "No bag to delete"
+            response.message = 'No bag to delete'
             return response
 
         bag_path = self._last_bag_dir
@@ -543,24 +556,24 @@ class EpisodeRecorderNode(LifecycleNode):
             if bag_path.exists():
                 shutil.rmtree(bag_path)
                 self._last_bag_dir = None
-                self.get_logger().info(f"Deleted bag: {bag_path}")
+                self.get_logger().info(f'Deleted bag: {bag_path}')
                 response.success = True
-                response.message = f"Deleted: {bag_path.name}"
+                response.message = f'Deleted: {bag_path.name}'
             else:
                 response.success = False
-                response.message = f"Bag path not found: {bag_path}"
+                response.message = f'Bag path not found: {bag_path}'
         except Exception as e:
-            self.get_logger().error(f"Failed to delete bag {bag_path}: {e}")
+            self.get_logger().error(f'Failed to delete bag {bag_path}: {e}')
             response.success = False
-            response.message = f"Delete failed: {e}"
+            response.message = f'Delete failed: {e}'
         return response
 
     def _service_record(self, prompt: str) -> None:
-        """Recording loop for service-based starts (no action goal handle)."""
+        """Record loop for service-based starts (no action goal handle)."""
         bag_dir = self._create_bag_dir()
         max_duration = self._default_max_duration
 
-        self.get_logger().info(f"Recording (service): {bag_dir}, max={max_duration}s")
+        self.get_logger().info(f'Recording (service): {bag_dir}, max={max_duration}s')
 
         try:
             self._open_writer(bag_dir)
@@ -570,22 +583,22 @@ class EpisodeRecorderNode(LifecycleNode):
             while not self._stop_event.is_set():
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
-                    self.get_logger().info("Timeout reached")
+                    self.get_logger().info('Timeout reached')
                     break
                 time.sleep(1.0 / self._feedback_rate_hz)
 
         except Exception as e:
-            self.get_logger().error(f"Recording error: {e}")
+            self.get_logger().error(f'Recording error: {e}')
 
         # Finalize
         self._close_writer()
         try:
             self._write_metadata(bag_dir, prompt)
         except RuntimeError as e:
-            self.get_logger().error(f"Metadata error: {e}")
+            self.get_logger().error(f'Metadata error: {e}')
 
         self._last_bag_dir = bag_dir
-        self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
+        self.get_logger().info(f'Recorded {self._messages_written} messages to {bag_dir}')
         self._is_recording = False
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
@@ -594,7 +607,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event.clear()  # Reset for new recording
         self._messages_written = 0
 
-        prompt = goal_handle.request.prompt or ""
+        prompt = goal_handle.request.prompt or ''
         max_duration = self._default_max_duration
 
         # Create unique bag directory
@@ -602,13 +615,13 @@ class EpisodeRecorderNode(LifecycleNode):
         result = RecordEpisode.Result()
         result.bag_path = str(bag_dir)
 
-        self.get_logger().info(f"Recording: {bag_dir}, max={max_duration}s")
+        self.get_logger().info(f'Recording: {bag_dir}, max={max_duration}s')
 
         try:
             # Open writer and register topics BEFORE setting _is_recording
             # This allows _open_writer to flush buffered TRANSIENT_LOCAL messages
             self._open_writer(bag_dir)
-            
+
             # NOW set recording flag so live messages start being written
             self._is_recording = True
 
@@ -622,7 +635,7 @@ class EpisodeRecorderNode(LifecycleNode):
 
                 # Check timeout
                 if remaining <= 0:
-                    self.get_logger().info("Timeout reached")
+                    self.get_logger().info('Timeout reached')
                     break
 
                 # Check cancel
@@ -635,13 +648,13 @@ class EpisodeRecorderNode(LifecycleNode):
                     msg_count = self._messages_written
                 feedback.seconds_remaining = int(remaining)
                 feedback.messages_written = msg_count
-                feedback.status = "recording"
+                feedback.status = 'recording'
                 goal_handle.publish_feedback(feedback)
 
                 time.sleep(1.0 / self._feedback_rate_hz)
 
         except Exception as e:
-            self.get_logger().error(f"Recording error: {e}")
+            self.get_logger().error(f'Recording error: {e}')
             result.success = False
             result.message = str(e)
             self._cleanup(goal_handle, aborted=True)
@@ -653,9 +666,9 @@ class EpisodeRecorderNode(LifecycleNode):
             self._write_metadata(bag_dir, prompt)
         except RuntimeError as e:
             # Metadata write failed - this is a real error, fail the action
-            self.get_logger().error(f"Metadata error: {e}")
+            self.get_logger().error(f'Metadata error: {e}')
             result.success = False
-            result.message = f"Recording completed but metadata failed: {e}"
+            result.message = f'Recording completed but metadata failed: {e}'
             result.messages_written = self._messages_written
             goal_handle.abort()
             self._is_recording = False
@@ -664,16 +677,16 @@ class EpisodeRecorderNode(LifecycleNode):
 
         self._last_bag_dir = bag_dir
         result.messages_written = self._messages_written
-        self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
+        self.get_logger().info(f'Recorded {self._messages_written} messages to {bag_dir}')
 
         # Set terminal state
         if goal_handle.is_cancel_requested:
             result.success = False
-            result.message = "Cancelled"
+            result.message = 'Cancelled'
             goal_handle.canceled()
         else:
             result.success = True
-            result.message = f"Recorded {self._messages_written} messages"
+            result.message = f'Recorded {self._messages_written} messages'
             goal_handle.succeed()
 
         self._is_recording = False
@@ -689,7 +702,7 @@ class EpisodeRecorderNode(LifecycleNode):
             try:
                 goal_handle.abort()
             except Exception as e:
-                self.get_logger().warning(f"Failed to abort goal handle: {e}")
+                self.get_logger().warning(f'Failed to abort goal handle: {e}')
 
     # ---------- rosbag2 helpers ----------
 
@@ -697,40 +710,41 @@ class EpisodeRecorderNode(LifecycleNode):
         """Generate unique bag directory name."""
         t_ns = time.time_ns()
         sec, nsec = divmod(t_ns, 1_000_000_000)
-        bag_dir = self._bag_base / f"{sec:010d}_{nsec:09d}"
+        bag_dir = self._bag_base / f'{sec:010d}_{nsec:09d}'
         return bag_dir
 
     def _open_writer(self, bag_dir: Path) -> None:
         """Open writer and register all topics."""
-        
         # Step 1: Re-subscribe to topics with resubscribe_on_start strategy
         # This must happen BEFORE opening the writer so messages buffer properly
         resubscribe_topics = [
             (topic, type_str, qos, strategy)
             for topic, type_str, qos, strategy in self._topics
-            if strategy == "resubscribe_on_start"
+            if strategy == 'resubscribe_on_start'
         ]
-        
+
         for topic, type_str, qos, strategy in resubscribe_topics:
-            self.get_logger().info(f"Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data...")
-            
+            self.get_logger().info(f'Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data...')
+
             # Find and destroy old subscriber
             if topic in self._subs:
                 old_sub = self._subs[topic]
                 self.destroy_subscription(old_sub)
                 del self._subs[topic]
-            
+
             # Clear buffer for this topic
             with self._buffer_lock:
                 if topic in self._buffers:
                     old_count = len(self._buffers[topic])
                     self._buffers[topic].clear()
-                    self.get_logger().info(f"Cleared {old_count} stale messages from {topic} buffer")
-            
+                    self.get_logger().info(
+                        f'Cleared {old_count} stale messages from {topic} buffer'
+                    )
+
             # Create new subscriber - will immediately receive latched TRANSIENT_LOCAL messages
             new_sub = self._create_sub(topic, type_str, qos, strategy)
             self._subs[topic] = new_sub
-        
+
         # Step 2: Brief sleep to allow TRANSIENT_LOCAL delivery to new subscribers
         if resubscribe_topics:
             time.sleep(0.2)  # 200ms should be plenty for latched message delivery
@@ -739,23 +753,24 @@ class EpisodeRecorderNode(LifecycleNode):
                     buf_size = len(self._buffers.get(topic, []))
                     if buf_size == 0:
                         self.get_logger().warning(
-                            f"After re-subscribe, {topic} buffer is EMPTY! "
-                            f"This means the publisher is not publishing with TRANSIENT_LOCAL QoS, "
-                            f"or the publisher is not running. Recording will continue without this data."
+                            f'After re-subscribe, {topic} buffer is '
+                            f'EMPTY! Publisher may not use '
+                            f'TRANSIENT_LOCAL QoS or is not running. '
+                            f'Recording will continue without this data.'
                         )
                     else:
                         self.get_logger().info(
-                            f"After re-subscribe, {topic} buffer has {buf_size} message(s)"
+                            f'After re-subscribe, {topic} buffer has {buf_size} message(s)'
                         )
-        
+
         # Step 3: Open storage and create writer
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
             storage_id=self._storage_id,
         )
         converter_options = rosbag2_py.ConverterOptions(
-            input_serialization_format="cdr",
-            output_serialization_format="cdr",
+            input_serialization_format='cdr',
+            output_serialization_format='cdr',
         )
 
         writer = rosbag2_py.SequentialWriter()
@@ -767,12 +782,16 @@ class EpisodeRecorderNode(LifecycleNode):
             def _qos_to_rosbag2(q: QoSProfile | int) -> rosbag2_py._storage.QoS:
                 """Convert an rclpy QoSProfile (or int depth) to a rosbag2_py QoS."""
                 from rosbag2_py._storage import (
-                    QoS as Rosbag2QoS,
                     Duration as Rosbag2Duration,
-                    rmw_qos_history_policy_t,
-                    rmw_qos_reliability_policy_t,
+                )
+                from rosbag2_py._storage import (
+                    QoS as Rosbag2QoS,
+                )
+                from rosbag2_py._storage import (
                     rmw_qos_durability_policy_t,
+                    rmw_qos_history_policy_t,
                     rmw_qos_liveliness_policy_t,
+                    rmw_qos_reliability_policy_t,
                 )
 
                 # Extract numeric RMW values using unified helper
@@ -783,15 +802,15 @@ class EpisodeRecorderNode(LifecycleNode):
 
                 # Build rosbag2 QoS using the rosbag2_py enum types (not raw ints).
                 # The QoS setter methods on Jazzy require rmw_qos_*_policy_t enums.
-                bag_qos = Rosbag2QoS(vals["depth"])
-                bag_qos = bag_qos.history(rmw_qos_history_policy_t(vals["history"]))
-                bag_qos = bag_qos.reliability(rmw_qos_reliability_policy_t(vals["reliability"]))
-                bag_qos = bag_qos.durability(rmw_qos_durability_policy_t(vals["durability"]))
-                bag_qos = bag_qos.liveliness(rmw_qos_liveliness_policy_t(vals["liveliness"]))
+                bag_qos = Rosbag2QoS(vals['depth'])
+                bag_qos = bag_qos.history(rmw_qos_history_policy_t(vals['history']))
+                bag_qos = bag_qos.reliability(rmw_qos_reliability_policy_t(vals['reliability']))
+                bag_qos = bag_qos.durability(rmw_qos_durability_policy_t(vals['durability']))
+                bag_qos = bag_qos.liveliness(rmw_qos_liveliness_policy_t(vals['liveliness']))
 
                 # Convert rclpy Duration to rosbag2 Duration
                 def _dur(rclpy_dur) -> Rosbag2Duration:
-                    ns = int(getattr(rclpy_dur, "nanoseconds", 0) or 0)
+                    ns = int(getattr(rclpy_dur, 'nanoseconds', 0) or 0)
                     return Rosbag2Duration(ns // 1_000_000_000, ns % 1_000_000_000)
 
                 bag_qos = bag_qos.deadline(_dur(q.deadline))
@@ -799,24 +818,24 @@ class EpisodeRecorderNode(LifecycleNode):
                 bag_qos = bag_qos.liveliness_lease_duration(_dur(q.liveliness_lease_duration))
 
                 return bag_qos
-            
+
             # Register topics with Jazzy API
-            for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
+            for idx, (topic, type_str, qos, _strategy) in enumerate(self._topics):
                 topic_info = rosbag2_py.TopicMetadata(
                     id=idx,
                     name=topic,
                     type=type_str,
-                    serialization_format="cdr",
+                    serialization_format='cdr',
                     offered_qos_profiles=[_qos_to_rosbag2(qos)],
                 )
                 writer.create_topic(topic_info)
-        
+
         else:
             # Humble: Use YAML string format for offered_qos_profiles
             def _serialize_offered_qos(q: QoSProfile | int) -> str:
                 """
                 Emit a Humble-compatible YAML mapping string for rosbag2 metadata.
-                
+
                 Uses rclpy.qos enum values consistently with Jazzy approach.
                 Output format: YAML list with single QoS mapping (prefixed with '- ').
                 """
@@ -831,28 +850,28 @@ class EpisodeRecorderNode(LifecycleNode):
                 # Build the Humble-style YAML string
                 # rosbag2_player requires all fields present
                 lines = [
-                    f"- history: {vals['history']}",
-                    f"  depth: {vals['depth']}",
-                    f"  reliability: {vals['reliability']}",
-                    f"  durability: {vals['durability']}",
-                    f"  deadline:",
-                    f"    sec: {MAX_SEC}",
-                    f"    nsec: {MAX_NSEC}",
-                    f"  lifespan:",
-                    f"    sec: {MAX_SEC}",
-                    f"    nsec: {MAX_NSEC}",
-                    f"  liveliness: {vals['liveliness']}",
-                    f"  liveliness_lease_duration:",
-                    f"    sec: {MAX_SEC}",
-                    f"    nsec: {MAX_NSEC}",
-                    f"  avoid_ros_namespace_conventions: false",
+                    f'- history: {vals["history"]}',
+                    f'  depth: {vals["depth"]}',
+                    f'  reliability: {vals["reliability"]}',
+                    f'  durability: {vals["durability"]}',
+                    '  deadline:',
+                    f'    sec: {MAX_SEC}',
+                    f'    nsec: {MAX_NSEC}',
+                    '  lifespan:',
+                    f'    sec: {MAX_SEC}',
+                    f'    nsec: {MAX_NSEC}',
+                    f'  liveliness: {vals["liveliness"]}',
+                    '  liveliness_lease_duration:',
+                    f'    sec: {MAX_SEC}',
+                    f'    nsec: {MAX_NSEC}',
+                    '  avoid_ros_namespace_conventions: false',
                 ]
-                return "\n".join(lines)
-            
+                return '\n'.join(lines)
+
             # Register topics with Humble API (YAML string format)
-            for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
+            for _idx, (topic, type_str, qos, _strategy) in enumerate(self._topics):
                 offered = _serialize_offered_qos(qos)
-                topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
+                topic_info = rosbag2_py.TopicMetadata(topic, type_str, 'cdr', offered)
                 writer.create_topic(topic_info)
 
         # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
@@ -873,10 +892,10 @@ class EpisodeRecorderNode(LifecycleNode):
                         # message is preserved (often 0 for static TFs).
                         writer.write(topic, serialized, bag_start_ns)
                         self._messages_written += 1
-                    
+
                     if buffer:
                         self.get_logger().info(
-                            f"Flushed {len(buffer)} buffered messages for {topic}"
+                            f'Flushed {len(buffer)} buffered messages for {topic}'
                         )
 
     def _close_writer(self) -> None:
@@ -890,14 +909,16 @@ class EpisodeRecorderNode(LifecycleNode):
         """
         Write prompt to metadata.yaml as custom_data.
 
-        Raises:
+        Raises
+        ------
             RuntimeError: If metadata.yaml cannot be written after retries.
                 This is a fail-fast design - we don't silently lose the prompt.
+
         """
         if not prompt:
             return
 
-        meta_path = bag_dir / "metadata.yaml"
+        meta_path = bag_dir / 'metadata.yaml'
         last_error: Exception | None = None
 
         for attempt in range(METADATA_RETRY_COUNT):
@@ -906,7 +927,7 @@ class EpisodeRecorderNode(LifecycleNode):
                     time.sleep(METADATA_RETRY_DELAY_SEC)
                     continue
 
-                with meta_path.open("r") as f:
+                with meta_path.open('r') as f:
                     meta = yaml.safe_load(f) or {}
 
                 # Handle case where values exist but are None
@@ -916,24 +937,25 @@ class EpisodeRecorderNode(LifecycleNode):
                 info[BAG_CUSTOM_DATA_KEY] = custom
                 custom[BAG_PROMPT_KEY] = prompt
 
-                with meta_path.open("w") as f:
+                with meta_path.open('w') as f:
                     yaml.safe_dump(meta, f, sort_keys=False)
 
-                self.get_logger().debug(f"Wrote prompt to metadata on attempt {attempt + 1}")
+                self.get_logger().debug(f'Wrote prompt to metadata on attempt {attempt + 1}')
                 return
             except Exception as e:
                 last_error = e
-                self.get_logger().debug(f"Metadata write attempt {attempt + 1} failed: {e}")
+                self.get_logger().debug(f'Metadata write attempt {attempt + 1} failed: {e}')
                 time.sleep(METADATA_RETRY_DELAY_SEC)
 
         # Fail fast - don't silently lose the prompt
         raise RuntimeError(
-            f"Failed to write prompt to {meta_path} after {METADATA_RETRY_COUNT} attempts. "
-            f"Last error: {last_error}"
+            f'Failed to write prompt to {meta_path} after {METADATA_RETRY_COUNT} attempts. '
+            f'Last error: {last_error}'
         )
 
 
 def main(args=None):
+    """Run the episode recorder node."""
     rclpy.init(args=args)
     node = EpisodeRecorderNode()
 
@@ -952,5 +974,5 @@ def main(args=None):
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -52,21 +52,21 @@ Usage (Common utilities):
 from .common.contract import (
     ActionStreamSpec,
     Contract,
+    load_contract,
     ObservationStreamSpec,
     ResetMode,
     ResetSpec,
-    load_contract,
 )
 from .common.contract_utils import iter_action_specs, iter_observation_specs
 
 __all__ = [
     # Contract utilities
-    "Contract",
-    "load_contract",
-    "ObservationStreamSpec",
-    "ActionStreamSpec",
-    "ResetSpec",
-    "ResetMode",
-    "iter_observation_specs",
-    "iter_action_specs",
+    'Contract',
+    'load_contract',
+    'ObservationStreamSpec',
+    'ActionStreamSpec',
+    'ResetSpec',
+    'ResetMode',
+    'iter_observation_specs',
+    'iter_action_specs',
 ]
