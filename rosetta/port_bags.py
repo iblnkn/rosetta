@@ -382,17 +382,16 @@ def port_bags(
     """
     Port ROS2 bags to LeRobot dataset format.
 
-    Args
+    Args:
     ----
-        raw_dir: Directory containing bag subdirectories.
-        repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset").
-        contract_path: Path to Rosetta contract YAML.
-        root: Output directory for dataset. Defaults to ~/.cache/huggingface/lerobot.
-        push_to_hub: Whether to upload to HuggingFace Hub after porting.
-        num_shards: Total number of shards for parallel processing.
-        shard_index: Index of this shard (0 to num_shards-1).
-        vcodec: Video codec for encoding. Options: 'libsvtav1' (default, good compression),
-            'libx264'/'h264' (fast), 'hevc', 'h264_nvenc' (GPU).
+    raw_dir: Directory containing bag subdirectories.
+    repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset").
+    contract_path: Path to Rosetta contract YAML.
+    root: Output directory for dataset.
+    push_to_hub: Whether to upload to HuggingFace Hub after porting.
+    num_shards: Total number of shards for parallel processing.
+    shard_index: Index of this shard (0 to num_shards-1).
+    vcodec: Video codec for encoding (libsvtav1, libx264, hevc, etc.).
 
     """
     contract = load_contract(contract_path)

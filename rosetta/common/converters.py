@@ -81,16 +81,16 @@ def register_decoder(type_str: str, dtype: str):
     """
     Register a decoder for a ROS message type.
 
-    Args
+    Args:
     ----
-        type_str: ROS message type (e.g., "sensor_msgs/msg/JointState")
-        dtype: LeRobot dtype (video, float64, float32, int32, int64, bool, string)
+    type_str: ROS message type (e.g., "sensor_msgs/msg/JointState")
+    dtype: LeRobot dtype (video, float64, float32, int32, int64, bool, string)
 
-    Example
+    Example:
     -------
-        @register_decoder("sensor_msgs/msg/JointState", dtype="float64")
-        def decode_joint_state(msg, spec):
-            return np.array(msg.position, dtype=np.float64)
+    @register_decoder("sensor_msgs/msg/JointState", dtype="float64")
+    def decode_joint_state(msg, spec):
+        return np.array(msg.position, dtype=np.float64)
 
     """
 
@@ -106,19 +106,19 @@ def register_encoder(type_str: str):
     """
     Register an encoder for a ROS message type.
 
-    Args
+    Args:
     ----
-        type_str: ROS message type (e.g., "geometry_msgs/msg/Twist")
+    type_str: ROS message type (e.g., "geometry_msgs/msg/Twist")
 
     Encoder signature: (action_vec, spec, stamp_ns=None) -> ROS message
 
-    Example
+    Example:
     -------
-        @register_encoder("geometry_msgs/msg/Twist")
-        def encode_twist(action_vec, spec, stamp_ns=None):
-            msg = Twist()
-            msg.linear.x = action_vec[0]
-            return msg
+    @register_encoder("geometry_msgs/msg/Twist")
+    def encode_twist(action_vec, spec, stamp_ns=None):
+        msg = Twist()
+        msg.linear.x = action_vec[0]
+        return msg
 
     """
 

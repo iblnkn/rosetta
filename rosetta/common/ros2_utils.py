@@ -222,7 +222,7 @@ def dot_get(obj, path: str):
 
     Supports JointState-style pattern: "<field>.<joint_name>".
 
-    Example
+    Example:
     -------
         dot_get(msg, "position.elbow") -> msg.position[msg.name.index("elbow")]
         dot_get(msg, "linear.x") -> msg.linear.x
@@ -249,7 +249,7 @@ def dot_set(obj, path: str, value: float) -> None:
 
     Supports JointState-style pattern: "<field>.<joint_name>".
 
-    Example
+    Example:
     -------
         dot_set(msg, "position.elbow", 1.5) -> msg.position[index] = 1.5
         dot_set(msg, "linear.x", 2.0) -> msg.linear.x = 2.0

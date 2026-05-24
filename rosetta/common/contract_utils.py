@@ -290,12 +290,12 @@ def _apply_namespaces(
     """
     Apply namespace derivation and yield final specs.
 
-    Args
+    Args:
     ----
-        items: List of (topic, spec_kwargs, original_item) tuples
-        key_getter: Function to get the key from original_item
-        spec_class: The spec class to instantiate
-        forbid_image_aggregation: If True, raise error on multi-topic image keys
+    items: List of (topic, spec_kwargs, original_item) tuples
+    key_getter: Function to get the key from original_item
+    spec_class: The spec class to instantiate
+    forbid_image_aggregation: If True, raise error on multi-topic image keys
 
     """
     # Group by key
