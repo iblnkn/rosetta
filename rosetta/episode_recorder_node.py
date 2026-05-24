@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
+import re
 import shutil
 import threading
 import time
@@ -82,6 +83,13 @@ MAX_BUFFER_BYTES = 4 * 1024 * 1024
 # Uses common utilities from ros2_compat module
 _IS_JAZZY = is_jazzy_or_newer()
 
+# Regex patterns for topics excluded from auto-recording by default.
+# Uses the same regex convention as ``ros2 bag record --exclude``.
+_DEFAULT_BLACKLIST = (
+    r'^/rosout$',
+    r'^/parameter_events$',
+)
+
 
 class EpisodeRecorderNode(LifecycleNode):
     """
@@ -121,6 +129,15 @@ class EpisodeRecorderNode(LifecycleNode):
             ParameterDescriptor(description='Bag storage format (mcap, sqlite3)', read_only=True),
         )
         self.declare_parameter(
+            'exclude_topics',
+            [''],
+            ParameterDescriptor(
+                description='Regex patterns for topics to exclude from auto-recording '
+                '(same syntax as ros2 bag record --exclude)',
+                read_only=True,
+            ),
+        )
+        self.declare_parameter(
             'default_max_duration',
             300.0,
             ParameterDescriptor(description='Maximum recording duration in seconds'),
@@ -129,6 +146,14 @@ class EpisodeRecorderNode(LifecycleNode):
             'feedback_rate_hz',
             2.0,
             ParameterDescriptor(description='Rate for publishing action feedback'),
+        )
+        self.declare_parameter(
+            'record_all',
+            False,
+            ParameterDescriptor(
+                description='Record all active topics, not just contract topics',
+                read_only=True,
+            ),
         )
 
         # Initialize state variables (resources created in lifecycle callbacks)
@@ -140,6 +165,10 @@ class EpisodeRecorderNode(LifecycleNode):
         self._topics: list[
             tuple[str, str, QoSProfile | int, str]
         ] = []  # (topic, type, qos, buffering_strategy)
+        self._discovered_topics: list[
+            tuple[str, str, QoSProfile | int, str]
+        ] = []
+        self._exclude_regex: re.Pattern | None = None
         self._subs: dict[str, Any] = {}  # topic -> subscription object
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
@@ -181,6 +210,15 @@ class EpisodeRecorderNode(LifecycleNode):
             self._storage_id = self.get_parameter('storage_id').value
             self._default_max_duration = self.get_parameter('default_max_duration').value
             self._feedback_rate_hz = self.get_parameter('feedback_rate_hz').value
+
+            # Build exclude regex: merge default patterns, user-specified
+            # patterns, and this node's own topics into a single compiled
+            # pattern — same convention as ``ros2 bag record --exclude``.
+            user_patterns = tuple(
+                p for p in self.get_parameter('exclude_topics').value if p
+            )
+            all_patterns = _DEFAULT_BLACKLIST + user_patterns
+            self._exclude_regex = re.compile('|'.join(all_patterns))
 
             # Build topic list from contract
             self._topics = self._build_topic_list()
@@ -376,6 +414,43 @@ class EpisodeRecorderNode(LifecycleNode):
             topics.append(('/clock', 'rosgraph_msgs/msg/Clock', 10, 'no_buffer'))
 
         return topics
+
+    def _discover_topics(self) -> list[tuple[str, str, QoSProfile | int, str]]:
+        """Discover non-contract topics on the ROS2 graph.
+
+        Returns topics not already in self._topics and not matching the
+        exclude regex. Each tuple is (topic_name, type_str, qos, buffering_strategy).
+        """
+        known = {t[0] for t in self._topics}
+        discovered: list[tuple[str, str, QoSProfile | int, str]] = []
+
+        for topic, type_list in self.get_topic_names_and_types():
+            if topic in known:
+                continue
+            if self._exclude_regex and self._exclude_regex.search(topic):
+                continue
+            if not type_list:
+                continue
+            type_str = type_list[0]
+
+            # Match QoS from existing publishers
+            pubs = self.get_publishers_info_by_topic(topic)
+            qos = pubs[0].qos_profile if pubs else QoSProfile(depth=10)
+
+            discovered.append((topic, type_str, qos, 'no_buffer'))
+
+        if discovered:
+            names = [t[0] for t in discovered]
+            self.get_logger().info(f'Auto-discovered {len(discovered)} topics: {names}')
+
+        return discovered
+
+    def _cleanup_discovered_subs(self) -> None:
+        """Destroy subscriptions for auto-discovered topics."""
+        for topic, _, _, _ in self._discovered_topics:
+            if topic in self._subs:
+                self.destroy_subscription(self._subs.pop(topic))
+        self._discovered_topics = []
 
     def _create_sub(
         self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str
@@ -715,6 +790,14 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def _open_writer(self, bag_dir: Path) -> None:
         """Open writer and register all topics."""
+        # Step 0: Discover non-contract topics on the graph
+        if self.get_parameter('record_all').value:
+            self._discovered_topics = self._discover_topics()
+            for topic, type_str, qos, strategy in self._discovered_topics:
+                if topic not in self._subs:
+                    sub = self._create_sub(topic, type_str, qos, strategy)
+                    self._subs[topic] = sub
+
         # Step 1: Re-subscribe to topics with resubscribe_on_start strategy
         # This must happen BEFORE opening the writer so messages buffer properly
         resubscribe_topics = [
@@ -776,6 +859,9 @@ class EpisodeRecorderNode(LifecycleNode):
         writer = rosbag2_py.SequentialWriter()
         writer.open(storage_options, converter_options)
 
+        # Combine contract topics with any auto-discovered topics
+        all_topics = self._topics + self._discovered_topics
+
         # QoS conversion: Jazzy uses rosbag2_py._storage.QoS objects, Humble uses YAML strings
         if _IS_JAZZY:
             # Jazzy/Rolling: Use rosbag2_py._storage.QoS API
@@ -820,7 +906,7 @@ class EpisodeRecorderNode(LifecycleNode):
                 return bag_qos
 
             # Register topics with Jazzy API
-            for idx, (topic, type_str, qos, _strategy) in enumerate(self._topics):
+            for idx, (topic, type_str, qos, _strategy) in enumerate(all_topics):
                 topic_info = rosbag2_py.TopicMetadata(
                     id=idx,
                     name=topic,
@@ -869,7 +955,7 @@ class EpisodeRecorderNode(LifecycleNode):
                 return '\n'.join(lines)
 
             # Register topics with Humble API (YAML string format)
-            for _idx, (topic, type_str, qos, _strategy) in enumerate(self._topics):
+            for _idx, (topic, type_str, qos, _strategy) in enumerate(all_topics):
                 offered = _serialize_offered_qos(qos)
                 topic_info = rosbag2_py.TopicMetadata(topic, type_str, 'cdr', offered)
                 writer.create_topic(topic_info)
@@ -904,6 +990,7 @@ class EpisodeRecorderNode(LifecycleNode):
             if self._writer is not None:
                 self._writer.close()  # Explicitly close to finalize MCAP indices
             self._writer = None
+        self._cleanup_discovered_subs()
 
     def _write_metadata(self, bag_dir: Path, prompt: str) -> None:
         """
