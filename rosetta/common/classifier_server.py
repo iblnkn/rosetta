@@ -24,39 +24,37 @@ Usage:
 """
 
 import argparse
-import logging
+from concurrent import futures
 import pickle  # nosec
+from queue import Empty, Queue
 import threading
 import time
-from concurrent import futures
-from queue import Empty, Queue
 
 import grpc
-import torch
-import torch.nn.functional as F
-
+from lerobot.async_inference.helpers import (
+    get_logger,
+    raw_observation_to_observation,
+    RemotePolicyConfig,
+    TimedAction,
+    TimedObservation,
+)
 from lerobot.policies.factory import get_policy_class
 from lerobot.transport import (
     services_pb2,  # type: ignore
     services_pb2_grpc,  # type: ignore
 )
 from lerobot.transport.utils import receive_bytes_in_chunks
+import torch
+import torch.nn.functional as F
 
-from lerobot.async_inference.helpers import (
-    RemotePolicyConfig,
-    TimedAction,
-    TimedObservation,
-    raw_observation_to_observation,
-    get_logger,
-)
-
-logger = get_logger("classifier_server")
+logger = get_logger('classifier_server')
 
 OBS_QUEUE_TIMEOUT = 2.0
 
 
 class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
-    """gRPC server for reward classifier inference.
+    """
+    gRPC server for reward classifier inference.
 
     Speaks the same AsyncInference protocol as PolicyServer so the
     existing RobotClient can connect without modification.
@@ -84,57 +82,52 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
     # gRPC RPCs (same interface as PolicyServer)
     # ----------------------------------------------------------------
 
-    def Ready(self, request, context):  # noqa: N802
+    def Ready(self, request, context):
         client_id = context.peer()
-        logger.info(f"Client {client_id} connected")
+        logger.info(f'Client {client_id} connected')
         self._reset()
         self.shutdown_event.clear()
         return services_pb2.Empty()
 
-    def SendPolicyInstructions(self, request, context):  # noqa: N802
+    def SendPolicyInstructions(self, request, context):
         if not self.running:
-            logger.warning("Server not running, ignoring policy instructions")
+            logger.warning('Server not running, ignoring policy instructions')
             return services_pb2.Empty()
 
         policy_specs = pickle.loads(request.data)  # nosec
 
         if not isinstance(policy_specs, RemotePolicyConfig):
-            raise TypeError(
-                f"Expected RemotePolicyConfig, got {type(policy_specs)}"
-            )
+            raise TypeError(f'Expected RemotePolicyConfig, got {type(policy_specs)}')
 
         self.device = policy_specs.device
         self.lerobot_features = policy_specs.lerobot_features
 
         logger.info(
-            f"Loading classifier: type={policy_specs.policy_type}, "
-            f"path={policy_specs.pretrained_name_or_path}, "
-            f"device={policy_specs.device}"
+            f'Loading classifier: type={policy_specs.policy_type}, '
+            f'path={policy_specs.pretrained_name_or_path}, '
+            f'device={policy_specs.device}'
         )
 
         start = time.perf_counter()
         policy_class = get_policy_class(policy_specs.policy_type)
-        self.classifier = policy_class.from_pretrained(
-            policy_specs.pretrained_name_or_path
-        )
+        self.classifier = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
         self.classifier.to(self.device)
         self.classifier.eval()
         self._image_size = self._detect_image_size()
         elapsed = time.perf_counter() - start
 
         logger.info(
-            f"Classifier loaded on {self.device} in {elapsed:.2f}s "
-            f"(image_size={self._image_size})"
+            f'Classifier loaded on {self.device} in {elapsed:.2f}s (image_size={self._image_size})'
         )
         return services_pb2.Empty()
 
-    def SendObservations(self, request_iterator, context):  # noqa: N802
+    def SendObservations(self, request_iterator, context):
         received_bytes = receive_bytes_in_chunks(
             request_iterator, None, self.shutdown_event, logger
         )
         timed_obs = pickle.loads(received_bytes)  # nosec
 
-        logger.debug(f"Received observation #{timed_obs.get_timestep()}")
+        logger.debug(f'Received observation #{timed_obs.get_timestep()}')
 
         # Simple enqueue: always keep the latest observation
         if self.observation_queue.full():
@@ -143,39 +136,38 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return services_pb2.Empty()
 
-    def GetActions(self, request, context):  # noqa: N802
+    def GetActions(self, request, context):
         try:
             obs = self.observation_queue.get(timeout=OBS_QUEUE_TIMEOUT)
 
-            logger.debug(
-                f"Classifying observation #{obs.get_timestep()}"
-            )
+            logger.debug(f'Classifying observation #{obs.get_timestep()}')
 
             start = time.perf_counter()
             reward_actions = self._predict_reward(obs)
             elapsed = time.perf_counter() - start
 
             logger.info(
-                f"Observation #{obs.get_timestep()} classified "
-                f"(reward={reward_actions[0].action.item():.1f}) "
-                f"in {elapsed * 1000:.1f}ms"
+                f'Observation #{obs.get_timestep()} classified '
+                f'(reward={reward_actions[0].action.item():.1f}) '
+                f'in {elapsed * 1000:.1f}ms'
             )
 
             return services_pb2.Actions(data=pickle.dumps(reward_actions))
 
         except Empty:
-            return services_pb2.Actions(data=b"")
+            return services_pb2.Actions(data=b'')
 
         except Exception as e:
-            logger.error(f"Error in GetActions: {e}", exc_info=True)
-            return services_pb2.Actions(data=b"")
+            logger.error(f'Error in GetActions: {e}', exc_info=True)
+            return services_pb2.Actions(data=b'')
 
     # ----------------------------------------------------------------
     # Inference
     # ----------------------------------------------------------------
 
     def _detect_image_size(self) -> tuple[int, int] | None:
-        """Detect expected image size from SpatialLearnedEmbeddings kernel.
+        """
+        Detect expected image size from SpatialLearnedEmbeddings kernel.
 
         The kernel shape is (channel, height, width, num_features) where
         height/width are the expected feature-map spatial dims.  For
@@ -183,21 +175,20 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         resolution is (height * 32, width * 32).
         """
         for name, param in self.classifier.named_parameters():
-            if name.endswith(".kernel") and param.dim() == 4:
+            if name.endswith('.kernel') and param.dim() == 4:
                 _, h, w, _ = param.shape
                 # ResNet-family downsampling factor
                 size = (h * 32, w * 32)
                 logger.info(
-                    f"Detected SpatialLearnedEmbeddings kernel "
-                    f"spatial dims ({h}, {w}) → image size {size}"
+                    f'Detected SpatialLearnedEmbeddings kernel '
+                    f'spatial dims ({h}, {w}) → image size {size}'
                 )
                 return size
         return None
 
-    def _predict_reward(
-        self, observation_t: TimedObservation
-    ) -> list[TimedAction]:
-        """Run classifier inference on an observation.
+    def _predict_reward(self, observation_t: TimedObservation) -> list[TimedAction]:
+        """
+        Run classifier inference on an observation.
 
         Pipeline:
         1. Convert raw observation to tensor dict (reuses LeRobot's helper
@@ -212,7 +203,7 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         6. Wrap the scalar reward as a single TimedAction so the
            RobotClient can process it through the normal action pipeline.
         """
-        OBS_IMAGE = "observation.image"
+        OBS_IMAGE = 'observation.image'
 
         # 1. Raw observation → tensor dict
         observation = raw_observation_to_observation(
@@ -223,9 +214,7 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
 
         # 2. Move to device
         batch = {
-            k: v.to(self.device)
-            for k, v in observation.items()
-            if isinstance(v, torch.Tensor)
+            k: v.to(self.device) for k, v in observation.items() if isinstance(v, torch.Tensor)
         }
 
         # 3. Extract image tensors (same key filtering as Classifier)
@@ -238,8 +227,7 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         # Resize to the model's expected spatial dims if needed
         if self._image_size is not None:
             images = [
-                F.interpolate(img, size=self._image_size, mode="bilinear",
-                              align_corners=False)
+                F.interpolate(img, size=self._image_size, mode='bilinear', align_corners=False)
                 for img in images
             ]
 
@@ -251,9 +239,7 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         if self.classifier.config.num_classes == 2:
             reward = (output.probabilities > 0.5).float()
         else:
-            reward = torch.argmax(
-                output.probabilities, dim=1
-            ).float()
+            reward = torch.argmax(output.probabilities, dim=1).float()
 
         # 6. Wrap as TimedAction with shape (1,) to match action_features
         #    Use timestep+1 so the action is always newer than latest_action
@@ -272,26 +258,22 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Reward classifier gRPC server"
-    )
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8081)
+    parser = argparse.ArgumentParser(description='Reward classifier gRPC server')
+    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=8081)
     args = parser.parse_args()
 
     classifier_server = ClassifierServer()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
-    services_pb2_grpc.add_AsyncInferenceServicer_to_server(
-        classifier_server, server
-    )
-    server.add_insecure_port(f"{args.host}:{args.port}")
+    services_pb2_grpc.add_AsyncInferenceServicer_to_server(classifier_server, server)
+    server.add_insecure_port(f'{args.host}:{args.port}')
 
-    logger.info(f"ClassifierServer starting on {args.host}:{args.port}")
+    logger.info(f'ClassifierServer starting on {args.host}:{args.port}')
     server.start()
     server.wait_for_termination()
-    logger.info("Server terminated")
+    logger.info('Server terminated')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

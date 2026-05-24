@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
+r"""
 Launch file for EpisodeRecorderNode - records ROS2 topics to rosbag.
 
 This is a lifecycle node. By default, it auto-configures and auto-activates.
@@ -45,43 +45,42 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessStart
-from launch_ros.event_handlers import OnStateTransition
 from launch.events import matches_action
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration
 from launch_ros.actions import LifecycleNode
+from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
 
 def launch_setup(context, *args, **kwargs):
     """Build node with conditional parameter overrides."""
-    
     # Resolve launch configurations in context
     params_file = LaunchConfiguration('params_file').perform(context)
     contract_path = LaunchConfiguration('contract_path').perform(context)
     bag_base_dir = LaunchConfiguration('bag_base_dir').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
-    
+
     # Build parameters list
     parameters = [params_file]  # Load YAML first
-    
+
     # Build override dict with only non-empty values
     overrides = {'contract_path': contract_path}  # Always override contract
-    
+
     if bag_base_dir:  # Only add if non-empty
         overrides['bag_base_dir'] = bag_base_dir
-    
+
     if use_sim_time:  # Only add if non-empty
         # Convert string to boolean
         overrides['use_sim_time'] = use_sim_time.lower() in ('true', '1', 'yes')
-    
+
     if overrides:
         parameters.append(overrides)
-    
+
     # Create the lifecycle node
     episode_recorder_node = LifecycleNode(
         package='rosetta',
@@ -123,7 +122,7 @@ def launch_setup(context, *args, **kwargs):
     activate_event_handler = RegisterEventHandler(
         OnStateTransition(
             target_lifecycle_node=episode_recorder_node,
-            goal_state='inactive',   # trigger when node reaches INACTIVE (configure finished)
+            goal_state='inactive',  # trigger when node reaches INACTIVE (configure finished)
             entities=[activate_event],
         )
     )
@@ -136,6 +135,7 @@ def launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
+    """Generate the launch description for the episode recorder node."""
     share = get_package_share_directory('rosetta')
     default_contract = os.path.join(share, 'contracts', 'so_101.yaml')
     default_params = os.path.join(share, 'params', 'episode_recorder.yaml')
@@ -148,40 +148,38 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'params_file',
             default_value=default_params,
-            description='Path to ROS2 parameters YAML file (contains tuning params)'
+            description='Path to ROS2 parameters YAML file (contains tuning params)',
         ),
         # Deployment-specific paths
         DeclareLaunchArgument(
             'contract_path',
             default_value=default_contract,
-            description='Path to robot contract YAML file'
+            description='Path to robot contract YAML file',
         ),
         DeclareLaunchArgument(
             'bag_base_dir',
             default_value='',  # Empty = use value from params file
-            description='Directory for rosbag output (empty = use params file value)'
+            description='Directory for rosbag output (empty = use params file value)',
         ),
         # Runtime settings
         DeclareLaunchArgument(
             'use_sim_time',
             default_value='',  # Empty = use value from params file
-            description='Use simulated time from /clock topic (empty = use params file value)'
+            description='Use simulated time from /clock topic (empty = use params file value)',
         ),
         DeclareLaunchArgument(
             'log_level',
             default_value='info',
-            description='Logging level (debug, info, warn, error)'
+            description='Logging level (debug, info, warn, error)',
         ),
         # Lifecycle control
         DeclareLaunchArgument(
-            'configure',
-            default_value='true',
-            description='Auto-configure node on startup'
+            'configure', default_value='true', description='Auto-configure node on startup'
         ),
         DeclareLaunchArgument(
             'activate',
             default_value='true',
-            description='Auto-activate node after configure (requires configure:=true)'
+            description='Auto-activate node after configure (requires configure:=true)',
         ),
     ]
 

@@ -44,7 +44,7 @@ Custom converters can be specified per-stream in the contract:
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TYPE_CHECKING
 
 import numpy as np
 
@@ -56,8 +56,8 @@ if TYPE_CHECKING:
 # Type Aliases
 # =============================================================================
 
-DecoderFn = Callable[[Any, "ObservationStreamSpec | ActionStreamSpec"], "np.ndarray | str"]
-EncoderFn = Callable[[np.ndarray, "ActionStreamSpec", int | None], Any]
+DecoderFn = Callable[[Any, 'ObservationStreamSpec | ActionStreamSpec'], 'np.ndarray | str']
+EncoderFn = Callable[[np.ndarray, 'ActionStreamSpec', int | None], Any]
 
 
 # =============================================================================
@@ -78,16 +78,20 @@ _CONVERTER_CACHE: dict[str, Callable] = {}
 
 
 def register_decoder(type_str: str, dtype: str):
-    """Register a decoder for a ROS message type.
+    """
+    Register a decoder for a ROS message type.
 
-    Args:
+    Args
+    ----
         type_str: ROS message type (e.g., "sensor_msgs/msg/JointState")
         dtype: LeRobot dtype (video, float64, float32, int32, int64, bool, string)
 
-    Example:
+    Example
+    -------
         @register_decoder("sensor_msgs/msg/JointState", dtype="float64")
         def decode_joint_state(msg, spec):
             return np.array(msg.position, dtype=np.float64)
+
     """
 
     def _wrap(fn: DecoderFn):
@@ -99,19 +103,23 @@ def register_decoder(type_str: str, dtype: str):
 
 
 def register_encoder(type_str: str):
-    """Register an encoder for a ROS message type.
+    """
+    Register an encoder for a ROS message type.
 
-    Args:
+    Args
+    ----
         type_str: ROS message type (e.g., "geometry_msgs/msg/Twist")
 
     Encoder signature: (action_vec, spec, stamp_ns=None) -> ROS message
 
-    Example:
+    Example
+    -------
         @register_encoder("geometry_msgs/msg/Twist")
         def encode_twist(action_vec, spec, stamp_ns=None):
             msg = Twist()
             msg.linear.x = action_vec[0]
             return msg
+
     """
 
     def _wrap(fn: EncoderFn):
@@ -127,28 +135,33 @@ def register_encoder(type_str: str):
 
 
 def load_converter(path: str) -> Callable:
-    """Load a custom converter from a 'module.path:function_name' string.
+    """
+    Load a custom converter from a 'module.path:function_name' string.
 
-    Args:
+    Args
+    ----
         path: Converter path in format "module.path:function_name"
 
-    Returns:
+    Returns
+    -------
         The converter function
 
-    Raises:
+    Raises
+    ------
         ValueError: If path format is invalid
         ImportError: If module cannot be imported
         AttributeError: If function not found in module
+
     """
     if path in _CONVERTER_CACHE:
         return _CONVERTER_CACHE[path]
 
-    if ":" not in path:
+    if ':' not in path:
         raise ValueError(
             f"Invalid converter path '{path}'. Expected format: 'module.path:function_name'"
         )
 
-    module_path, func_name = path.rsplit(":", 1)
+    module_path, func_name = path.rsplit(':', 1)
     module = importlib.import_module(module_path)
     fn = getattr(module, func_name)
 
@@ -173,8 +186,9 @@ def get_decoder_dtype(msg_type: str) -> str:
 # =============================================================================
 
 
-def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
-    """Decode a ROS message using a registered or custom decoder.
+def decode_value(msg, spec: 'ObservationStreamSpec | ActionStreamSpec') -> Any:
+    """
+    Decode a ROS message using a registered or custom decoder.
 
     Checks for a custom decoder on the spec first, then falls back to the
     global registry.
@@ -183,40 +197,45 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
     but the dataset (and therefore the policy) expects degrees, so the decoded
     numeric array is converted from radians to degrees.
 
-    Args:
+    Args
+    ----
         msg: ROS message instance
         spec: Stream spec with msg_type and optional decoder path
 
-    Returns:
+    Returns
+    -------
         Decoded value (numpy array or string)
 
-    Raises:
+    Raises
+    ------
         ValueError: If no decoder found for message type
+
     """
     # Check for custom decoder (experimental)
-    if hasattr(spec, "decoder") and spec.decoder:
+    if hasattr(spec, 'decoder') and spec.decoder:
         fn = load_converter(spec.decoder)
         val = fn(msg, spec)
     else:
         # Fall back to registry
         fn = DECODERS.get(spec.msg_type)
         if not fn:
-            raise ValueError(f"No decoder registered for message type: {spec.msg_type}")
+            raise ValueError(f'No decoder registered for message type: {spec.msg_type}')
         val = fn(msg, spec)
 
     # Apply unit conversion: ROS (radians) -> dataset (degrees)
-    if getattr(spec, "unit_conversion", None) == "rad2deg" and isinstance(val, np.ndarray):
+    if getattr(spec, 'unit_conversion', None) == 'rad2deg' and isinstance(val, np.ndarray):
         val = np.rad2deg(val)
 
     return val
 
 
 def encode_value(
-    spec: "ActionStreamSpec",
+    spec: 'ActionStreamSpec',
     action_vec: Sequence[float],
     stamp_ns: int | None = None,
 ):
-    """Encode a flat action vector into a ROS message.
+    """
+    Encode a flat action vector into a ROS message.
 
     Checks for a custom encoder on the spec first, then falls back to the
     global registry.
@@ -225,28 +244,32 @@ def encode_value(
     ROS expects radians, so the **inverse** conversion (deg → rad) is applied
     before encoding.
 
-    Args:
+    Args
+    ----
         spec: Action stream spec with msg_type, names, clamp, and optional encoder path
         action_vec: Flat array of action values
         stamp_ns: Optional timestamp in nanoseconds for message header
 
-    Returns:
+    Returns
+    -------
         ROS message instance
 
-    Raises:
+    Raises
+    ------
         ValueError: If no encoder found for message type
+
     """
     # Apply inverse unit conversion: dataset (degrees) -> ROS (radians)
-    if getattr(spec, "unit_conversion", None) == "rad2deg":
+    if getattr(spec, 'unit_conversion', None) == 'rad2deg':
         action_vec = np.deg2rad(action_vec)
 
     # Check for custom encoder (experimental)
-    if hasattr(spec, "encoder") and spec.encoder:
+    if hasattr(spec, 'encoder') and spec.encoder:
         fn = load_converter(spec.encoder)
         return fn(action_vec, spec, stamp_ns)
 
     # Fall back to registry
     fn = ENCODERS.get(spec.msg_type)
     if not fn:
-        raise ValueError(f"No encoder registered for message type: {spec.msg_type}")
+        raise ValueError(f'No encoder registered for message type: {spec.msg_type}')
     return fn(action_vec, spec, stamp_ns)

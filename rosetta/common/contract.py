@@ -22,24 +22,23 @@ them easy to use in offline tooling, tests, and type checking.
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
 from enum import Enum
+import importlib
 from pathlib import Path
 from typing import Any
 
-import yaml
 from lerobot.utils.utils import is_valid_numpy_dtype_string
-
+import yaml
 
 # =============================================================================
 # Constants
 # =============================================================================
 
-LEROBOT_SPECIAL_DTYPES = frozenset(["video", "image", "string"])
+LEROBOT_SPECIAL_DTYPES = frozenset(['video', 'image', 'string'])
 """Special LeRobot dtypes that aren't numpy dtypes."""
 
-DEPTH_ENCODINGS = frozenset({"mono16", "16uc1", "32fc1", "32fc"})
+DEPTH_ENCODINGS = frozenset({'mono16', '16uc1', '32fc1', '32fc'})
 """Depth image encodings - not supported due to LeRobot limitations.
 
 LeRobot currently lacks proper depth image handling:
@@ -50,7 +49,8 @@ LeRobot currently lacks proper depth image handling:
 
 
 def is_valid_lerobot_dtype(dtype: str) -> bool:
-    """Check if dtype is valid for LeRobot datasets.
+    """
+    Check if dtype is valid for LeRobot datasets.
 
     Valid dtypes are:
     - Any valid numpy dtype string (float32, float64, int32, int64, bool, etc.)
@@ -67,8 +67,6 @@ def is_valid_lerobot_dtype(dtype: str) -> bool:
 class ContractValidationError(ValueError):
     """Raised when contract YAML is invalid."""
 
-    pass
-
 
 # =============================================================================
 # Enums
@@ -78,40 +76,40 @@ class ContractValidationError(ValueError):
 class ResamplePolicy(str, Enum):
     """Resampling strategy for observation streams."""
 
-    HOLD = "hold"  # Carry forward last value
-    ASOF = "asof"  # Last value within tolerance window
-    DROP = "drop"  # Only value if arrived within step window
+    HOLD = 'hold'  # Carry forward last value
+    ASOF = 'asof'  # Last value within tolerance window
+    DROP = 'drop'  # Only value if arrived within step window
 
 
 class StampSource(str, Enum):
     """Timestamp source for observations."""
 
-    RECEIVE = "receive"  # Use receive time
-    HEADER = "header"  # Use message header stamp
+    RECEIVE = 'receive'  # Use receive time
+    HEADER = 'header'  # Use message header stamp
 
 
 class SafetyBehavior(str, Enum):
     """Safety behavior when policy fails to produce actions."""
 
-    NONE = "none"  # No safety action (default)
-    ZEROS = "zeros"  # Send zero commands
-    HOLD = "hold"  # Hold last action
+    NONE = 'none'  # No safety action (default)
+    ZEROS = 'zeros'  # Send zero commands
+    HOLD = 'hold'  # Hold last action
 
 
 class BufferingStrategy(str, Enum):
     """Buffering strategy for TRANSIENT_LOCAL topics."""
 
-    NO_BUFFER = "no_buffer"  # Don't buffer (default for non-transient topics)
-    ACCUMULATE = "accumulate"  # Keep all messages up to history depth
-    RESUBSCRIBE_ON_START = "resubscribe_on_start"  # Re-subscribe when recording starts
+    NO_BUFFER = 'no_buffer'  # Don't buffer (default for non-transient topics)
+    ACCUMULATE = 'accumulate'  # Keep all messages up to history depth
+    RESUBSCRIBE_ON_START = 'resubscribe_on_start'  # Re-subscribe when recording starts
 
 
 class ResetMode(str, Enum):
     """Reset mechanism mode."""
 
-    MANUAL = "manual"  # User manually resets environment
-    SERVICE = "service"  # Call ROS2 service to reset
-    TOPIC = "topic"  # Publish to topic to trigger reset
+    MANUAL = 'manual'  # User manually resets environment
+    SERVICE = 'service'  # Call ROS2 service to reset
+    TOPIC = 'topic'  # Publish to topic to trigger reset
 
 
 # =============================================================================
@@ -123,9 +121,9 @@ class ResetMode(str, Enum):
 class AlignSpec:
     """Timestamp alignment behavior for an observation stream."""
 
-    strategy: str = "hold"  # "hold" | "asof" | "drop"
+    strategy: str = 'hold'  # "hold" | "asof" | "drop"
     tol_ms: int = 0  # as-of tolerance in ms
-    stamp: str = "receive"  # "receive" | "header"
+    stamp: str = 'receive'  # "receive" | "header"
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +132,7 @@ class ObservationSpec:
 
     key: str
     topic: str
-    type: str
+    type: str  # noqa: A003
     selector: dict[str, Any] | None = None
     image: dict[str, Any] | None = None
     align: AlignSpec | None = None
@@ -150,12 +148,12 @@ class ActionSpec:
 
     key: str
     publish_topic: str
-    type: str
+    type: str  # noqa: A003
     selector: dict[str, Any] | None = None
     from_tensor: dict[str, Any] | None = None
     publish_qos: dict[str, Any] | None = None
     publish_strategy: dict[str, Any] | None = None
-    safety_behavior: str = "none"
+    safety_behavior: str = 'none'
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
     encoder: str | None = None  # Custom encoder path: "module.path:function_name"
     unit_conversion: str | None = None  # "rad2deg" | None
@@ -167,7 +165,7 @@ class TaskSpec:
 
     key: str
     topic: str
-    type: str
+    type: str  # noqa: A003
     qos: dict[str, Any] | None = None
 
 
@@ -176,7 +174,7 @@ class AdjunctSpec:
     """Adjunct topic for recording only (not processed at inference)."""
 
     topic: str
-    type: str
+    type: str  # noqa: A003
     qos: dict[str, Any] | None = None
     buffering_strategy: str | None = None  # "no_buffer" | "accumulate" | "resubscribe_on_start"
 
@@ -204,11 +202,11 @@ class TeleopSpec:
 class ResetSpec:
     """Reset mechanism configuration."""
 
-    mode: str = "manual"
+    mode: str = 'manual'
     service: str | None = None
-    service_type: str = "std_srvs/srv/Trigger"
+    service_type: str = 'std_srvs/srv/Trigger'
     topic: str | None = None
-    topic_type: str = "std_msgs/msg/Empty"
+    topic_type: str = 'std_msgs/msg/Empty'
     reset_time_s: float = 5.0
 
 
@@ -219,7 +217,7 @@ class VisualizationSpec:
     urdf_path: str | None = None
     urdf_parameter: str | None = None
     tf_topics: list[str] | None = None
-    tf_base_frame: str = "world"
+    tf_base_frame: str = 'world'
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +239,7 @@ class Contract:
     teleop: TeleopSpec | None = None
     reset: ResetSpec | None = None
     visualization: VisualizationSpec | None = None
-    timestamp_source: str = "receive"
+    timestamp_source: str = 'receive'
 
 
 # =============================================================================
@@ -271,7 +269,7 @@ class ObservationStreamSpec(StreamSpec):
     image_channels: int
     resample_policy: str
     asof_tol_ms: int
-    dtype: str = "float32"
+    dtype: str = 'float32'
     qos: dict[str, Any] | None = None
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
@@ -311,9 +309,9 @@ def _parse_align(d: dict[str, Any] | None, context: str) -> AlignSpec | None:
     """Parse align configuration."""
     if not d:
         return None
-    strategy = _validate_enum(d.get("strategy", "hold"), ResamplePolicy, "strategy", context)
-    stamp = _validate_enum(d.get("stamp", "receive"), StampSource, "stamp", context)
-    return AlignSpec(strategy=strategy, tol_ms=int(d.get("tol_ms", 0)), stamp=stamp)
+    strategy = _validate_enum(d.get('strategy', 'hold'), ResamplePolicy, 'strategy', context)
+    stamp = _validate_enum(d.get('stamp', 'receive'), StampSource, 'stamp', context)
+    return AlignSpec(strategy=strategy, tol_ms=int(d.get('tol_ms', 0)), stamp=stamp)
 
 
 def _require_fields(data: dict, fields: list[str], context: str) -> None:
@@ -334,25 +332,30 @@ def _validate_dtype(dtype: str | None, context: str, required: bool = False) -> 
     if not is_valid_lerobot_dtype(dtype):
         raise ContractValidationError(
             f"Invalid dtype '{dtype}' in {context}. "
-            f"Must be a valid numpy dtype or one of: {sorted(LEROBOT_SPECIAL_DTYPES)}"
+            f'Must be a valid numpy dtype or one of: {sorted(LEROBOT_SPECIAL_DTYPES)}'
         )
     return dtype
 
 
 def _validate_converter_path(path: str | None, context: str) -> str | None:
-    """Validate converter path exists at contract load time.
+    """
+    Validate converter path exists at contract load time.
 
     Path format: "module.path:function_name"
 
-    Args:
+    Args
+    ----
         path: Converter path or None
         context: Error context string
 
-    Returns:
+    Returns
+    -------
         Validated path or None
 
-    Raises:
+    Raises
+    ------
         ContractValidationError: If path format is invalid or module/function not found
+
     """
     if path is None:
         return None
@@ -361,13 +364,13 @@ def _validate_converter_path(path: str | None, context: str) -> str | None:
     if not path:
         return None
 
-    if ":" not in path:
+    if ':' not in path:
         raise ContractValidationError(
             f"Invalid converter path '{path}' in {context}. "
             f"Expected format: 'module.path:function_name'"
         )
 
-    module_path, func_name = path.rsplit(":", 1)
+    module_path, func_name = path.rsplit(':', 1)
     if not module_path or not func_name:
         raise ContractValidationError(
             f"Invalid converter path '{path}' in {context}. "
@@ -394,148 +397,153 @@ def _validate_converter_path(path: str | None, context: str) -> str | None:
 # =============================================================================
 
 
-def _parse_observation(data: dict[str, Any], idx: int, section: str = "observations") -> ObservationSpec:
+def _parse_observation(
+    data: dict[str, Any], idx: int, section: str = 'observations'
+) -> ObservationSpec:
     """Parse an observation spec from YAML."""
-    ctx = f"{section}[{idx}]"
-    _require_fields(data, ["key", "topic", "type"], ctx)
+    ctx = f'{section}[{idx}]'
+    _require_fields(data, ['key', 'topic', 'type'], ctx)
 
-    if not data["topic"]:
-        raise ContractValidationError(f"Empty topic in {ctx}")
+    if not data['topic']:
+        raise ContractValidationError(f'Empty topic in {ctx}')
 
-    uc = data.get("unit_conversion")
+    uc = data.get('unit_conversion')
     if uc is not None:
         uc = str(uc).lower().strip()
-        if uc not in ("rad2deg",):
+        if uc not in ('rad2deg',):
             raise ContractValidationError(
                 f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
             )
 
     return ObservationSpec(
-        key=data["key"],
-        topic=data["topic"],
-        type=data["type"],
-        selector=data.get("selector"),
-        image=data.get("image"),
-        align=_parse_align(data.get("align"), ctx),
-        qos=data.get("qos"),
-        dtype=_validate_dtype(data.get("dtype"), ctx),
-        decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
+        key=data['key'],
+        topic=data['topic'],
+        type=data['type'],
+        selector=data.get('selector'),
+        image=data.get('image'),
+        align=_parse_align(data.get('align'), ctx),
+        qos=data.get('qos'),
+        dtype=_validate_dtype(data.get('dtype'), ctx),
+        decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
         unit_conversion=uc,
     )
 
 
 def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> ObservationSpec:
     """Parse extended data spec (rewards, signals, etc.) - dtype required."""
-    ctx = f"{section}[{idx}]"
-    _require_fields(data, ["key", "topic", "type", "dtype"], ctx)
+    ctx = f'{section}[{idx}]'
+    _require_fields(data, ['key', 'topic', 'type', 'dtype'], ctx)
 
-    if not data["topic"]:
-        raise ContractValidationError(f"Empty topic in {ctx}")
+    if not data['topic']:
+        raise ContractValidationError(f'Empty topic in {ctx}')
 
-    uc = data.get("unit_conversion")
+    uc = data.get('unit_conversion')
     if uc is not None:
         uc = str(uc).lower().strip()
-        if uc not in ("rad2deg",):
+        if uc not in ('rad2deg',):
             raise ContractValidationError(
                 f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
             )
 
     return ObservationSpec(
-        key=data["key"],
-        topic=data["topic"],
-        type=data["type"],
-        selector=data.get("selector"),
-        image=data.get("image"),
-        align=_parse_align(data.get("align"), ctx),
-        qos=data.get("qos"),
-        dtype=_validate_dtype(data["dtype"], ctx, required=True),
-        decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
+        key=data['key'],
+        topic=data['topic'],
+        type=data['type'],
+        selector=data.get('selector'),
+        image=data.get('image'),
+        align=_parse_align(data.get('align'), ctx),
+        qos=data.get('qos'),
+        dtype=_validate_dtype(data['dtype'], ctx, required=True),
+        decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
         unit_conversion=uc,
     )
 
 
-def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> ActionSpec:
+def _parse_action(data: dict[str, Any], idx: int, section: str = 'actions') -> ActionSpec:
     """Parse an action spec from YAML."""
-    ctx = f"{section}[{idx}]"
-    _require_fields(data, ["key", "publish"], ctx)
+    ctx = f'{section}[{idx}]'
+    _require_fields(data, ['key', 'publish'], ctx)
 
-    pub = data["publish"]
+    pub = data['publish']
     if not isinstance(pub, dict):
         raise ContractValidationError(f"'publish' must be a mapping in {ctx}")
 
-    _require_fields(pub, ["topic", "type"], f"{ctx}.publish")
+    _require_fields(pub, ['topic', 'type'], f'{ctx}.publish')
 
-    if not pub["topic"]:
-        raise ContractValidationError(f"Empty publish.topic in {ctx}")
+    if not pub['topic']:
+        raise ContractValidationError(f'Empty publish.topic in {ctx}')
 
     safety = _validate_enum(
-        data.get("safety_behavior", "zeros"), SafetyBehavior, "safety_behavior", ctx
+        data.get('safety_behavior', 'zeros'), SafetyBehavior, 'safety_behavior', ctx
     )
 
     # Read unit_conversion (e.g., "rad2deg")
-    uc = data.get("unit_conversion")
+    uc = data.get('unit_conversion')
     if uc is not None:
         uc = str(uc).lower().strip()
-        if uc not in ("rad2deg",):
+        if uc not in ('rad2deg',):
             raise ContractValidationError(
                 f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
             )
 
     return ActionSpec(
-        key=data["key"],
-        publish_topic=pub["topic"],
-        type=pub["type"],
-        selector=data.get("selector"),
-        from_tensor=data.get("from_tensor"),
-        publish_qos=pub.get("qos"),
-        publish_strategy=pub.get("strategy"),
+        key=data['key'],
+        publish_topic=pub['topic'],
+        type=pub['type'],
+        selector=data.get('selector'),
+        from_tensor=data.get('from_tensor'),
+        publish_qos=pub.get('qos'),
+        publish_strategy=pub.get('strategy'),
         safety_behavior=safety,
-        decoder=_validate_converter_path(data.get("decoder"), f"{ctx}.decoder"),
-        encoder=_validate_converter_path(data.get("encoder"), f"{ctx}.encoder"),
+        decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
+        encoder=_validate_converter_path(data.get('encoder'), f'{ctx}.encoder'),
         unit_conversion=uc,
     )
 
 
 def _parse_task(data: dict[str, Any], idx: int) -> TaskSpec:
     """Parse a task spec from YAML."""
-    ctx = f"tasks[{idx}]"
-    _require_fields(data, ["topic", "type"], ctx)
+    ctx = f'tasks[{idx}]'
+    _require_fields(data, ['topic', 'type'], ctx)
 
     return TaskSpec(
-        key=data.get("key", data["topic"]),
-        topic=data["topic"],
-        type=data["type"],
-        qos=data.get("qos"),
+        key=data.get('key', data['topic']),
+        topic=data['topic'],
+        type=data['type'],
+        qos=data.get('qos'),
     )
 
 
 def _parse_adjunct(data: dict[str, Any], idx: int) -> AdjunctSpec:
     """Parse an adjunct topic spec from YAML."""
-    ctx = f"adjunct[{idx}]"
-    _require_fields(data, ["topic", "type"], ctx)
+    ctx = f'adjunct[{idx}]'
+    _require_fields(data, ['topic', 'type'], ctx)
 
-    buffering_strategy = data.get("buffering_strategy")
-    
+    buffering_strategy = data.get('buffering_strategy')
+
     # Validate buffering strategy if provided
     if buffering_strategy is not None:
         buffering_strategy = _validate_enum(
-            buffering_strategy, BufferingStrategy, "buffering_strategy", ctx
+            buffering_strategy, BufferingStrategy, 'buffering_strategy', ctx
         )
-        
+
         # Validate that buffering strategy is only used with TRANSIENT_LOCAL topics
-        qos = data.get("qos", {})
-        durability = qos.get("durability", "volatile").lower()
-        
-        if buffering_strategy != BufferingStrategy.NO_BUFFER.value and durability != "transient_local":
+        qos = data.get('qos', {})
+        durability = qos.get('durability', 'volatile').lower()
+
+        if (
+            buffering_strategy != BufferingStrategy.NO_BUFFER.value
+            and durability != 'transient_local'
+        ):
             raise ContractValidationError(
                 f"buffering_strategy '{buffering_strategy}' can only be used with "
-                f"transient_local durability in {ctx}. Current durability: {durability}"
+                f'transient_local durability in {ctx}. Current durability: {durability}'
             )
 
     return AdjunctSpec(
-        topic=data["topic"],
-        type=data["type"],
-        qos=data.get("qos"),
+        topic=data['topic'],
+        type=data['type'],
+        qos=data.get('qos'),
         buffering_strategy=buffering_strategy,
     )
 
@@ -545,18 +553,18 @@ def _parse_teleop_events(data: dict[str, Any] | None) -> TeleopEventsSpec | None
     if not data:
         return None
 
-    ctx = "teleop.events"
-    _require_fields(data, ["topic", "type", "mappings"], ctx)
+    ctx = 'teleop.events'
+    _require_fields(data, ['topic', 'type', 'mappings'], ctx)
 
-    mappings = data["mappings"]
+    mappings = data['mappings']
     if not isinstance(mappings, dict):
         raise ContractValidationError(f"'mappings' must be a mapping in {ctx}")
 
     return TeleopEventsSpec(
-        topic=data["topic"],
-        msg_type=data["type"],
+        topic=data['topic'],
+        msg_type=data['type'],
         mappings={str(k): str(v) for k, v in mappings.items()},
-        qos=data.get("qos"),
+        qos=data.get('qos'),
     )
 
 
@@ -566,13 +574,11 @@ def _parse_teleop(data: dict[str, Any] | None) -> TeleopSpec | None:
         return None
 
     inputs = [
-        _parse_observation(it, i, "teleop.inputs")
-        for i, it in enumerate(data.get("inputs") or [])
+        _parse_observation(it, i, 'teleop.inputs') for i, it in enumerate(data.get('inputs') or [])
     ]
-    events = _parse_teleop_events(data.get("events"))
+    events = _parse_teleop_events(data.get('events'))
     feedback = [
-        _parse_action(it, i, "teleop.feedback")
-        for i, it in enumerate(data.get("feedback") or [])
+        _parse_action(it, i, 'teleop.feedback') for i, it in enumerate(data.get('feedback') or [])
     ]
 
     # Override safety_behavior for feedback (always none)
@@ -585,7 +591,7 @@ def _parse_teleop(data: dict[str, Any] | None) -> TeleopSpec | None:
             from_tensor=f.from_tensor,
             publish_qos=f.publish_qos,
             publish_strategy=f.publish_strategy,
-            safety_behavior="none",
+            safety_behavior='none',
             decoder=f.decoder,
             encoder=f.encoder,
             unit_conversion=f.unit_conversion,
@@ -601,21 +607,21 @@ def _parse_reset(data: dict[str, Any] | None) -> ResetSpec | None:
     if not data:
         return None
 
-    ctx = "reset"
-    mode = _validate_enum(data.get("mode", "manual"), ResetMode, "mode", ctx)
+    ctx = 'reset'
+    mode = _validate_enum(data.get('mode', 'manual'), ResetMode, 'mode', ctx)
 
-    if mode == "service" and not data.get("service"):
+    if mode == 'service' and not data.get('service'):
         raise ContractValidationError(f"'service' is required when mode is 'service' in {ctx}")
-    if mode == "topic" and not data.get("topic"):
+    if mode == 'topic' and not data.get('topic'):
         raise ContractValidationError(f"'topic' is required when mode is 'topic' in {ctx}")
 
     return ResetSpec(
         mode=mode,
-        service=data.get("service"),
-        service_type=data.get("service_type", "std_srvs/srv/Trigger"),
-        topic=data.get("topic"),
-        topic_type=data.get("topic_type", "std_msgs/msg/Empty"),
-        reset_time_s=float(data.get("reset_time_s", 5.0)),
+        service=data.get('service'),
+        service_type=data.get('service_type', 'std_srvs/srv/Trigger'),
+        topic=data.get('topic'),
+        topic_type=data.get('topic_type', 'std_msgs/msg/Empty'),
+        reset_time_s=float(data.get('reset_time_s', 5.0)),
     )
 
 
@@ -624,14 +630,14 @@ def _parse_visualization(data: dict[str, Any] | None) -> VisualizationSpec | Non
     if not data:
         return None
 
-    urdf = data.get("urdf") or {}
-    tf = data.get("tf") or {}
+    urdf = data.get('urdf') or {}
+    tf = data.get('tf') or {}
 
     return VisualizationSpec(
-        urdf_path=urdf.get("path"),
-        urdf_parameter=urdf.get("parameter"),
-        tf_topics=tf.get("topics"),
-        tf_base_frame=tf.get("base_frame", "world"),
+        urdf_path=urdf.get('path'),
+        urdf_parameter=urdf.get('parameter'),
+        tf_topics=tf.get('topics'),
+        tf_base_frame=tf.get('base_frame', 'world'),
     )
 
 
@@ -641,46 +647,55 @@ def _parse_visualization(data: dict[str, Any] | None) -> VisualizationSpec | Non
 
 
 def load_contract(path: Path | str) -> Contract:
-    """Load and validate a contract YAML file.
+    """
+    Load and validate a contract YAML file.
 
-    Args:
+    Args
+    ----
         path: Path to the contract YAML file.
 
-    Returns:
+    Returns
+    -------
         Validated Contract dataclass.
 
-    Raises:
+    Raises
+    ------
         FileNotFoundError: If the file doesn't exist.
         ContractValidationError: If the contract is invalid.
+
     """
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"Contract file not found: {path}")
+        raise FileNotFoundError(f'Contract file not found: {path}')
 
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(path.read_text(encoding='utf-8')) or {}
     except yaml.YAMLError as e:
-        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
+        raise ContractValidationError(f'Invalid YAML in {path}: {e}') from e
 
     if not isinstance(data, dict):
-        raise ContractValidationError(f"Contract must be a YAML mapping, got {type(data).__name__}")
+        raise ContractValidationError(
+            f'Contract must be a YAML mapping, got {type(data).__name__}'
+        )
 
     # Required fields
-    robot_type = data.get("robot_type")
+    robot_type = data.get('robot_type')
     if not robot_type:
-        raise ContractValidationError("robot_type is required")
+        raise ContractValidationError('robot_type is required')
 
-    fps = int(data.get("fps", 30))
+    fps = int(data.get('fps', 30))
     if fps <= 0:
-        raise ContractValidationError(f"fps must be positive, got {fps}")
+        raise ContractValidationError(f'fps must be positive, got {fps}')
 
     # Parse sections
-    observations = [_parse_observation(it, i) for i, it in enumerate(data.get("observations") or [])]
-    actions = [_parse_action(it, i) for i, it in enumerate(data.get("actions") or [])]
-    tasks = [_parse_task(it, i) for i, it in enumerate(data.get("tasks") or [])]
+    observations = [
+        _parse_observation(it, i) for i, it in enumerate(data.get('observations') or [])
+    ]
+    actions = [_parse_action(it, i) for i, it in enumerate(data.get('actions') or [])]
+    tasks = [_parse_task(it, i) for i, it in enumerate(data.get('tasks') or [])]
 
     # Parse adjunct topics (can be single object or list)
-    adjunct_raw = data.get("adjunct")
+    adjunct_raw = data.get('adjunct')
     if adjunct_raw is None:
         adjunct = []
     elif isinstance(adjunct_raw, list):
@@ -690,29 +705,33 @@ def load_contract(path: Path | str) -> Contract:
         adjunct = [_parse_adjunct(adjunct_raw, 0)]
 
     # Extended data (dtype required)
-    rewards = [_parse_data_spec(it, i, "rewards") for i, it in enumerate(data.get("rewards") or [])]
-    signals = [_parse_data_spec(it, i, "signals") for i, it in enumerate(data.get("signals") or [])]
-    info = [_parse_data_spec(it, i, "info") for i, it in enumerate(data.get("info") or [])]
+    rewards = [
+        _parse_data_spec(it, i, 'rewards') for i, it in enumerate(data.get('rewards') or [])
+    ]
+    signals = [
+        _parse_data_spec(it, i, 'signals') for i, it in enumerate(data.get('signals') or [])
+    ]
+    info = [_parse_data_spec(it, i, 'info') for i, it in enumerate(data.get('info') or [])]
     comp_data = [
-        _parse_data_spec(it, i, "complementary_data")
-        for i, it in enumerate(data.get("complementary_data") or [])
+        _parse_data_spec(it, i, 'complementary_data')
+        for i, it in enumerate(data.get('complementary_data') or [])
     ]
 
     return Contract(
         robot_type=robot_type,
         fps=fps,
-        max_duration_s=float(data.get("max_duration_s", 30.0)),
+        max_duration_s=float(data.get('max_duration_s', 30.0)),
         observations=observations,
         actions=actions,
         tasks=tasks,
-        recording=data.get("recording") or {},
+        recording=data.get('recording') or {},
         adjunct=adjunct,
         rewards=rewards,
         signals=signals,
         info=info,
         complementary_data=comp_data,
-        teleop=_parse_teleop(data.get("teleop")),
-        reset=_parse_reset(data.get("reset")),
-        visualization=_parse_visualization(data.get("visualization")),
-        timestamp_source=str(data.get("timestamp_source", "receive")).lower(),
+        teleop=_parse_teleop(data.get('teleop')),
+        reset=_parse_reset(data.get('reset')),
+        visualization=_parse_visualization(data.get('visualization')),
+        timestamp_source=str(data.get('timestamp_source', 'receive')).lower(),
     )

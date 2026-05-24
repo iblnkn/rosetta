@@ -1,6 +1,7 @@
-from setuptools import setup, find_packages
-import os
 from glob import glob
+import os
+
+from setuptools import find_packages, setup
 
 # Main Rosetta package - provides ROS2 nodes and common utilities
 # The LeRobot plugins are in separate packages:
@@ -39,6 +40,9 @@ setup(
         'Topic :: Software Development',
         'Topic :: Scientific/Engineering',
     ],
-    description='Rosetta: ROS 2 utilities, common contract handling, and nodes for LeRobot integration.',
+    description=(
+        'Rosetta: ROS 2 utilities, common contract handling,'
+        ' and nodes for LeRobot integration.'
+    ),
     license='Apache-2.0',
 )
