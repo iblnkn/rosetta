@@ -151,12 +151,14 @@ class RosettaClientNode(LifecycleNode):
             'sim_time_multiplier',
             1.0,
             ParameterDescriptor(
-                description='Multiplier for fps sent to LeRobot '
-                '(contract_fps * sim_time_multiplier). '
-                'Use values < 1.0 for slow sims (e.g., 0.5 for '
-                '0.5x speed sim) to maintain wall-time action '
-                'rate. Set to 1.0 for real-time or when not '
-                'using sim time.'
+                description=(
+                    'Multiplier for fps sent to LeRobot '
+                    '(contract_fps * sim_time_multiplier). '
+                    'Use values < 1.0 for slow sims (e.g., 0.5 for '
+                    '0.5x speed sim) to maintain wall-time action '
+                    'rate. Set to 1.0 for real-time or when not '
+                    'using sim time.'
+                )
             ),
         )
 
@@ -288,7 +290,7 @@ class RosettaClientNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        """Clean up before destruction."""
+        """Clean up resources before destruction."""
         self._accepting_goals = False
         self._stop_policy_server()
 

@@ -213,8 +213,7 @@ def generate_launch_description():
             default_value=str(hil_cfg['human_reward_negative']),
             description='Reward value for human negative override',
         ),
-        # --- Reward classifier ---
-        # defaults from rosetta_hil_manager.yaml reward_classifier
+        # --- Reward classifier (defaults from rosetta_hil_manager.yaml) ---
         DeclareLaunchArgument(
             'reward_classifier_contract_path',
             default_value=reward_cfg.get('contract_path', ''),

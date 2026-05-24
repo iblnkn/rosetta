@@ -12,12 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-ROS2 utilities.
-
-QoS profiles, message field access, timestamp helpers,
-and distribution compatibility.
-"""
+"""ROS2 utilities: QoS profiles, message field access, timestamp helpers."""
 
 from __future__ import annotations
 
@@ -67,10 +62,14 @@ def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile | None:
         DurabilityPolicy.TRANSIENT_LOCAL if dur == 'transient_local' else DurabilityPolicy.VOLATILE
     )
     return QoSProfile(
-        reliability=reliability,
-        history=history,
+        reliability=ReliabilityPolicy.BEST_EFFORT
+        if rel == 'best_effort'
+        else ReliabilityPolicy.RELIABLE,
+        history=HistoryPolicy.KEEP_ALL if hist == 'keep_all' else HistoryPolicy.KEEP_LAST,
         depth=depth,
-        durability=durability,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL
+        if dur == 'transient_local'
+        else DurabilityPolicy.VOLATILE,
     )
 
 
@@ -83,8 +82,7 @@ def detect_ros_distro() -> str:
     """
     Detect ROS2 distribution from environment.
 
-    Returns
-    -------
+    Returns:
         Distribution name in lowercase (e.g., 'humble', 'jazzy', 'rolling').
         Defaults to 'humble' if ROS_DISTRO is not set.
 
@@ -104,8 +102,7 @@ def is_jazzy_or_newer() -> bool:
     so any distro name >= "jazzy" (including "rolling") is considered newer.
     Only known pre-Jazzy distros (humble, iron, galactic, foxy, etc.) return False.
 
-    Returns
-    -------
+    Returns:
         True if Jazzy/Rolling/Kilted or newer, False otherwise (Humble, etc.)
 
     """
@@ -132,12 +129,10 @@ def extract_qos_numeric_values(q: QoSProfile | int) -> dict[str, int]:
     the underlying RMW numeric values. This approach works consistently
     across Humble and Jazzy.
 
-    Args
-    ----
+    Args:
         q: Either a QoSProfile object or an integer depth value
 
-    Returns
-    -------
+    Returns:
         dict with keys: depth, history, reliability, durability, liveliness
         All values are integers matching RMW QoS policy constants.
 
@@ -175,12 +170,10 @@ def is_transient_local(qos: QoSProfile | int) -> bool:
     """
     Check if QoS profile has TRANSIENT_LOCAL durability.
 
-    Args
-    ----
+    Args:
         qos: Either a QoSProfile object or an integer depth value
 
-    Returns
-    -------
+    Returns:
         True if QoS uses TRANSIENT_LOCAL durability, False otherwise
 
     """
@@ -197,12 +190,10 @@ def get_qos_depth(qos: QoSProfile | int) -> int:
     """
     Extract history depth from QoS profile.
 
-    Args
-    ----
+    Args:
         qos: Either a QoSProfile object or an integer depth value
 
-    Returns
-    -------
+    Returns:
         History depth as integer
 
     """

@@ -55,8 +55,6 @@ import yaml
 
 from .common import decoders as _decoders  # noqa: F401 - registers decoders
 from .common import encoders as _encoders  # noqa: F401 - registers encoders
-
-# Import contract utilities
 from .common.contract import load_contract
 from .common.contract_utils import iter_specs
 from .common.ros2_utils import (
@@ -292,7 +290,7 @@ class EpisodeRecorderNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        """Clean up before destruction."""
+        """Clean up resources before destruction."""
         self._accepting_goals = False
         self._stop_event.set()
         self._close_writer()
@@ -334,8 +332,7 @@ class EpisodeRecorderNode(LifecycleNode):
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
 
-        Returns
-        -------
+        Returns:
             List of (topic, type_str, qos, buffering_strategy) tuples
 
         """
@@ -572,7 +569,7 @@ class EpisodeRecorderNode(LifecycleNode):
         return response
 
     def _service_record(self, prompt: str) -> None:
-        """Run the recording loop for service-based starts (no action goal handle)."""
+        """Record loop for service-based starts (no action goal handle)."""
         bag_dir = self._create_bag_dir()
         max_duration = self._default_max_duration
 
@@ -756,12 +753,10 @@ class EpisodeRecorderNode(LifecycleNode):
                     buf_size = len(self._buffers.get(topic, []))
                     if buf_size == 0:
                         self.get_logger().warning(
-                            f'After re-subscribe, {topic} buffer is EMPTY! '
-                            f'This means the publisher is not '
-                            f'publishing with TRANSIENT_LOCAL '
-                            f'QoS, or the publisher is not '
-                            f'running. Recording will continue '
-                            f'without this data.'
+                            f'After re-subscribe, {topic} buffer is '
+                            f'EMPTY! Publisher may not use '
+                            f'TRANSIENT_LOCAL QoS or is not running. '
+                            f'Recording will continue without this data.'
                         )
                     else:
                         self.get_logger().info(

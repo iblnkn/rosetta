@@ -101,7 +101,6 @@ class RosettaHilManagerNode(LifecycleNode):
     """
 
     def __init__(self):
-        """Initialize the HIL manager node and declare parameters."""
         super().__init__('hil_manager', enable_logger_service=True)
 
         # -------------------- Parameters --------------------
@@ -414,7 +413,7 @@ class RosettaHilManagerNode(LifecycleNode):
         return TransitionCallbackReturn.SUCCESS
 
     def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
-        """Clean up before destruction."""
+        """Clean up resources before destruction."""
         self._accepting_goals = False
         with self._mux_lock:
             self._stop_requested = True
@@ -832,10 +831,8 @@ class RosettaHilManagerNode(LifecycleNode):
         """
         Run the episode feedback loop until a termination condition is met.
 
-        Returns
-        -------
+        Returns:
             Termination reason string.
-
         """
         feedback_interval = 1.0 / self.get_parameter('feedback_rate_hz').value
         start_time = time.time()

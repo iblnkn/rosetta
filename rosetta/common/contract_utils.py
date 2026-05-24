@@ -151,12 +151,6 @@ class StreamBuffer:
             if self.last_ts is None or ts_ns >= self.last_ts:
                 self.last_ts, self.last_val = ts_ns, val
 
-    def reset(self) -> None:
-        """Clear buffered data (e.g., between episodes)."""
-        with self._lock:
-            self.last_ts = None
-            self.last_val = None
-
     def sample(self, tick_ns: int) -> Any | None:
         """Sample according to policy at a given tick."""
         with self._lock:

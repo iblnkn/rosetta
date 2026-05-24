@@ -58,8 +58,8 @@ import rosbag2_py
 from rosidl_runtime_py.utilities import get_message
 import yaml
 
-from .common import decoders as _decoders  # noqa: F401
-from .common import encoders as _encoders  # noqa: F401
+from .common import decoders as _decoders  # noqa: F401, E402
+from .common import encoders as _encoders  # noqa: F401, E402
 from .common.contract import load_contract, ObservationStreamSpec, StreamSpec
 from .common.contract_utils import (
     build_feature,
@@ -505,9 +505,10 @@ def main():
         '--root',
         type=Path,
         default=None,
-        help='Parent directory for datasets. Dataset '
-        'saved to root/repo-id. '
-        '(default: ~/.cache/huggingface/lerobot)',
+        help=(
+            'Parent directory for datasets. Dataset saved to '
+            'root/repo-id. (default: ~/.cache/huggingface/lerobot)'
+        ),
     )
     parser.add_argument(
         '--push-to-hub', action='store_true', help='Upload to HuggingFace Hub after porting'
@@ -526,8 +527,10 @@ def main():
         type=str,
         default='libsvtav1',
         choices=['libsvtav1', 'libx264', 'h264', 'hevc', 'h264_nvenc'],
-        help='Video codec for encoding (default: libsvtav1). '
-        'Use libx264/h264 for faster encoding.',
+        help=(
+            'Video codec for encoding (default: libsvtav1). '
+            'Use libx264/h264 for faster encoding.'
+        ),
     )
 
     args = parser.parse_args()

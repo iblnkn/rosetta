@@ -39,7 +39,8 @@ LEROBOT_SPECIAL_DTYPES = frozenset(['video', 'image', 'string'])
 """Special LeRobot dtypes that aren't numpy dtypes."""
 
 DEPTH_ENCODINGS = frozenset({'mono16', '16uc1', '32fc1', '32fc'})
-"""Depth image encodings - not supported due to LeRobot limitations.
+"""
+Depth image encodings - not supported due to LeRobot limitations.
 
 LeRobot currently lacks proper depth image handling:
 - Forces all images through PIL.convert("RGB")

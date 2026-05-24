@@ -49,10 +49,6 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from .contract import DEPTH_ENCODINGS, ObservationStreamSpec
-from .converters import register_decoder
-from .ros2_utils import dot_get
-
 # Optional cv2 for compressed image decoding (falls back to PIL)
 try:
     import cv2
@@ -61,6 +57,10 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
     _HAS_CV2 = False
+
+from .contract import DEPTH_ENCODINGS, ObservationStreamSpec
+from .converters import register_decoder
+from .ros2_utils import dot_get
 
 # =============================================================================
 # Image Encoding Configuration
