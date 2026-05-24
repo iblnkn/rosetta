@@ -178,6 +178,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._writer_lock = threading.Lock()
         self._is_recording = False
         self._messages_written = 0
+        self._topic_msg_counts: dict[str, int] = {}
         self._stop_event = threading.Event()
         self._goal_handle = None
         self._cbg = ReentrantCallbackGroup()
@@ -518,6 +519,9 @@ class EpisodeRecorderNode(LifecycleNode):
                         timestamp_ns,
                     )
                     self._messages_written += 1
+                    self._topic_msg_counts[_topic] = (
+                        self._topic_msg_counts.get(_topic, 0) + 1
+                    )
                 except Exception as e:
                     self.get_logger().error(f'Write failed on {_topic}: {e}')
                     self._stop_event.set()
@@ -681,6 +685,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._goal_handle = goal_handle
         self._stop_event.clear()  # Reset for new recording
         self._messages_written = 0
+        self._topic_msg_counts = {}
 
         prompt = goal_handle.request.prompt or ''
         max_duration = self._default_max_duration
@@ -752,7 +757,22 @@ class EpisodeRecorderNode(LifecycleNode):
 
         self._last_bag_dir = bag_dir
         result.messages_written = self._messages_written
-        self.get_logger().info(f'Recorded {self._messages_written} messages to {bag_dir}')
+
+        # Log per-topic summary so issues are visible without ros2 bag info
+        elapsed = time.time() - start_time
+        lines = []
+        for topic_name, _, _, _ in self._topics:
+            count = self._topic_msg_counts.get(topic_name, 0)
+            marker = ' (!)' if count == 0 else ''
+            lines.append(f'  {topic_name}: {count}{marker}')
+        for topic_name, _, _, _ in self._discovered_topics:
+            count = self._topic_msg_counts.get(topic_name, 0)
+            if count > 0:
+                lines.append(f'  {topic_name}: {count}')
+        self.get_logger().info(
+            f'Recorded {self._messages_written} messages to {bag_dir} '
+            f'({elapsed:.1f}s)\n' + '\n'.join(lines)
+        )
 
         # Set terminal state
         if goal_handle.is_cancel_requested:
