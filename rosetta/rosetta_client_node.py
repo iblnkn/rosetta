@@ -37,6 +37,7 @@ from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot_robot_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import _TopicBridge
+import numpy as np
 from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -44,7 +45,10 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rosetta_interfaces.action import RunPolicy
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
+from .common.contract_utils import get_namespaced_names
+from .common.converters import to_actuator_space
 from .common.ros2_utils import is_jazzy_or_newer
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
@@ -161,6 +165,40 @@ class RosettaClientNode(LifecycleNode):
                 )
             ),
         )
+        self.declare_parameter(
+            'publish_action_chunk',
+            True,
+            ParameterDescriptor(
+                description=(
+                    'Publish the full predicted action chunk from the action queue '
+                    'as a trajectory_msgs/JointTrajectory for visualization (e.g. Rerun).'
+                )
+            ),
+        )
+        self.declare_parameter(
+            'action_chunk_topic',
+            '/inference/action_chunk',
+            ParameterDescriptor(
+                description='Topic for the predicted action chunk JointTrajectory.'
+            ),
+        )
+        self.declare_parameter(
+            'action_chunk_rate_hz',
+            10.0,
+            ParameterDescriptor(
+                description='Rate at which the predicted action chunk is republished.'
+            ),
+        )
+        self.declare_parameter(
+            'action_chunk_joint_names',
+            [],
+            ParameterDescriptor(
+                description=(
+                    'Joint names (URDF order) matching the action vector. If empty, '
+                    'they are derived from the contract (state selector, then action selector).'
+                )
+            ),
+        )
 
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
@@ -170,6 +208,8 @@ class RosettaClientNode(LifecycleNode):
         self._active_goal = None
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
+        self._action_chunk_pub = None
+        self._action_chunk_warned = False
 
         # Topic bridge: manages observation subscriptions + action publishers
         self._rosetta_config: RosettaConfig | None = None
@@ -211,6 +251,14 @@ class RosettaClientNode(LifecycleNode):
         )
         self._bridge = _TopicBridge(self._rosetta_config)
         self._bridge.setup(self)
+
+        # Optional side-channel publisher for the predicted action chunk (visualization)
+        if self.get_parameter('publish_action_chunk').value:
+            self._action_chunk_pub = self.create_publisher(
+                JointTrajectory,
+                self.get_parameter('action_chunk_topic').value,
+                2,
+            )
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -424,6 +472,16 @@ class RosettaClientNode(LifecycleNode):
             )
             feedback_thread.start()
 
+            chunk_stop = threading.Event()
+            chunk_thread = None
+            if self._action_chunk_pub is not None:
+                chunk_thread = threading.Thread(
+                    target=self._action_chunk_loop,
+                    args=(client, chunk_stop),
+                    daemon=True,
+                )
+                chunk_thread.start()
+
             try:
                 client.control_loop(task=task)
             finally:
@@ -431,6 +489,9 @@ class RosettaClientNode(LifecycleNode):
                 receiver.join(timeout=THREAD_JOIN_TIMEOUT_SEC)
                 feedback_stop.set()
                 feedback_thread.join(timeout=FEEDBACK_THREAD_JOIN_TIMEOUT_SEC)
+                chunk_stop.set()
+                if chunk_thread is not None:
+                    chunk_thread.join(timeout=FEEDBACK_THREAD_JOIN_TIMEOUT_SEC)
 
             if goal_handle.is_cancel_requested:
                 result.success = False
@@ -465,6 +526,110 @@ class RosettaClientNode(LifecycleNode):
                 feedback.published_actions = max(0, client.latest_action)
             feedback.status = 'executing'
             goal_handle.publish_feedback(feedback)
+
+    def _resolve_chunk_joint_names(self, n_dims: int) -> list[str]:
+        """Resolve URDF joint names (in action-vector order) for the chunk message.
+
+        Preference order:
+          1. The ``action_chunk_joint_names`` parameter (if its length matches).
+          2. A non-image observation selector whose width matches the action
+             vector (its joint names are the URDF names, e.g. ``position.shoulder_pan_joint``).
+          3. The action selector names themselves (e.g. ``shoulder_pan.pos``).
+        """
+        override = list(self.get_parameter('action_chunk_joint_names').value)
+        if len(override) == n_dims:
+            return [str(name) for name in override]
+
+        # Try to map from an observation selector of matching width (gives URDF names).
+        for spec in self._rosetta_config.observation_specs:
+            if getattr(spec, 'is_image', False):
+                continue
+            names = get_namespaced_names(spec)
+            if len(names) == n_dims:
+                return [name.split('.', 1)[1] if '.' in name else name for name in names]
+
+        # Fall back to the action selector names (strip a trailing field, e.g. ".pos").
+        fallback: list[str] = []
+        for spec in self._rosetta_config.action_specs:
+            for name in get_namespaced_names(spec):
+                fallback.append(name.split('.', 1)[0] if '.' in name else name)
+        return fallback
+
+    def _action_chunk_loop(
+        self,
+        client: RobotClient,
+        stop_event: threading.Event,
+    ) -> None:
+        """Republish the queued (future) action chunk as a JointTrajectory.
+
+        Reads LeRobot's ``action_queue`` (post-aggregation actions in policy
+        space) and converts each step into actuator/controller space using the
+        shared ``to_actuator_space`` helper (the same unit-conversion + clamp
+        transform ``encode_value`` applies), so no decoding logic is duplicated
+        here. The predicted horizon is published for downstream visualizers.
+        """
+        rate = float(self.get_parameter('action_chunk_rate_hz').value)
+        interval = 1.0 / rate if rate > 0 else 0.1
+
+        # Map each action spec to its slice of the flat action vector so the
+        # contract-aware conversion can be applied per spec.
+        spec_slices = []
+        offset = 0
+        for spec in self._rosetta_config.action_specs:
+            width = len(get_namespaced_names(spec))
+            spec_slices.append((spec, offset, width))
+            offset += width
+        n_dims = offset
+        if n_dims == 0:
+            return
+
+        joint_names = self._resolve_chunk_joint_names(n_dims)
+        fps = float(getattr(self._rosetta_config.action_specs[0], 'fps', 50) or 50)
+
+        while not stop_event.wait(interval):
+            try:
+                with client.action_queue_lock:
+                    actions = list(client.action_queue.queue)
+                if not actions:
+                    continue
+                actions.sort(key=lambda a: a.get_timestep())
+
+                rows = []
+                timesteps = []
+                for a in actions:
+                    vec = a.get_action()
+                    if hasattr(vec, 'detach'):
+                        vec = vec.detach().cpu().numpy()
+                    vec = np.asarray(vec, dtype=np.float64).flatten()
+                    if vec.shape[0] != n_dims:
+                        rows = []
+                        break
+                    # Reuse the contract's conversion (deg→rad + clamp) per spec.
+                    converted = np.concatenate(
+                        [to_actuator_space(spec, vec[start:start + width])
+                         for spec, start, width in spec_slices]
+                    )
+                    rows.append(converted)
+                    timesteps.append(int(a.get_timestep()))
+                if not rows:
+                    continue
+
+                traj = JointTrajectory()
+                traj.header.stamp = self.get_clock().now().to_msg()
+                traj.joint_names = joint_names
+                t0 = timesteps[0]
+                for i, ts in enumerate(timesteps):
+                    point = JointTrajectoryPoint()
+                    point.positions = rows[i].tolist()
+                    dt = max(0.0, (ts - t0) / fps)
+                    point.time_from_start.sec = int(dt)
+                    point.time_from_start.nanosec = int((dt - int(dt)) * 1e9)
+                    traj.points.append(point)
+                self._action_chunk_pub.publish(traj)
+            except Exception as exc:  # noqa: BLE001 - visualization only, keep thread alive
+                if not self._action_chunk_warned:
+                    self.get_logger().warning(f'Action chunk publishing failed: {exc}')
+                    self._action_chunk_warned = True
 
     def _build_config(self, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters."""
