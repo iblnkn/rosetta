@@ -378,6 +378,7 @@ def port_bags(
     num_shards: int | None = None,
     shard_index: int | None = None,
     vcodec: str = 'libsvtav1',
+    streaming_encoding: bool = False,
 ):
     """
     Port ROS2 bags to LeRobot dataset format.
@@ -392,6 +393,7 @@ def port_bags(
     num_shards: Total number of shards for parallel processing.
     shard_index: Index of this shard (0 to num_shards-1).
     vcodec: Video codec for encoding (libsvtav1, libx264, hevc, etc.).
+    streaming_encoding: Encode frames directly instead of via intermediate PNGs (faster, identical output).
 
     """
     contract = load_contract(contract_path)
@@ -427,6 +429,7 @@ def port_bags(
         fps=contract.fps,
         features=features,
         vcodec=vcodec,
+        streaming_encoding=streaming_encoding,
     )
 
     start_time = time.time()
@@ -532,6 +535,11 @@ def main():
             'Use libx264/h264 for faster encoding.'
         ),
     )
+    parser.add_argument(
+        '--streaming-encoding',
+        action='store_true',
+        help='Encode frames directly instead of via intermediate PNGs (faster, identical output)',
+    )
 
     args = parser.parse_args()
 
@@ -547,6 +555,7 @@ def main():
             num_shards=args.num_shards,
             shard_index=args.shard_index,
             vcodec=args.vcodec,
+            streaming_encoding=args.streaming_encoding,
         )
     except KeyboardInterrupt:
         logging.info('\nInterrupted by user')
