@@ -240,11 +240,10 @@ class RosettaClientNode(LifecycleNode):
         self._contract_path = self.get_parameter("contract_path").value
         self._pretrained = self.get_parameter("pretrained_name_or_path").value
 
-        if not self._contract_path:
-            self.get_logger().error("contract_path parameter required")
-            return TransitionCallbackReturn.FAILURE
-        # pretrained_name_or_path may be empty at node level: callers can supply
-        # it per-goal via RunPolicy.pretrained_name_or_path or policy_name instead.
+        # contract_path may be empty: when the registry owns contracts, the
+        # first goal's `bundle.contract_path` stands up the topic bridge via
+        # `_swap_contract_if_needed`. We only build the bridge eagerly here
+        # if a node-level default was supplied.
         if self._pretrained:
             err = validate_pretrained(self._pretrained)
             if err is not None:
@@ -264,17 +263,25 @@ class RosettaClientNode(LifecycleNode):
                 f"{sorted(self._policy_registry.keys())}"
             )
 
-        # Create topic bridge (observation subscriptions + lifecycle action publishers)
-        # Bridge uses contract fps (unscaled) for ROS2 timing (watchdog, etc.)
-        # ROS2 clock respects use_sim_time and /clock, so watchdog operates in sim time
+        # Eagerly build the topic bridge only if a node-level contract was
+        # supplied; otherwise defer to the first goal. Bridge uses contract
+        # fps (unscaled) for ROS2 timing (watchdog, etc.). ROS2 clock respects
+        # use_sim_time and /clock, so watchdog operates in sim time.
         is_classifier = self.get_parameter("is_classifier").value
-        self._rosetta_config = RosettaConfig(
-            id="rosetta",
-            config_path=self._contract_path,
-            is_classifier=is_classifier,
-        )
-        self._bridge = _TopicBridge(self._rosetta_config)
-        self._bridge.setup(self)
+        if self._contract_path:
+            self._rosetta_config = RosettaConfig(
+                id="rosetta",
+                config_path=self._contract_path,
+                is_classifier=is_classifier,
+            )
+            self._bridge = _TopicBridge(self._rosetta_config)
+            self._bridge.setup(self)
+        else:
+            self.get_logger().info(
+                "No node-level contract_path; bridge initialization deferred "
+                "to first goal (must resolve contract_path via registry or "
+                "RunPolicy goal field)."
+            )
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -649,12 +656,26 @@ class RosettaClientNode(LifecycleNode):
         # Resolve contract: registry entry > launch-time node default. We
         # fall back to the launch-time param (not self._contract_path) so
         # that a goal without a registry override always swings back to the
-        # default contract rather than inheriting a previously-swapped one.
-        # The node default is guaranteed non-empty by on_configure. The
-        # actual bridge swap (when this differs from the currently-loaded
-        # contract) happens at the start of _execute.
+        # node-default contract rather than inheriting a previously-swapped
+        # one. With the registry-owns-contracts pattern the launch-time
+        # default may be empty, in which case the registry entry is the
+        # only source. The actual bridge swap (when this differs from the
+        # currently-loaded contract, or when no bridge exists yet) happens
+        # at the start of _execute.
         if not bundle.contract_path:
             bundle.contract_path = self.get_parameter("contract_path").value
+
+        if not bundle.contract_path:
+            entry_hint = (
+                f"registry entry '{request.policy_name}'"
+                if request.policy_name
+                else "the resolved policy"
+            )
+            return None, (
+                f"No contract_path resolved for {entry_hint}. "
+                "Set 'contract_path' on the registry entry or pass "
+                "contract_path:= at launch."
+            )
 
         return bundle, None
 
