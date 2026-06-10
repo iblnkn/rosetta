@@ -1,4 +1,3 @@
-
 """LeRobot async inference policy server entrypoint for Rosetta.
 
 Importing ``lerobot_policy_sns_diffusion`` registers the ``SNSDiffusionConfig``
@@ -17,10 +16,10 @@ entry point, this one-line shim is the minimum glue needed.
 """
 
 import lerobot_policy_sns_diffusion  # noqa: F401 - registers config subclass
-import lerobot_policy_deepmimic_bc  # noqa: F401
+
+# import lerobot_policy_deepmimic_bc  # noqa: F401
 
 from rosetta.common.rtc_policy_server import serve
-
 
 if __name__ == "__main__":
     serve()

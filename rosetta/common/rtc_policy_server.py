@@ -40,10 +40,11 @@ from concurrent import futures
 
 # Register SNSDiffusionConfig before anything loads a checkpoint
 import lerobot_policy_sns_diffusion  # noqa: F401
-import lerobot_policy_deepmimic_bc  # noqa: F401
-from lerobot_policy_deepmimic_bc.processor_deepmimic_bc import (
-    make_deepmimic_bc_pre_post_processors,
-)
+
+# import lerobot_policy_deepmimic_bc  # noqa: F401
+# from lerobot_policy_deepmimic_bc.processor_deepmimic_bc import (
+#     make_deepmimic_bc_pre_post_processors,
+# )
 
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.constants import SUPPORTED_POLICIES
@@ -118,8 +119,8 @@ class RTCPolicyServer(PolicyServer):
             )
 
         path = str(policy_specs.pretrained_name_or_path)
-        is_standalone_ckpt = (
-            os.path.isfile(path) and path.lower().endswith(_STANDALONE_CKPT_EXTS)
+        is_standalone_ckpt = os.path.isfile(path) and path.lower().endswith(
+            _STANDALONE_CKPT_EXTS
         )
         if not is_standalone_ckpt:
             return super().SendPolicyInstructions(request, context)
@@ -155,8 +156,8 @@ class RTCPolicyServer(PolicyServer):
             self.policy.config.device = self.device
 
         if self.policy_type == "deepmimic_bc":
-            self.preprocessor, self.postprocessor = make_deepmimic_bc_pre_post_processors(
-                self.policy.config
+            self.preprocessor, self.postprocessor = (
+                make_deepmimic_bc_pre_post_processors(self.policy.config)
             )
         else:
             raise NotImplementedError(
@@ -391,7 +392,8 @@ class RTCPolicyServer(PolicyServer):
         lerobot_features = self.lerobot_features
         if not image_features:
             lerobot_features = {
-                k: v for k, v in self.lerobot_features.items()
+                k: v
+                for k, v in self.lerobot_features.items()
                 if not k.startswith(OBS_IMAGES)
             }
 
