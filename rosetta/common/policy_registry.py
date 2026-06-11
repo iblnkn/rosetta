@@ -49,10 +49,7 @@ def validate_pretrained(path: str) -> str | None:
 
     looks_local = path.startswith(("/", "./", "../"))
     if looks_local:
-        # Accept either a standalone checkpoint file (e.g. deepmimic_bc .pt)
-        # or an HF-style pretrained directory containing config.json.
-        if os.path.isfile(path):
-            return None
+        # Accept an HF-style pretrained directory containing config.json.
         if not os.path.isdir(path):
             return f"Local model path does not exist: {path}"
         if not os.path.isfile(os.path.join(path, "config.json")):
