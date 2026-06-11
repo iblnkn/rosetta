@@ -182,24 +182,24 @@ Launch the Rosetta client with the appropriate contract and pretrained policy ch
 * ACT
   ```bash
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
     policy_type:=act
   # isaac
   ros2 launch rosetta rosetta_client_launch.py
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
     policy_type:=act
   ```
 * Diffusion Policy
   ```bash
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
     policy_type:=diffusion
   # isaac
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
     policy_type:=diffusion
   ```
