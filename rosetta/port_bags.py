@@ -73,6 +73,7 @@ from .common.contract_utils import (
     StreamBuffer,
     zeros_for_spec,
 )
+from .common.decoders import _nearest_resize
 from .common.ros2_utils import get_message_timestamp_ns
 
 # Type alias for processors (optional import)
@@ -435,6 +436,32 @@ def _sample_frame(
     return frame
 
 
+def _conform_images_to_specs(
+    frame: dict[str, Any],
+    image_specs: list[ObservationStreamSpec],
+) -> None:
+    """Resize a frame's image entries to the contract's declared shape, in place.
+
+    Decoders return native camera resolution; the dataset image feature is
+    declared from ``spec.image_shape`` (see ``build_feature``), and
+    ``zeros_for_spec`` placeholders are emitted at that shape. On the
+    no-observation-processor path nothing else resizes the frame, so without
+    this step native-resolution frames would mismatch the declared feature and
+    ``add_frame`` would reject them. Nearest-neighbor matches the historical
+    decode-time resize, so datasets ported before the decoder change stay
+    consistent. Already-correct frames (incl. ``zeros_for_spec``) short-circuit
+    in ``_nearest_resize``.
+    """
+    for spec in image_specs:
+        img = frame.get(spec.key)
+        if img is None or spec.image_shape is None:
+            continue
+        h, w = spec.image_shape
+        frame[spec.key] = _nearest_resize(
+            np.asarray(img, dtype=np.uint8), int(h), int(w)
+        )
+
+
 def _stream_frames_from_bag(
     bag_dir: Path,
     specs: list[StreamSpec],
@@ -471,6 +498,13 @@ def _stream_frames_from_bag(
 
     topic_types = _get_topic_types(reader)
     buffers = _build_buffers(specs, topic_types)
+
+    # Without an observation processor to crop/resize, image frames come out at
+    # native camera resolution and must be conformed to the contract's declared
+    # feature shape before add_frame (decoders no longer resize).
+    image_specs = [
+        s for s in specs if isinstance(s, ObservationStreamSpec) and s.is_image
+    ]
 
     # Filter reader to only yield messages for contract topics, skipping all others
     reader.set_filter(rosbag2_py.StorageFilter(topics=list(buffers.keys())))
@@ -518,6 +552,9 @@ def _stream_frames_from_bag(
                 # Direct sampling (original path, no processor overhead)
                 frame = _sample_frame(current_tick_ns, buffers)
 
+            if obs_processor is None:
+                _conform_images_to_specs(frame, image_specs)
+
             frame["is_first"] = np.array([frames_emitted == 0], dtype=bool)
             frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
             frame["is_terminal"] = np.array(
@@ -564,6 +601,9 @@ def _stream_frames_from_bag(
             frame = _robot_dicts_to_frame(robot_obs, robot_action, specs)
         else:
             frame = _sample_frame(current_tick_ns, buffers)
+
+        if obs_processor is None:
+            _conform_images_to_specs(frame, image_specs)
 
         frame["is_first"] = np.array([frames_emitted == 0], dtype=bool)
         frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
@@ -643,6 +683,17 @@ def port_bags(
             to_transition=robot_action_to_transition,
             to_output=transition_to_robot_action,
         )
+
+    if obs_processor is None:
+        n_image_specs = sum(
+            1 for s in specs if isinstance(s, ObservationStreamSpec) and s.is_image
+        )
+        if n_image_specs:
+            logging.info(
+                "No observation processor given; resizing %d image stream(s) to the "
+                "contract image_shape (nearest-neighbor, no crop).",
+                n_image_specs,
+            )
 
     all_bag_dirs = find_bag_dirs(raw_dir)
     total_bags = len(all_bag_dirs)
