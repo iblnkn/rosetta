@@ -117,7 +117,10 @@ class RosettaClientNode(LifecycleNode):
             "",
             ParameterDescriptor(
                 description="Default path or HF repo ID of trained policy. "
-                "Per-goal override available via RunPolicy.pretrained_name_or_path."
+                "Per-goal override available via RunPolicy.pretrained_name_or_path. "
+                "Read-only: the node snapshots this at configure time; select "
+                "models dynamically via RunPolicy.policy_name / goal fields.",
+                read_only=True,
             ),
         )
         self.declare_parameter(
@@ -132,7 +135,7 @@ class RosettaClientNode(LifecycleNode):
             "act",
             ParameterDescriptor(
                 description="Default policy architecture (act, diffusion, sns_diffusion, ...). "
-                "Per-goal override available via RunPolicy.policy_type."
+                "Registry entries and RunPolicy.policy_type override this."
             ),
         )
         self.declare_parameter(
@@ -142,23 +145,32 @@ class RosettaClientNode(LifecycleNode):
                 description="Device for policy inference (cuda, cpu)", read_only=True
             ),
         )
+        # actions_per_chunk / chunk_size_threshold / aggregate_fn_name are
+        # fallbacks for goals whose registry entry omits them (and for the
+        # registry-less HIL launch, which configures the client entirely
+        # through node params). Registry entries take precedence.
         self.declare_parameter(
             "actions_per_chunk",
-            50,
-            ParameterDescriptor(description="Number of actions to request per chunk"),
+            24,
+            ParameterDescriptor(
+                description="Number of actions to request per chunk. "
+                "Registry entries override this."
+            ),
         )
         self.declare_parameter(
             "chunk_size_threshold",
             0.5,
             ParameterDescriptor(
-                description="Queue threshold ratio to request new chunk (0.0-1.0)"
+                description="Queue threshold ratio to request new chunk (0.0-1.0). "
+                "Registry entries override this."
             ),
         )
         self.declare_parameter(
             "aggregate_fn_name",
             "weighted_average",
             ParameterDescriptor(
-                description="Action aggregation function (weighted_average, etc.)"
+                description="Action aggregation function (weighted_average, etc.). "
+                "Registry entries override this."
             ),
         )
         self.declare_parameter(
@@ -230,6 +242,13 @@ class RosettaClientNode(LifecycleNode):
         # Topic bridge: manages observation subscriptions + action publishers
         self._rosetta_config: RosettaConfig | None = None
         self._bridge: _TopicBridge | None = None
+
+        # fps the local policy server subprocess was launched with (None when
+        # not running). Checked against the active contract at goal time so an
+        # fps-changing contract swap (or a deferred-contract startup guess)
+        # triggers a server relaunch instead of running with a stale
+        # environment_dt.
+        self._server_fps: int | None = None
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -413,6 +432,9 @@ class RosettaClientNode(LifecycleNode):
         # makes TimedAction timestamps and FPSTracker logs wrong, and (b)
         # miscalibrates the RTC server's queue-consumption simulation and
         # inference_delay computation.
+        # When the contract is deferred (registry-owned), fps is unknown here;
+        # guess 30 and let _ensure_server_fps() relaunch on the first goal if
+        # the resolved contract disagrees.
         contract_fps = (
             self._rosetta_config.fps if self._rosetta_config is not None else 30
         )
@@ -439,6 +461,7 @@ class RosettaClientNode(LifecycleNode):
             f"--inference_latency={server_inference_latency}",
         ]
         self._server_process = subprocess.Popen(cmd, env=os.environ.copy())
+        self._server_fps = server_fps
         atexit.register(self._stop_policy_server)
 
         start_time = time.time()
@@ -461,6 +484,7 @@ class RosettaClientNode(LifecycleNode):
 
     def _stop_policy_server(self) -> None:
         """Terminate the policy server process."""
+        self._server_fps = None
         if self._server_process is None or self._server_process.poll() is not None:
             return
 
@@ -471,6 +495,41 @@ class RosettaClientNode(LifecycleNode):
         except subprocess.TimeoutExpired:
             self._server_process.kill()
         self._server_process = None
+
+    def _ensure_server_fps(self) -> str | None:
+        """Relaunch the local policy server if its fps no longer matches.
+
+        The server's fps (-> environment_dt) is a subprocess CLI arg, fixed
+        at launch. Two ways it can go stale: the server was started before
+        any contract was loaded (deferred registry-owned contract, fps
+        guessed as 30), or a goal swapped in a contract with a different
+        fps. Either way TimedAction timestamps and the RTC server's
+        queue-consumption simulation would run at the wrong rate, so
+        restart the server with the contract-derived fps.
+
+        Returns ``None`` on success or no-op, or an error string on failure.
+        """
+        if self._rosetta_config is None:
+            return None
+        if not self.get_parameter("launch_local_server").value:
+            # Remote server: its fps is the operator's responsibility.
+            return None
+
+        sim_multiplier = self.get_parameter("sim_time_multiplier").value
+        desired_fps = max(1, int(self._rosetta_config.fps * sim_multiplier))
+        if self._server_fps == desired_fps:
+            return None
+
+        self.get_logger().info(
+            f"Policy server fps ({self._server_fps}) does not match "
+            f"contract-derived fps ({desired_fps}); restarting server."
+        )
+        try:
+            self._stop_policy_server()
+            self._start_policy_server()
+        except Exception as e:
+            return f"Failed to restart policy server at {desired_fps} fps: {e}"
+        return None
 
     def _on_goal(self, _goal_request) -> GoalResponse:
         """Accept or reject a client request to begin an action."""
@@ -509,6 +568,13 @@ class RosettaClientNode(LifecycleNode):
             result.success = False
             result.message = swap_err
             self.get_logger().error(swap_err)
+            return self._finish(goal_handle, result)
+
+        fps_err = self._ensure_server_fps()
+        if fps_err is not None:
+            result.success = False
+            result.message = fps_err
+            self.get_logger().error(fps_err)
             return self._finish(goal_handle, result)
 
         self._active_pretrained = bundle.pretrained_name_or_path
@@ -649,7 +715,7 @@ class RosettaClientNode(LifecycleNode):
             return None, (
                 f"No observation_processor_path resolved for {entry_hint}. "
                 "Set 'observation_processor_path' on the registry entry or "
-                "the node-level default in rosetta_client.yaml. Running "
+                "the node-level default in the node's parameters YAML. Running "
                 "without a processor causes image-shape mismatches."
             )
 
@@ -859,9 +925,7 @@ class RosettaClientNode(LifecycleNode):
         which rejects goals that lack a processor (running without one causes
         image-shape mismatches downstream).
         """
-        self.get_logger().info(
-            f"Loading observation processor from: {processor_path}"
-        )
+        self.get_logger().info(f"Loading observation processor from: {processor_path}")
         return RobotProcessorPipeline.from_pretrained(
             processor_path,
             config_filename="robot_observation_processor.json",
