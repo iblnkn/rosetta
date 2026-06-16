@@ -44,7 +44,7 @@ Severity: 🔴 breaks documented functionality / silent wrong robot behavior ·
 ### 🟠 ⬜ 6. Launch defaults hardcode a container-only path into a sibling repo
 - **Where:** `launch/rosetta_client_launch.py:169`, `launch/rosetta_hil_launch.py:80`. This repo's own `params/rosetta_client.yaml` was deleted.
 - **What:** `default_params = "/root/ws_rl/src/sns_robot_learning/params/rosetta_client.yaml"`. Fails anywhere not mounted at `/root/ws_rl` (host checkout, CI, standalone). HIL launch is worse — it `open()`s the path inside `generate_launch_description()`, so it raises at description-build time and can't be rescued by `params_file:=`.
-- **Fix direction:** ship a minimal default params file in rosetta's `share/` (restore `get_package_share_directory`); let `sns_robot_learning` override via `params_file:=`.
+- **Fix direction:** ship a minimal default params file in rosetta's `share/` (restore `get_package_share_directory`); let `sns_robot_learning` override **via** `params_file:=`.
 
 ### 🟡 ⬜ 7. Policy server launches at fps=30 before the contract is known
 - **Where:** `rosetta/rosetta_client_node.py:416` (`_start_policy_server`, runs in `on_activate`).
