@@ -14,10 +14,11 @@ Severity: 🔴 breaks documented functionality / silent wrong robot behavior ·
 
 ## rosetta package
 
-### 🔴 ⬜ 1. RTC server breaks every policy type except `sns_diffusion`
-- **Where:** `rosetta/common/rtc_policy_server.py:321` (`_build_stacked_observations`), entered via `rosetta/common/policy_server.py` (now imports `serve` from `rtc_policy_server`).
-- **What:** The new server is the serving path for *all* policies but whitelists only `observation.state` / `observation.environment_state` / `OBS_IMAGES` and force-adds an `n_obs_steps` temporal dim. ACT (the node default) → `KeyError` on per-camera keys; upstream diffusion → `torch.stack` on empty `_queues` (deleted monkey-patch used to populate them); smolvla/pi0 → lose the `task` key. README/CLAUDE.md still document deploying `act`/`diffusion`.
-- **Fix direction:** Gate the stacking on policies that actually want `(B, n_obs_steps, …)`; pass the untouched observation dict through for everything else (make the RTC override a superset of upstream, not a replacement).
+### 🔴 ✅ 1. RTC server breaks every policy type except `sns_diffusion`
+- **Where:** `rosetta/common/rtc_policy_server.py` (`_build_stacked_observations`), entered via `rosetta/common/policy_server.py` (imports `serve` from `rtc_policy_server`).
+- **What:** The new server was the serving path for *all* policies but whitelisted only `observation.state` / `observation.environment_state` / `OBS_IMAGES` and force-added an `n_obs_steps` temporal dim. ACT (the node default) → `KeyError` on per-camera keys; upstream diffusion → `torch.stack` on empty `_queues` (deleted monkey-patch used to populate them); smolvla/pi0 → lose the `task` key. README/CLAUDE.md still document deploying `act`/`diffusion`.
+- **Fixed:** `_predict_action_chunk` now dispatches by capability: `_needs_server_history()` keys on the registered policy `type` (`STACKED_HISTORY_POLICY_TYPES = {"sns_diffusion"}`) to route only sns_diffusion to the stacked path; everything else delegates to `super()._predict_action_chunk()` (untouched upstream — per-camera keys preserved, no temporal dim, no ActionQueue). RTC code is isolated in `_predict_stacked_action_chunk` / `_build_rtc_kwargs` / `_merge_into_action_queue`. NB: the gate keys on policy type, **not** on the presence of an `rtc_config` field — the VLAs (pi0/pi05/pi0fast/smolvla) also declare `rtc_config` but self-prepare from the latest obs, so they must take the upstream path too. **Still open:** upstream diffusion (n_obs_steps>1) takes the upstream path but its `_queues` aren't populated server-side (pre-existing; the old monkey-patch handled it) — fine for ACT/sns_diffusion, revisit if deploying plain `diffusion`; VLA+RTC would need a third path (RTC kwargs without sns-style stacking). README/CLAUDE.md deploy docs still need the registry-flow update (see #4).
+- **Remaining coupling (open):** `import lerobot_policy_sns_diffusion` is still unconditional in both server files; serve ACT without that plugin installed → ImportError. Use `register_third_party_plugins()` later.
 
 ### 🟠 ✅ 2. Decoder resize removed → `port_bags` fails for shape-declaring contracts
 - **Where:** `rosetta/common/decoders.py:240,258`; `rosetta/port_bags.py`.
@@ -51,10 +52,10 @@ Severity: 🔴 breaks documented functionality / silent wrong robot behavior ·
 - **What:** In registry-owned mode (`contract_path` launch default empty) `_rosetta_config` is `None` at activate → server gets `--fps=30`. `_swap_contract_if_needed` never restarts the server. Client uses the correct per-goal fps, so for a non-30-fps contract `environment_dt` is wrong, skewing `inference_delay`, consumption simulation, and `TimedAction` timestamps. **Latent today** (all inference contracts are fps 30; only `record/emily_right_arm_cart.yaml` is 10).
 - **Fix direction:** (re)start the server at goal time once the contract resolves, or pass fps per-connection.
 
-### 🟡 ⬜ 8. Unbounded ActionQueue growth for non-RTC policies
-- **Where:** `rosetta/common/rtc_policy_server.py:206` (merge) vs `_rtc_enabled()`-gated consumption.
-- **What:** With RTC disabled, a fallback `ActionQueue` is still created and `merge()`d every inference, but nothing consumes it (`last_index` stays 0; trim is `[0:]`). Queue tensors grow by `actions_per_chunk` rows per inference for the connection lifetime (+2 `.clone()`s/chunk) → creeping OOM on long deployments.
-- **Fix direction:** skip ActionQueue creation + merge entirely when RTC is disabled.
+### 🟡 ✅ 8. Unbounded ActionQueue growth for non-RTC policies
+- **Where:** `rosetta/common/rtc_policy_server.py` (merge) vs `_rtc_enabled()`-gated consumption.
+- **What:** With RTC disabled, a fallback `ActionQueue` was still created and `merge()`d every inference, but nothing consumed it (`last_index` stays 0; trim is `[0:]`). Queue tensors grew by `actions_per_chunk` rows per inference for the connection lifetime (+2 `.clone()`s/chunk) → creeping OOM.
+- **Fixed (with #1):** the ActionQueue (creation, kwargs, clones, merge) now lives only on the RTC-enabled branch of `_predict_stacked_action_chunk`. Non-RTC policies never construct a queue, so it can't grow. The disabled-mode fallback queue was removed from `_ensure_action_queue`.
 
 ### 🟡 ⬜ 9. RTC bookkeeping estimates what the protocol already reports exactly
 - **Where:** `rosetta/common/rtc_policy_server.py:351` (`_simulate_client_consumption`) and `inference_delay` from `self._last_inference_time`.
