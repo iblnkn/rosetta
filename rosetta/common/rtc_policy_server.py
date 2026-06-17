@@ -36,9 +36,6 @@ import torch
 from torch import Tensor
 from concurrent import futures
 
-# Register SNSDiffusionConfig before anything loads a checkpoint
-import lerobot_policy_sns_diffusion  # noqa: F401
-
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.constants import SUPPORTED_POLICIES
 from lerobot.async_inference.helpers import (
@@ -52,6 +49,7 @@ from lerobot.policies.rtc.configuration_rtc import RTCConfig
 from lerobot.transport import (
     services_pb2_grpc,  # type: ignore
 )
+from lerobot.utils.import_utils import register_third_party_plugins
 
 from rosetta.common.obs_history import TimedObservationWithHistory
 
@@ -444,6 +442,11 @@ def _patch_supported_policies() -> None:
 @draccus.wrap()
 def serve(cfg: PolicyServerConfig):
     """Start the RTCPolicyServer."""
+    # Discover installed lerobot_policy_* plugins (e.g. sns_diffusion) so their
+    # configs register with PreTrainedConfig before any checkpoint loads. Done
+    # here (not via a hardcoded import) so an ACT-only deployment without the
+    # sns_diffusion plugin installed doesn't ImportError at startup.
+    register_third_party_plugins()
     _patch_supported_policies()
 
     logging.info(pformat(asdict(cfg)))
