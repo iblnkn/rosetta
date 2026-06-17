@@ -32,46 +32,36 @@ from __future__ import annotations
 import shutil
 import threading
 import time
-from pathlib import Path
-from typing import Any
 from collections import deque
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
-from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from rclpy.qos import (
-    QoSProfile,
-    HistoryPolicy,
-    ReliabilityPolicy,
-    DurabilityPolicy,
-    LivelinessPolicy,
-)
-from rclpy.serialization import serialize_message
-
 import rosbag2_py
 import yaml
 from rcl_interfaces.msg import ParameterDescriptor
-from std_srvs.srv import Trigger
-from rosidl_runtime_py.utilities import get_message
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.lifecycle import (LifecycleNode, LifecycleState,
+                             TransitionCallbackReturn)
+from rclpy.qos import (DurabilityPolicy, HistoryPolicy, LivelinessPolicy,
+                       QoSProfile, ReliabilityPolicy)
+from rclpy.serialization import serialize_message
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.srv import StartRecording
+from rosidl_runtime_py.utilities import get_message
+from std_srvs.srv import Trigger
 
-# Import contract utilities
-from .common.contract import load_contract
 from .common import decoders as _decoders  # noqa: F401 - registers decoders
 from .common import encoders as _encoders  # noqa: F401 - registers encoders
+# Import contract utilities
+from .common.contract import (ROLE_RECORD, is_unified_contract, load_contract,
+                              load_unified_contract)
 from .common.contract_utils import iter_specs
-from .common.ros2_utils import (
-    qos_profile_from_dict,
-    detect_ros_distro,
-    is_jazzy_or_newer,
-    extract_qos_numeric_values,
-    is_transient_local,
-    get_qos_depth,
-)
+from .common.ros2_utils import (detect_ros_distro, extract_qos_numeric_values,
+                                get_qos_depth, is_jazzy_or_newer,
+                                is_transient_local, qos_profile_from_dict)
 
 # Bag metadata keys
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
@@ -113,24 +103,35 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
-            "contract_path", "",
-            ParameterDescriptor(description="Path to contract YAML file", read_only=True)
+            "contract_path",
+            "",
+            ParameterDescriptor(
+                description="Path to contract YAML file", read_only=True
+            ),
         )
         self.declare_parameter(
-            "bag_base_dir", "/workspaces/rosetta_ws/datasets/bags",
-            ParameterDescriptor(description="Base directory for bag storage", read_only=True)
+            "bag_base_dir",
+            "/workspaces/rosetta_ws/datasets/bags",
+            ParameterDescriptor(
+                description="Base directory for bag storage", read_only=True
+            ),
         )
         self.declare_parameter(
-            "storage_id", "mcap",
-            ParameterDescriptor(description="Bag storage format (mcap, sqlite3)", read_only=True)
+            "storage_id",
+            "mcap",
+            ParameterDescriptor(
+                description="Bag storage format (mcap, sqlite3)", read_only=True
+            ),
         )
         self.declare_parameter(
-            "default_max_duration", 300.0,
-            ParameterDescriptor(description="Maximum recording duration in seconds")
+            "default_max_duration",
+            300.0,
+            ParameterDescriptor(description="Maximum recording duration in seconds"),
         )
         self.declare_parameter(
-            "feedback_rate_hz", 2.0,
-            ParameterDescriptor(description="Rate for publishing action feedback")
+            "feedback_rate_hz",
+            2.0,
+            ParameterDescriptor(description="Rate for publishing action feedback"),
         )
 
         # Initialize state variables (resources created in lifecycle callbacks)
@@ -139,7 +140,9 @@ class EpisodeRecorderNode(LifecycleNode):
         self._storage_id: str | None = None
         self._default_max_duration: float = 300.0
         self._feedback_rate_hz: float = 2.0
-        self._topics: list[tuple[str, str, QoSProfile | int, str]] = []  # (topic, type, qos, buffering_strategy)
+        self._topics: list[
+            tuple[str, str, QoSProfile | int, str]
+        ] = []  # (topic, type, qos, buffering_strategy)
         self._subs: dict[str, Any] = {}  # topic -> subscription object
         self._action_server: ActionServer | None = None
         self._accepting_goals = False
@@ -171,7 +174,11 @@ class EpisodeRecorderNode(LifecycleNode):
                 return TransitionCallbackReturn.FAILURE
 
             try:
-                self._contract = load_contract(contract_path)
+                # Recording uses the record-role view of a unified contract.
+                if is_unified_contract(contract_path):
+                    self._contract = load_unified_contract(contract_path, ROLE_RECORD)
+                else:
+                    self._contract = load_contract(contract_path)
             except Exception as e:
                 self.get_logger().error(f"Failed to load contract: {e}")
                 return TransitionCallbackReturn.FAILURE
@@ -179,7 +186,9 @@ class EpisodeRecorderNode(LifecycleNode):
             self._bag_base = Path(self.get_parameter("bag_base_dir").value)
             self._bag_base.mkdir(parents=True, exist_ok=True)
             self._storage_id = self.get_parameter("storage_id").value
-            self._default_max_duration = self.get_parameter("default_max_duration").value
+            self._default_max_duration = self.get_parameter(
+                "default_max_duration"
+            ).value
             self._feedback_rate_hz = self.get_parameter("feedback_rate_hz").value
 
             # Build topic list from contract
@@ -235,9 +244,14 @@ class EpisodeRecorderNode(LifecycleNode):
             )
             return TransitionCallbackReturn.SUCCESS
         except Exception as e:
-            self.get_logger().error(f"Configuration failed: {e}", throttle_duration_sec=1.0)
+            self.get_logger().error(
+                f"Configuration failed: {e}", throttle_duration_sec=1.0
+            )
             import traceback
-            self.get_logger().error(f"Traceback: {traceback.format_exc()}", throttle_duration_sec=1.0)
+
+            self.get_logger().error(
+                f"Traceback: {traceback.format_exc()}", throttle_duration_sec=1.0
+            )
             return TransitionCallbackReturn.FAILURE
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -327,7 +341,7 @@ class EpisodeRecorderNode(LifecycleNode):
         - Observation and action topics (from iter_specs)
         - Task topics
         - Extra topics (recording.extra_topics) - recorded but not mapped to keys
-        
+
         Returns:
             List of (topic, type_str, qos, buffering_strategy) tuples
         """
@@ -354,7 +368,7 @@ class EpisodeRecorderNode(LifecycleNode):
                     buffering_strategy = "accumulate"
                 else:
                     buffering_strategy = "no_buffer"
-            
+
             topics.append((adj.topic, adj.type, qos, buffering_strategy))
 
         # If node is running with simulation time enabled, record the /clock
@@ -372,10 +386,12 @@ class EpisodeRecorderNode(LifecycleNode):
 
         return topics
 
-    def _create_sub(self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str):
+    def _create_sub(
+        self, topic: str, type_str: str, qos: QoSProfile | int, buffering_strategy: str
+    ):
         """Create subscription that writes to bag when recording."""
         msg_cls = get_message(type_str)
-        
+
         # Helper to extract header timestamp (used for buffering and deduplication)
         def get_header_stamp_ns(msg: Any) -> Optional[int]:
             """Extract header.stamp as nanoseconds, or None if not present."""
@@ -386,11 +402,16 @@ class EpisodeRecorderNode(LifecycleNode):
                     ts = hdr.stamp
                     return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
                 # Try msg.transforms[0].header for TFMessage
-                if hasattr(msg, "transforms") and len(getattr(msg, "transforms", [])) > 0:
+                if (
+                    hasattr(msg, "transforms")
+                    and len(getattr(msg, "transforms", [])) > 0
+                ):
                     fh = getattr(msg.transforms[0], "header", None)
                     if fh is not None and hasattr(fh, "stamp"):
                         ts = fh.stamp
-                        return int(ts.sec) * 1_000_000_000 + int(getattr(ts, "nanosec", 0))
+                        return int(ts.sec) * 1_000_000_000 + int(
+                            getattr(ts, "nanosec", 0)
+                        )
             except Exception:
                 pass
             return None
@@ -409,11 +430,13 @@ class EpisodeRecorderNode(LifecycleNode):
                         serialized = serialize_message(msg)
                         if len(serialized) <= MAX_BUFFER_BYTES:
                             header_stamp = get_header_stamp_ns(msg)
-                            
+
                             with self._buffer_lock:
                                 if _topic not in self._buffers:
                                     self._buffers[_topic] = deque()
-                                self._buffers[_topic].append((serialized, timestamp_ns, header_stamp))
+                                self._buffers[_topic].append(
+                                    (serialized, timestamp_ns, header_stamp)
+                                )
                                 # Enforce history depth limit
                                 while len(self._buffers[_topic]) > history_depth:
                                     self._buffers[_topic].popleft()
@@ -438,7 +461,9 @@ class EpisodeRecorderNode(LifecycleNode):
                     self.get_logger().error(f"Write failed on {_topic}: {e}")
                     self._stop_event.set()
 
-        return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
+        return self.create_subscription(
+            msg_cls, topic, callback, qos, callback_group=self._cbg
+        )
 
     # ---------- Action callbacks ----------
 
@@ -514,8 +539,10 @@ class EpisodeRecorderNode(LifecycleNode):
         self._stop_event.clear()
         self._messages_written = 0
         self._goal_handle = None  # No action goal for service-based recording
-        self._is_recording = True  # Set recording flag immediately to start writing live messages
-        
+        self._is_recording = (
+            True  # Set recording flag immediately to start writing live messages
+        )
+
         record_thread = threading.Thread(
             target=self._service_record,
             args=(prompt,),
@@ -527,7 +554,9 @@ class EpisodeRecorderNode(LifecycleNode):
         response.message = "Recording started"
         return response
 
-    def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
+    def _on_delete_last_bag_service(
+        self, _request, response: Trigger.Response
+    ) -> Trigger.Response:
         """Delete the most recently completed bag directory."""
         if self._is_recording:
             response.success = False
@@ -585,7 +614,9 @@ class EpisodeRecorderNode(LifecycleNode):
             self.get_logger().error(f"Metadata error: {e}")
 
         self._last_bag_dir = bag_dir
-        self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
+        self.get_logger().info(
+            f"Recorded {self._messages_written} messages to {bag_dir}"
+        )
         self._is_recording = False
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
@@ -608,7 +639,7 @@ class EpisodeRecorderNode(LifecycleNode):
             # Open writer and register topics BEFORE setting _is_recording
             # This allows _open_writer to flush buffered TRANSIENT_LOCAL messages
             self._open_writer(bag_dir)
-            
+
             # NOW set recording flag so live messages start being written
             self._is_recording = True
 
@@ -664,7 +695,9 @@ class EpisodeRecorderNode(LifecycleNode):
 
         self._last_bag_dir = bag_dir
         result.messages_written = self._messages_written
-        self.get_logger().info(f"Recorded {self._messages_written} messages to {bag_dir}")
+        self.get_logger().info(
+            f"Recorded {self._messages_written} messages to {bag_dir}"
+        )
 
         # Set terminal state
         if goal_handle.is_cancel_requested:
@@ -702,7 +735,7 @@ class EpisodeRecorderNode(LifecycleNode):
 
     def _open_writer(self, bag_dir: Path) -> None:
         """Open writer and register all topics."""
-        
+
         # Step 1: Re-subscribe to topics with resubscribe_on_start strategy
         # This must happen BEFORE opening the writer so messages buffer properly
         resubscribe_topics = [
@@ -710,27 +743,31 @@ class EpisodeRecorderNode(LifecycleNode):
             for topic, type_str, qos, strategy in self._topics
             if strategy == "resubscribe_on_start"
         ]
-        
+
         for topic, type_str, qos, strategy in resubscribe_topics:
-            self.get_logger().info(f"Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data...")
-            
+            self.get_logger().info(
+                f"Re-subscribing to {topic} for fresh TRANSIENT_LOCAL data..."
+            )
+
             # Find and destroy old subscriber
             if topic in self._subs:
                 old_sub = self._subs[topic]
                 self.destroy_subscription(old_sub)
                 del self._subs[topic]
-            
+
             # Clear buffer for this topic
             with self._buffer_lock:
                 if topic in self._buffers:
                     old_count = len(self._buffers[topic])
                     self._buffers[topic].clear()
-                    self.get_logger().info(f"Cleared {old_count} stale messages from {topic} buffer")
-            
+                    self.get_logger().info(
+                        f"Cleared {old_count} stale messages from {topic} buffer"
+                    )
+
             # Create new subscriber - will immediately receive latched TRANSIENT_LOCAL messages
             new_sub = self._create_sub(topic, type_str, qos, strategy)
             self._subs[topic] = new_sub
-        
+
         # Step 2: Brief sleep to allow TRANSIENT_LOCAL delivery to new subscribers
         if resubscribe_topics:
             time.sleep(0.2)  # 200ms should be plenty for latched message delivery
@@ -747,7 +784,7 @@ class EpisodeRecorderNode(LifecycleNode):
                         self.get_logger().info(
                             f"After re-subscribe, {topic} buffer has {buf_size} message(s)"
                         )
-        
+
         # Step 3: Open storage and create writer
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
@@ -766,14 +803,12 @@ class EpisodeRecorderNode(LifecycleNode):
             # Jazzy/Rolling: Use rosbag2_py._storage.QoS API
             def _qos_to_rosbag2(q: QoSProfile | int) -> rosbag2_py._storage.QoS:
                 """Convert an rclpy QoSProfile (or int depth) to a rosbag2_py QoS."""
-                from rosbag2_py._storage import (
-                    QoS as Rosbag2QoS,
-                    Duration as Rosbag2Duration,
-                    rmw_qos_history_policy_t,
-                    rmw_qos_reliability_policy_t,
-                    rmw_qos_durability_policy_t,
-                    rmw_qos_liveliness_policy_t,
-                )
+                from rosbag2_py._storage import Duration as Rosbag2Duration
+                from rosbag2_py._storage import QoS as Rosbag2QoS
+                from rosbag2_py._storage import (rmw_qos_durability_policy_t,
+                                                 rmw_qos_history_policy_t,
+                                                 rmw_qos_liveliness_policy_t,
+                                                 rmw_qos_reliability_policy_t)
 
                 # Extract numeric RMW values using unified helper
                 vals = extract_qos_numeric_values(q)
@@ -785,9 +820,15 @@ class EpisodeRecorderNode(LifecycleNode):
                 # The QoS setter methods on Jazzy require rmw_qos_*_policy_t enums.
                 bag_qos = Rosbag2QoS(vals["depth"])
                 bag_qos = bag_qos.history(rmw_qos_history_policy_t(vals["history"]))
-                bag_qos = bag_qos.reliability(rmw_qos_reliability_policy_t(vals["reliability"]))
-                bag_qos = bag_qos.durability(rmw_qos_durability_policy_t(vals["durability"]))
-                bag_qos = bag_qos.liveliness(rmw_qos_liveliness_policy_t(vals["liveliness"]))
+                bag_qos = bag_qos.reliability(
+                    rmw_qos_reliability_policy_t(vals["reliability"])
+                )
+                bag_qos = bag_qos.durability(
+                    rmw_qos_durability_policy_t(vals["durability"])
+                )
+                bag_qos = bag_qos.liveliness(
+                    rmw_qos_liveliness_policy_t(vals["liveliness"])
+                )
 
                 # Convert rclpy Duration to rosbag2 Duration
                 def _dur(rclpy_dur) -> Rosbag2Duration:
@@ -796,10 +837,12 @@ class EpisodeRecorderNode(LifecycleNode):
 
                 bag_qos = bag_qos.deadline(_dur(q.deadline))
                 bag_qos = bag_qos.lifespan(_dur(q.lifespan))
-                bag_qos = bag_qos.liveliness_lease_duration(_dur(q.liveliness_lease_duration))
+                bag_qos = bag_qos.liveliness_lease_duration(
+                    _dur(q.liveliness_lease_duration)
+                )
 
                 return bag_qos
-            
+
             # Register topics with Jazzy API
             for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
                 topic_info = rosbag2_py.TopicMetadata(
@@ -810,13 +853,13 @@ class EpisodeRecorderNode(LifecycleNode):
                     offered_qos_profiles=[_qos_to_rosbag2(qos)],
                 )
                 writer.create_topic(topic_info)
-        
+
         else:
             # Humble: Use YAML string format for offered_qos_profiles
             def _serialize_offered_qos(q: QoSProfile | int) -> str:
                 """
                 Emit a Humble-compatible YAML mapping string for rosbag2 metadata.
-                
+
                 Uses rclpy.qos enum values consistently with Jazzy approach.
                 Output format: YAML list with single QoS mapping (prefixed with '- ').
                 """
@@ -848,11 +891,11 @@ class EpisodeRecorderNode(LifecycleNode):
                     f"  avoid_ros_namespace_conventions: false",
                 ]
                 return "\n".join(lines)
-            
+
             # Register topics with Humble API (YAML string format)
             for idx, (topic, type_str, qos, strategy) in enumerate(self._topics):
                 offered = _serialize_offered_qos(qos)
-                topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)            
+                topic_info = rosbag2_py.TopicMetadata(topic, type_str, "cdr", offered)
                 writer.create_topic(topic_info)
 
         # Publish the writer atomically and flush buffered TRANSIENT_LOCAL messages
@@ -873,7 +916,7 @@ class EpisodeRecorderNode(LifecycleNode):
                         # message is preserved (often 0 for static TFs).
                         writer.write(topic, serialized, bag_start_ns)
                         self._messages_written += 1
-                    
+
                     if buffer:
                         self.get_logger().info(
                             f"Flushed {len(buffer)} buffered messages for {topic}"
@@ -919,11 +962,15 @@ class EpisodeRecorderNode(LifecycleNode):
                 with meta_path.open("w") as f:
                     yaml.safe_dump(meta, f, sort_keys=False)
 
-                self.get_logger().debug(f"Wrote prompt to metadata on attempt {attempt + 1}")
+                self.get_logger().debug(
+                    f"Wrote prompt to metadata on attempt {attempt + 1}"
+                )
                 return
             except Exception as e:
                 last_error = e
-                self.get_logger().debug(f"Metadata write attempt {attempt + 1} failed: {e}")
+                self.get_logger().debug(
+                    f"Metadata write attempt {attempt + 1} failed: {e}"
+                )
                 time.sleep(METADATA_RETRY_DELAY_SEC)
 
         # Fail fast - don't silently lose the prompt

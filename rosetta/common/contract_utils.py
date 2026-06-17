@@ -29,19 +29,11 @@ from typing import TYPE_CHECKING, Any, Iterable, TypeVar
 
 import numpy as np
 
+from .contract import (DEPTH_ENCODINGS, ActionSpec, ActionStreamSpec,
+                       AlignSpec, Contract, ContractValidationError,
+                       ObservationSpec, ObservationStreamSpec, ResamplePolicy,
+                       StreamSpec)
 from .converters import DTYPES, ENCODERS, get_decoder_dtype
-from .contract import (
-    ActionSpec,
-    ActionStreamSpec,
-    AlignSpec,
-    Contract,
-    ContractValidationError,
-    DEPTH_ENCODINGS,
-    ObservationSpec,
-    ObservationStreamSpec,
-    ResamplePolicy,
-    StreamSpec,
-)
 
 if TYPE_CHECKING:
     pass  # All types imported above
@@ -68,7 +60,11 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
         if not spec.image_shape:
             raise ValueError(f"Image spec '{spec.key}' must have image_shape")
         h, w = spec.image_shape
-        return {"dtype": "video", "shape": (h, w, 3), "names": ["height", "width", "channels"]}
+        return {
+            "dtype": "video",
+            "shape": (h, w, 3),
+            "names": ["height", "width", "channels"],
+        }
 
     if dtype == "string":
         return {"dtype": "string", "shape": (1,), "names": None}
@@ -77,6 +73,127 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
     n = len(spec.names) if spec.names else 1
     names = list(spec.names) if spec.names else None
     return {"dtype": dtype, "shape": (n,), "names": names}
+
+
+def build_features(specs: Iterable[StreamSpec]) -> dict[str, dict[str, Any]]:
+    """Build the LeRobot feature dict for a list of contract stream specs.
+
+    Specs sharing the same ``key`` are aggregated: numeric vectors concatenate
+    their namespaced names (in spec order); images/strings take the first spec.
+    This is the single source of the contract -> dataset-feature mapping, reused
+    by ``port_bags`` (dataset writing) and the contract validators (so a config's
+    derived layout is identical to what porting produces). Frame-boundary markers
+    (``is_first``/``is_last``/``is_terminal``) are added by the dataset writer,
+    not here, since they are not contract-derived.
+    """
+    by_key: dict[str, list[StreamSpec]] = {}
+    for spec in specs:
+        by_key.setdefault(spec.key, []).append(spec)
+
+    features: dict[str, dict[str, Any]] = {}
+    for key, key_specs in by_key.items():
+        first = key_specs[0]
+        dtype = DTYPES[first.msg_type]
+
+        if dtype in ("video", "image", "string"):
+            # No aggregation for images/strings.
+            features[key] = build_feature(first)
+        else:
+            # Numeric: aggregate names from all specs sharing this key.
+            all_names: list[str] = []
+            for spec in key_specs:
+                all_names.extend(get_namespaced_names(spec))
+            n = len(all_names) or 1
+            features[key] = {
+                "dtype": dtype,
+                "shape": (n,),
+                "names": all_names if all_names else None,
+            }
+
+    return features
+
+
+def _aggregate_namespaced_names(
+    items: list[tuple[str, str, list[str]]]
+) -> dict[str, list[str]]:
+    """Aggregate selector names per key, applying the same per-key namespacing
+    as :func:`_apply_namespaces` (derived from topics; only multi-topic keys are
+    prefixed). ``items`` is a list of ``(key, topic, names)`` tuples.
+    """
+    by_key: dict[str, list[tuple[str, list[str]]]] = {}
+    for key, topic, names in items:
+        by_key.setdefault(key, []).append((topic, names))
+
+    out: dict[str, list[str]] = {}
+    for key, group in by_key.items():
+        if len(group) > 1:
+            ns_map = _derive_namespaces([t for t, _ in group])
+            agg: list[str] = []
+            for topic, names in group:
+                ns = ns_map.get(topic, "")
+                agg.extend(f"{ns}.{n}" if ns else n for n in names)
+            out[key] = agg
+        else:
+            out[key] = list(group[0][1])
+    return out
+
+
+def contract_interface(contract: Contract) -> dict[str, Any]:
+    """ROS-free extraction of a contract's data interface.
+
+    Unlike ``build_features(iter_specs(...))`` this does **not** resolve dtypes
+    (which requires the ROS decoder registry / rclpy), so it is usable in the
+    training environment and CI where ROS is absent. It returns enough to
+    validate a contract against a LeRobot ``dataset.meta`` or a checkpoint
+    ``config.json``: image keys+shapes and the aggregated, namespaced vector
+    names (hence dims) for the state/action keys.
+
+    Returns a mapping::
+
+        {
+          "robot_type": str,
+          "fps": int,
+          "images": {"<obs key>": [H, W], ...},
+          "state":   {"<obs key>": {"names": [...], "dim": N}, ...},
+          "actions": {"<action key>": {"names": [...], "dim": N}, ...},
+        }
+    """
+    images: dict[str, list[int]] = {}
+    numeric_items: list[tuple[str, str, list[str]]] = []
+    for o in contract.observations:
+        if o.key.startswith("observation.images."):
+            shape = (o.image or {}).get("shape") or (o.image or {}).get("resize")
+            if not shape or len(shape) != 2:
+                raise ContractValidationError(
+                    f"Image observation '{o.key}' must specify image.shape [height, width]"
+                )
+            images[o.key] = [int(shape[0]), int(shape[1])]
+        else:
+            numeric_items.append(
+                (o.key, o.topic, list((o.selector or {}).get("names", [])))
+            )
+
+    action_items = [
+        (a.key, a.publish_topic, list((a.selector or {}).get("names", [])))
+        for a in contract.actions
+    ]
+
+    state = {
+        k: {"names": v, "dim": len(v)}
+        for k, v in _aggregate_namespaced_names(numeric_items).items()
+    }
+    actions = {
+        k: {"names": v, "dim": len(v)}
+        for k, v in _aggregate_namespaced_names(action_items).items()
+    }
+
+    return {
+        "robot_type": contract.robot_type,
+        "fps": contract.fps,
+        "images": images,
+        "state": state,
+        "actions": actions,
+    }
 
 
 # =============================================================================
@@ -156,17 +273,21 @@ class StreamBuffer:
         with self._lock:
             if self.last_ts is None:
                 return None
-            
+
             # Handle clock resets (e.g., simulation restart)
             # If buffered timestamp is in the future, clock was reset - clear stale data
             if self.last_ts > tick_ns:
                 self._clear_unsafe()  # Already holding lock
                 return None
-            
+
             if self.policy == ResamplePolicy.DROP.value:
-                return self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
+                return (
+                    self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
+                )
             if self.policy == ResamplePolicy.ASOF.value:
-                return self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
+                return (
+                    self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
+                )
             return self.last_val  # hold is default
 
     def _clear_unsafe(self) -> None:
@@ -469,7 +590,6 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
     yield from _apply_namespaces(items, lambda o: "action", ActionStreamSpec)
 
 
-
 def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
     """Yield specs from extended categories (rewards, signals, info, complementary_data)."""
     extended = [
@@ -505,7 +625,9 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
             )
 
 
-def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
+def iter_specs(
+    contract: Contract,
+) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
     """Yield all stream specs (observations, actions, extended)."""
     yield from iter_observation_specs(contract)
     yield from iter_action_specs(contract)

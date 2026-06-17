@@ -22,6 +22,7 @@ them easy to use in offline tooling, tests, and type checking.
 
 from __future__ import annotations
 
+import copy
 import importlib
 from dataclasses import dataclass
 from enum import Enum
@@ -30,7 +31,6 @@ from typing import Any
 
 import yaml
 from lerobot.utils.utils import is_valid_numpy_dtype_string
-
 
 # =============================================================================
 # Constants
@@ -178,7 +178,9 @@ class AdjunctSpec:
     topic: str
     type: str
     qos: dict[str, Any] | None = None
-    buffering_strategy: str | None = None  # "no_buffer" | "accumulate" | "resubscribe_on_start"
+    buffering_strategy: str | None = (
+        None  # "no_buffer" | "accumulate" | "resubscribe_on_start"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,7 +313,9 @@ def _parse_align(d: dict[str, Any] | None, context: str) -> AlignSpec | None:
     """Parse align configuration."""
     if not d:
         return None
-    strategy = _validate_enum(d.get("strategy", "hold"), ResamplePolicy, "strategy", context)
+    strategy = _validate_enum(
+        d.get("strategy", "hold"), ResamplePolicy, "strategy", context
+    )
     stamp = _validate_enum(d.get("stamp", "receive"), StampSource, "stamp", context)
     return AlignSpec(strategy=strategy, tol_ms=int(d.get("tol_ms", 0)), stamp=stamp)
 
@@ -320,14 +324,20 @@ def _require_fields(data: dict, fields: list[str], context: str) -> None:
     """Validate required fields are present."""
     for field in fields:
         if field not in data:
-            raise ContractValidationError(f"Missing required field '{field}' in {context}")
+            raise ContractValidationError(
+                f"Missing required field '{field}' in {context}"
+            )
 
 
-def _validate_dtype(dtype: str | None, context: str, required: bool = False) -> str | None:
+def _validate_dtype(
+    dtype: str | None, context: str, required: bool = False
+) -> str | None:
     """Validate dtype if provided."""
     if dtype is None:
         if required:
-            raise ContractValidationError(f"Missing required field 'dtype' in {context}")
+            raise ContractValidationError(
+                f"Missing required field 'dtype' in {context}"
+            )
         return None
 
     dtype = str(dtype).lower()
@@ -394,7 +404,9 @@ def _validate_converter_path(path: str | None, context: str) -> str | None:
 # =============================================================================
 
 
-def _parse_observation(data: dict[str, Any], idx: int, section: str = "observations") -> ObservationSpec:
+def _parse_observation(
+    data: dict[str, Any], idx: int, section: str = "observations"
+) -> ObservationSpec:
     """Parse an observation spec from YAML."""
     ctx = f"{section}[{idx}]"
     _require_fields(data, ["key", "topic", "type"], ctx)
@@ -454,7 +466,9 @@ def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> Observatio
     )
 
 
-def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> ActionSpec:
+def _parse_action(
+    data: dict[str, Any], idx: int, section: str = "actions"
+) -> ActionSpec:
     """Parse an action spec from YAML."""
     ctx = f"{section}[{idx}]"
     _require_fields(data, ["key", "publish"], ctx)
@@ -515,18 +529,21 @@ def _parse_adjunct(data: dict[str, Any], idx: int) -> AdjunctSpec:
     _require_fields(data, ["topic", "type"], ctx)
 
     buffering_strategy = data.get("buffering_strategy")
-    
+
     # Validate buffering strategy if provided
     if buffering_strategy is not None:
         buffering_strategy = _validate_enum(
             buffering_strategy, BufferingStrategy, "buffering_strategy", ctx
         )
-        
+
         # Validate that buffering strategy is only used with TRANSIENT_LOCAL topics
         qos = data.get("qos", {})
         durability = qos.get("durability", "volatile").lower()
-        
-        if buffering_strategy != BufferingStrategy.NO_BUFFER.value and durability != "transient_local":
+
+        if (
+            buffering_strategy != BufferingStrategy.NO_BUFFER.value
+            and durability != "transient_local"
+        ):
             raise ContractValidationError(
                 f"buffering_strategy '{buffering_strategy}' can only be used with "
                 f"transient_local durability in {ctx}. Current durability: {durability}"
@@ -605,9 +622,13 @@ def _parse_reset(data: dict[str, Any] | None) -> ResetSpec | None:
     mode = _validate_enum(data.get("mode", "manual"), ResetMode, "mode", ctx)
 
     if mode == "service" and not data.get("service"):
-        raise ContractValidationError(f"'service' is required when mode is 'service' in {ctx}")
+        raise ContractValidationError(
+            f"'service' is required when mode is 'service' in {ctx}"
+        )
     if mode == "topic" and not data.get("topic"):
-        raise ContractValidationError(f"'topic' is required when mode is 'topic' in {ctx}")
+        raise ContractValidationError(
+            f"'topic' is required when mode is 'topic' in {ctx}"
+        )
 
     return ResetSpec(
         mode=mode,
@@ -640,30 +661,16 @@ def _parse_visualization(data: dict[str, Any] | None) -> VisualizationSpec | Non
 # =============================================================================
 
 
-def load_contract(path: Path | str) -> Contract:
-    """Load and validate a contract YAML file.
+def _contract_from_dict(data: dict[str, Any]) -> Contract:
+    """Build and validate a Contract from an already-loaded mapping.
 
-    Args:
-        path: Path to the contract YAML file.
-
-    Returns:
-        Validated Contract dataclass.
-
-    Raises:
-        FileNotFoundError: If the file doesn't exist.
-        ContractValidationError: If the contract is invalid.
+    Unknown top-level keys (e.g. ``roles``/``processor`` carried by a unified
+    contract) are ignored, so a merged mapping can be passed straight through.
     """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Contract file not found: {path}")
-
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as e:
-        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
-
     if not isinstance(data, dict):
-        raise ContractValidationError(f"Contract must be a YAML mapping, got {type(data).__name__}")
+        raise ContractValidationError(
+            f"Contract must be a YAML mapping, got {type(data).__name__}"
+        )
 
     # Required fields
     robot_type = data.get("robot_type")
@@ -675,7 +682,9 @@ def load_contract(path: Path | str) -> Contract:
         raise ContractValidationError(f"fps must be positive, got {fps}")
 
     # Parse sections
-    observations = [_parse_observation(it, i) for i, it in enumerate(data.get("observations") or [])]
+    observations = [
+        _parse_observation(it, i) for i, it in enumerate(data.get("observations") or [])
+    ]
     actions = [_parse_action(it, i) for i, it in enumerate(data.get("actions") or [])]
     tasks = [_parse_task(it, i) for i, it in enumerate(data.get("tasks") or [])]
 
@@ -690,9 +699,17 @@ def load_contract(path: Path | str) -> Contract:
         adjunct = [_parse_adjunct(adjunct_raw, 0)]
 
     # Extended data (dtype required)
-    rewards = [_parse_data_spec(it, i, "rewards") for i, it in enumerate(data.get("rewards") or [])]
-    signals = [_parse_data_spec(it, i, "signals") for i, it in enumerate(data.get("signals") or [])]
-    info = [_parse_data_spec(it, i, "info") for i, it in enumerate(data.get("info") or [])]
+    rewards = [
+        _parse_data_spec(it, i, "rewards")
+        for i, it in enumerate(data.get("rewards") or [])
+    ]
+    signals = [
+        _parse_data_spec(it, i, "signals")
+        for i, it in enumerate(data.get("signals") or [])
+    ]
+    info = [
+        _parse_data_spec(it, i, "info") for i, it in enumerate(data.get("info") or [])
+    ]
     comp_data = [
         _parse_data_spec(it, i, "complementary_data")
         for i, it in enumerate(data.get("complementary_data") or [])
@@ -716,3 +733,211 @@ def load_contract(path: Path | str) -> Contract:
         visualization=_parse_visualization(data.get("visualization")),
         timestamp_source=str(data.get("timestamp_source", "receive")).lower(),
     )
+
+
+def load_contract(path: Path | str) -> Contract:
+    """Load and validate a (legacy, single-role) contract YAML file.
+
+    Args:
+        path: Path to the contract YAML file.
+
+    Returns:
+        Validated Contract dataclass.
+
+    Raises:
+        FileNotFoundError: If the file doesn't exist.
+        ContractValidationError: If the contract is invalid.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Contract file not found: {path}")
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
+
+    return _contract_from_dict(data)
+
+
+# =============================================================================
+# Unified Contracts (record + inference + processor in one file)
+# =============================================================================
+
+ROLE_RECORD = "record"
+ROLE_INFERENCE = "inference"
+VALID_ROLES = frozenset({ROLE_RECORD, ROLE_INFERENCE})
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``override`` onto ``base`` (override wins; lists replace)."""
+    out = copy.deepcopy(base)
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], val)
+        else:
+            out[key] = copy.deepcopy(val)
+    return out
+
+
+def _merge_role_streams(
+    base_list: Any, delta: Any, by_key: Any, role: str, section: str
+) -> list:
+    """Apply a role delta to a list of observation/action stream dicts.
+
+    ``delta`` (the ``observations``/``actions`` key under a role) may be:
+      * a mapping  -> a *uniform* deep-merge applied to every stream entry
+        (e.g. ``{align: {stamp: receive}}`` or ``{safety_behavior: hold}``);
+      * a list     -> a full *replacement* of the base streams (e.g. the
+        ``emily_left_only`` inference DMP action).
+    ``by_key`` (``observations_by_key``/``actions_by_key``) is a mapping of
+    stream ``key`` -> override, deep-merged into every base entry with that key.
+    """
+    if isinstance(delta, list):
+        out = copy.deepcopy(delta)
+    else:
+        out = [copy.deepcopy(s) for s in (base_list or [])]
+        if isinstance(delta, dict):
+            out = [_deep_merge(s, delta) for s in out]
+        elif delta is not None:
+            raise ContractValidationError(
+                f"roles.{role}.{section} must be a mapping (uniform delta) or a "
+                f"list (full replacement), got {type(delta).__name__}"
+            )
+
+    if by_key:
+        if not isinstance(by_key, dict):
+            raise ContractValidationError(
+                f"roles.{role}.{section}_by_key must be a mapping of key -> override"
+            )
+        present = {s.get("key") for s in out}
+        unknown = set(by_key) - present
+        if unknown:
+            raise ContractValidationError(
+                f"roles.{role}.{section}_by_key references unknown key(s) "
+                f"{sorted(unknown)}; base {section} keys are {sorted(present)}"
+            )
+        out = [
+            _deep_merge(s, by_key[s["key"]]) if s.get("key") in by_key else s
+            for s in out
+        ]
+
+    return out
+
+
+def _apply_role(data: dict[str, Any], role: str) -> dict[str, Any]:
+    """Return the role-specific view of a unified contract mapping.
+
+    Strips the ``roles`` and ``processor`` keys, then deep-merges the
+    ``roles[role]`` delta onto the shared base. Stream sections support
+    uniform/replacement/per-key forms via :func:`_merge_role_streams`.
+    """
+    merged = {k: v for k, v in data.items() if k not in ("roles", "processor")}
+    merged = copy.deepcopy(merged)
+
+    delta = (data.get("roles") or {}).get(role)
+    if not delta:
+        return merged
+    if not isinstance(delta, dict):
+        raise ContractValidationError(f"roles.{role} must be a mapping")
+
+    for key, val in delta.items():
+        if key in ("observations", "actions"):
+            merged[key] = _merge_role_streams(
+                merged.get(key), val, delta.get(f"{key}_by_key"), role, key
+            )
+        elif key in ("observations_by_key", "actions_by_key"):
+            # Handled together with its base section above; apply standalone too.
+            base_key = key[: -len("_by_key")]
+            if base_key not in delta:
+                merged[base_key] = _merge_role_streams(
+                    merged.get(base_key), None, val, role, base_key
+                )
+        elif isinstance(val, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], val)
+        else:
+            merged[key] = copy.deepcopy(val)
+
+    return merged
+
+
+def load_unified_contract(path: Path | str, role: str) -> Contract:
+    """Load a unified contract and return its ``role`` view as a ``Contract``.
+
+    A unified contract holds a shared base plus a ``roles: {record, inference}``
+    block of deltas (and an optional inlined ``processor``). The selected role's
+    deltas are merged onto the base, then validated through the normal
+    :class:`Contract` path, so all existing consumers are unchanged.
+    """
+    if role not in VALID_ROLES:
+        raise ContractValidationError(
+            f"Unknown role '{role}'. Must be one of {sorted(VALID_ROLES)}"
+        )
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Contract file not found: {path}")
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ContractValidationError(
+            f"Contract must be a YAML mapping, got {type(data).__name__}"
+        )
+
+    return _contract_from_dict(_apply_role(data, role))
+
+
+def is_unified_contract(path: Path | str) -> bool:
+    """True if ``path`` is a unified contract (has a top-level ``roles`` block)."""
+    path = Path(path)
+    if not path.exists():
+        return False
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return False
+    return isinstance(data, dict) and isinstance(data.get("roles"), dict)
+
+
+def load_processor_spec(
+    path: Path | str, task: str | None = None
+) -> dict[str, Any] | None:
+    """Return the inlined observation-processor spec from a unified contract.
+
+    The ``processor`` block is either a single pipeline mapping
+    (``{steps: [...]}``) or a task-keyed map (``{tossing: {steps: ...}, ...}``).
+    Returns ``None`` when the contract has no inline processor.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Contract file not found: {path}")
+
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
+
+    proc = (data or {}).get("processor")
+    if not proc:
+        return None
+    if not isinstance(proc, dict):
+        raise ContractValidationError("'processor' must be a mapping")
+
+    # Single pipeline form.
+    if "steps" in proc:
+        return proc
+
+    # Task-keyed form.
+    if task is None:
+        raise ContractValidationError(
+            f"'processor' is task-keyed ({sorted(proc)}); a task must be provided"
+        )
+    if task not in proc:
+        raise ContractValidationError(
+            f"No processor for task '{task}'; available: {sorted(proc)}"
+        )
+    return proc[task]

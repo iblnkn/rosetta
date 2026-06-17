@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p> -->
 
-**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots. 
+**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots.
 
 ## Table of Contents
 
@@ -447,7 +447,7 @@ python -m rosetta.port_bags \
     --root ./datasets/lerobot
 ```
 
- For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples. 
+ For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples.
 
 
 

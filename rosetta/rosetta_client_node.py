@@ -34,33 +34,27 @@ import threading
 import time
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
-from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from rcl_interfaces.msg import ParameterDescriptor
-
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.processor import RobotProcessorPipeline
-import rosetta.common.robot_client as _robot_client  # noqa: F401  — apply monkey-patches
-from lerobot.processor.converters import (
-    observation_to_transition,
-    transition_to_observation,
-)
-from rosetta_interfaces.action import RunPolicy
-
+from lerobot.processor.converters import (observation_to_transition,
+                                          transition_to_observation)
 from lerobot_robot_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import _TopicBridge
+from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.lifecycle import (LifecycleNode, LifecycleState,
+                             TransitionCallbackReturn)
+from rosetta_interfaces.action import RunPolicy
 
-from .common.ros2_utils import is_jazzy_or_newer
+import rosetta.common.robot_client as _robot_client  # noqa: F401  — apply monkey-patches
+
 from .common import processors as _processors  # noqa: F401
-from .common.policy_registry import (
-    PolicyBundle,
-    PolicyRegistryError,
-    load_registry,
-    validate_pretrained,
-)
+from .common.policy_registry import (PolicyBundle, PolicyRegistryError,
+                                     load_registry, validate_pretrained)
+from .common.ros2_utils import is_jazzy_or_newer
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -676,7 +670,8 @@ class RosettaClientNode(LifecycleNode):
             client = RobotClient(config)
             self._client = client
             processor = self._build_observation_processor(
-                bundle.observation_processor_path
+                bundle.observation_processor_path,
+                contract_path=bundle.contract_path,
             )
             client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
 
@@ -795,28 +790,13 @@ class RosettaClientNode(LifecycleNode):
         if err is not None:
             return None, f"Rejected goal: {err}"
 
-        # Resolve observation processor: registry entry > node-level default.
-        # Required: running without a processor causes image-shape mismatches
-        # at inference time, so reject the goal here rather than crashing later.
-        if not bundle.observation_processor_path:
-            node_default = self.get_parameter("observation_processor_path").value
-            if node_default:
-                bundle.observation_processor_path = node_default
+        entry_hint = (
+            f"registry entry '{request.policy_name}'"
+            if request.policy_name
+            else "the resolved policy"
+        )
 
-        if not bundle.observation_processor_path:
-            entry_hint = (
-                f"registry entry '{request.policy_name}'"
-                if request.policy_name
-                else "the resolved policy"
-            )
-            return None, (
-                f"No observation_processor_path resolved for {entry_hint}. "
-                "Set 'observation_processor_path' on the registry entry or "
-                "the node-level default in the node's parameters YAML. Running "
-                "without a processor causes image-shape mismatches."
-            )
-
-        # Resolve contract: registry entry > launch-time node default. We
+        # Resolve contract first: registry entry > launch-time node default. We
         # fall back to the launch-time param (not self._contract_path) so
         # that a goal without a registry override always swings back to the
         # node-default contract rather than inheriting a previously-swapped
@@ -829,18 +809,120 @@ class RosettaClientNode(LifecycleNode):
             bundle.contract_path = self.get_parameter("contract_path").value
 
         if not bundle.contract_path:
-            entry_hint = (
-                f"registry entry '{request.policy_name}'"
-                if request.policy_name
-                else "the resolved policy"
-            )
             return None, (
                 f"No contract_path resolved for {entry_hint}. "
                 "Set 'contract_path' on the registry entry or pass "
                 "contract_path:= at launch."
             )
 
+        # Resolve observation processor: registry entry > unified contract's
+        # inline processor > node-level default. Required: running without a
+        # processor causes image-shape mismatches, so reject the goal here.
+        if (
+            not bundle.observation_processor_path
+            and not self._contract_has_inline_processor(bundle.contract_path)
+        ):
+            node_default = self.get_parameter("observation_processor_path").value
+            if node_default:
+                bundle.observation_processor_path = node_default
+
+        if (
+            not bundle.observation_processor_path
+            and not self._contract_has_inline_processor(bundle.contract_path)
+        ):
+            return None, (
+                f"No observation processor resolved for {entry_hint}. "
+                "Set 'observation_processor_path', inline a `processor:` block in "
+                "the (unified) contract, or set the node-level default. Running "
+                "without a processor causes image-shape mismatches."
+            )
+
+        # Consistency gate: contract <-> checkpoint <-> processor <-> chunk size.
+        # Warn-only by default; rejects the goal when ROSETTA_CONTRACT_STRICT is set.
+        gate_err = self._check_bundle_consistency(bundle)
+        if gate_err:
+            return None, gate_err
+
         return bundle, None
+
+    def _check_bundle_consistency(self, bundle: PolicyBundle) -> str | None:
+        """Best-effort consistency check for a resolved bundle.
+
+        Compares the (record/base view of the) contract against the checkpoint
+        ``config.json`` (image keys, state/action dims), the observation
+        processor (resize vs contract image shape), and ``actions_per_chunk`` vs
+        the model's ``n_action_steps``. Logs warnings; returns an error string
+        (rejecting the goal) only when ``ROSETTA_CONTRACT_STRICT`` is set and a
+        hard error is found. Never raises.
+        """
+        try:
+            import json
+            import os
+
+            from rosetta.common import contract_validation as V
+            from rosetta.common.contract import (ROLE_RECORD,
+                                                 is_unified_contract,
+                                                 load_contract,
+                                                 load_processor_spec,
+                                                 load_unified_contract)
+
+            cpath = bundle.contract_path
+            if not cpath or not os.path.isfile(cpath):
+                return None
+
+            contract = (
+                load_unified_contract(cpath, ROLE_RECORD)
+                if is_unified_contract(cpath)
+                else load_contract(cpath)
+            )
+            res = V.CheckResult(context="deploy: contract vs checkpoint/processor")
+
+            cfg = None
+            cfg_path = os.path.join(bundle.pretrained_name_or_path, "config.json")
+            if os.path.isfile(cfg_path):
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                res.merge(V.check_contract_vs_checkpoint(contract, cfg))
+                apc = bundle.actions_per_chunk
+                if apc is None:
+                    apc = self.get_parameter("actions_per_chunk").value
+                res.merge(V.check_chunk_consistency(cfg.get("n_action_steps"), apc))
+
+            # Processor: inline (unified contract) or external dir.
+            spec = None
+            if is_unified_contract(cpath):
+                try:
+                    spec = load_processor_spec(cpath)
+                except Exception:
+                    spec = None
+            elif bundle.observation_processor_path:
+                pj = os.path.join(
+                    bundle.observation_processor_path,
+                    "robot_observation_processor.json",
+                )
+                if os.path.isfile(pj):
+                    with open(pj) as f:
+                        spec = json.load(f)
+            if spec is not None:
+                res.merge(
+                    V.check_processor_vs_contract(
+                        spec,
+                        contract,
+                        policy_crop_shape=(cfg or {}).get("crop_shape"),
+                        policy_resize_shape=(cfg or {}).get("resize_shape"),
+                    )
+                )
+
+            for w in res.warnings:
+                self.get_logger().warning(f"[contract] {w}")
+            for e in res.errors:
+                self.get_logger().error(f"[contract] {e}")
+
+            if res.errors and V.strict_from_env():
+                return "Contract consistency check failed: " + "; ".join(res.errors)
+        except Exception as e:  # never block deploy on the gate itself
+            self.get_logger().warning(f"[contract] consistency check skipped: {e}")
+        return None
 
     def _build_config(self, task: str, bundle: PolicyBundle) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters and a resolved PolicyBundle."""
@@ -1013,19 +1095,58 @@ class RosettaClientNode(LifecycleNode):
         self.get_logger().info(f"Contract swap complete: {target_contract_path}")
         return None
 
-    def _build_observation_processor(
-        self, processor_path: str
-    ) -> RobotProcessorPipeline:
-        """Load the observation processor from the resolved path.
+    @staticmethod
+    def _contract_has_inline_processor(contract_path: str | None) -> bool:
+        """True if ``contract_path`` is a unified contract with an inline processor."""
+        if not contract_path:
+            return False
+        try:
+            from rosetta.common.contract import (is_unified_contract,
+                                                 load_processor_spec)
 
-        ``processor_path`` is guaranteed non-empty by ``_resolve_policy_bundle``,
-        which rejects goals that lack a processor (running without one causes
-        image-shape mismatches downstream).
+            if not is_unified_contract(contract_path):
+                return False
+            try:
+                return load_processor_spec(contract_path) is not None
+            except Exception:
+                # Task-keyed processor (needs a task) still counts as present.
+                return True
+        except Exception:
+            return False
+
+    def _build_observation_processor(
+        self, processor_path: str | None, contract_path: str | None = None
+    ) -> RobotProcessorPipeline:
+        """Build the observation processor.
+
+        Prefers an explicit ``processor_path`` dir; otherwise falls back to the
+        unified contract's inline ``processor:`` block. ``_resolve_policy_bundle``
+        guarantees at least one of these is available.
         """
-        self.get_logger().info(f"Loading observation processor from: {processor_path}")
-        return RobotProcessorPipeline.from_pretrained(
-            processor_path,
-            config_filename="robot_observation_processor.json",
+        if processor_path:
+            self.get_logger().info(
+                f"Loading observation processor from: {processor_path}"
+            )
+            return RobotProcessorPipeline.from_pretrained(
+                processor_path,
+                config_filename="robot_observation_processor.json",
+                to_transition=observation_to_transition,
+                to_output=transition_to_observation,
+            )
+
+        from rosetta.common.contract import load_processor_spec
+        from rosetta.common.processors import build_observation_processor
+
+        spec = load_processor_spec(contract_path)
+        if spec is None:
+            raise ValueError(
+                f"No observation processor available for contract {contract_path}"
+            )
+        self.get_logger().info(
+            "Building observation processor from inline contract spec."
+        )
+        return build_observation_processor(
+            spec,
             to_transition=observation_to_transition,
             to_output=transition_to_observation,
         )
