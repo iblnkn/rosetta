@@ -71,6 +71,13 @@ class RTCPolicyServer(PolicyServer):
     prefix = "rtc_policy_server"
     logger = get_logger(prefix)
 
+    # Registered policy types whose predict_action_chunk consumes server-built
+    # (B, n_obs_steps, ...) observations stacked from the client's raw obs
+    # history. Everything else — ACT, plain diffusion, and the VLAs
+    # (pi0/pi05/pi0fast/smolvla, which also declare rtc_config but self-prepare
+    # from the latest per-step observation) — takes the plain upstream path.
+    STACKED_HISTORY_POLICY_TYPES = frozenset({"sns_diffusion"})
+
     def __init__(self, config: PolicyServerConfig):
         super().__init__(config)
         self._action_queue: ActionQueue | None = None
@@ -86,95 +93,95 @@ class RTCPolicyServer(PolicyServer):
         self._last_chunk_sent_at = 0.0
 
     def _ensure_action_queue(self) -> None:
-        """Lazily initialize ActionQueue from the policy's RTCConfig."""
+        """Lazily initialize the ActionQueue from the policy's RTCConfig.
+
+        Only invoked on the RTC-enabled path (see ``_predict_stacked_action_chunk``),
+        so it always builds an enabled queue. Non-RTC policies never create a
+        queue, so it cannot grow unbounded in append mode.
+        """
         if self._action_queue is not None:
             return
-
-        rtc_config = getattr(self.policy, "config", None)
-        rtc_cfg = getattr(rtc_config, "rtc_config", None) if rtc_config else None
-
-        if rtc_cfg is not None and isinstance(rtc_cfg, RTCConfig) and rtc_cfg.enabled:
-            self._action_queue = ActionQueue(rtc_cfg)
-            self.logger.info(
-                f"ActionQueue initialized (RTC enabled, "
-                f"execution_horizon={rtc_cfg.execution_horizon}, "
-                f"max_guidance_weight={rtc_cfg.max_guidance_weight})"
-            )
-        else:
-            # Create a disabled ActionQueue (non-RTC fallback, uses append mode)
-            fallback_cfg = RTCConfig(enabled=False)
-            self._action_queue = ActionQueue(fallback_cfg)
-            self.logger.info("ActionQueue initialized (RTC disabled, append mode)")
+        rtc_cfg = getattr(getattr(self.policy, "config", None), "rtc_config", None)
+        self._action_queue = ActionQueue(rtc_cfg)
+        self.logger.info(
+            f"ActionQueue initialized (RTC enabled, "
+            f"execution_horizon={rtc_cfg.execution_horizon}, "
+            f"max_guidance_weight={rtc_cfg.max_guidance_weight})"
+        )
 
     def _rtc_enabled(self) -> bool:
-        """Check if the loaded policy has RTC enabled."""
-        rtc_config = getattr(self.policy, "config", None)
-        rtc_cfg = getattr(rtc_config, "rtc_config", None) if rtc_config else None
-        return rtc_cfg is not None and getattr(rtc_cfg, "enabled", False)
+        """Whether the loaded policy has RTC guidance enabled."""
+        rtc_cfg = getattr(getattr(self.policy, "config", None), "rtc_config", None)
+        return isinstance(rtc_cfg, RTCConfig) and rtc_cfg.enabled
+
+    def _needs_server_history(self) -> bool:
+        """Whether the loaded policy consumes server-stacked
+        ``(B, n_obs_steps, ...)`` observations built from the client's raw obs
+        history.
+
+        Keyed on the registered policy ``type`` (see
+        ``STACKED_HISTORY_POLICY_TYPES``), NOT on the presence of an
+        ``rtc_config`` field: the VLA configs (pi0/pi05/pi0fast/smolvla) also
+        declare ``rtc_config`` but expect the standard per-step observation
+        (per-camera image keys + ``task``), so they must take the upstream path
+        like ACT. Only sns_diffusion is built for the server-side stacking
+        protocol.
+
+        A more explicit per-policy capability flag could replace this set, but
+        that would require a change in each such policy package.
+        """
+        cfg = getattr(self.policy, "config", None)
+        return getattr(cfg, "type", None) in self.STACKED_HISTORY_POLICY_TYPES
 
     def _predict_action_chunk(
         self, observation_t: TimedObservation | TimedObservationWithHistory
     ) -> list[TimedAction]:
-        """Predict an action chunk with RTC support.
+        """Dispatch by policy capability.
+
+        Vanilla policies (ACT, upstream diffusion, smolvla, pi0, ...) take the
+        unmodified upstream path: per-camera image keys preserved,
+        ``observation.state`` as ``(B, D)``, no temporal dim, no ActionQueue.
+        The sns_diffusion family takes the stacked-history path below, which
+        layers RTC guidance on top only when the policy has it enabled.
+        """
+        if not self._needs_server_history():
+            return super()._predict_action_chunk(observation_t)
+        return self._predict_stacked_action_chunk(observation_t)
+
+    def _predict_stacked_action_chunk(
+        self, observation_t: TimedObservation | TimedObservationWithHistory
+    ) -> list[TimedAction]:
+        """Inference for policies that consume server-built
+        ``(B, n_obs_steps, ...)`` observations (the sns_diffusion family).
 
         Pipeline:
-        1. Build ``(B, n_obs_steps, ...)`` observations from client-sent obs history
-        2. Build RTC kwargs (prev_chunk_left_over, inference_delay)
-        3. Run policy inference with RTC kwargs
-        4. Merge into ActionQueue (original + postprocessed)
-        5. Apply postprocessor
-        6. Convert to TimedAction list
+        1. Build stacked observations from the client's raw obs history.
+        2. (RTC only) build kwargs: prev_chunk_left_over, inference_delay.
+        3. Run policy inference.
+        4. Apply the postprocessor.
+        5. (RTC only) merge original + postprocessed actions into the ActionQueue.
+        6. Convert to a TimedAction list.
         """
-        self._ensure_action_queue()
+        rtc_enabled = self._rtc_enabled()
+        if rtc_enabled:
+            self._ensure_action_queue()
 
-        """1. Build stacked observations from client history.
-
-        The client attaches a rolling window of raw obs captured at control
-        rate. We convert + preprocess each, stack per-camera images, then
-        stack along dim=1 into a (B, n_obs_steps, ...) tensor per key — the
-        shape the diffusion model was trained on. This bypasses the policy's
-        internal deque entirely (which would otherwise carry ~1 s-spaced
-        inter-chunk obs, out of training distribution).
-        """
+        # 1. Build stacked observations from client history. The client attaches
+        # a rolling window of raw obs captured at control rate; stacking them
+        # here bypasses the policy's internal deque (which would otherwise carry
+        # ~1 s-spaced inter-chunk obs, out of training distribution).
         start_prepare = time.perf_counter()
         observations = self._build_stacked_observations(observation_t)
         self.last_processed_obs: TimedObservation = observation_t
         prepare_time = time.perf_counter() - start_prepare
 
-        """2. Build RTC kwargs"""
-        rtc_kwargs = {}
-        action_index_before = None
+        # 2. RTC kwargs (only when enabled).
+        if rtc_enabled:
+            rtc_kwargs, action_index_before = self._build_rtc_kwargs()
+        else:
+            rtc_kwargs, action_index_before = {}, None
 
-        if self._rtc_enabled() and self._action_queue is not None:
-            # Simulate client-side consumption.
-            #
-            # In eval_with_real_robot.py the robot thread calls
-            # action_queue.get() which advances last_index.  Here the
-            # client is in a separate process so we estimate how many
-            # actions it consumed since we last sent a chunk.
-            self._simulate_client_consumption()
-
-            prev_chunk_left_over = self._action_queue.get_left_over()
-            rtc_kwargs["prev_chunk_left_over"] = prev_chunk_left_over
-
-            # Compute inference_delay from the last measured inference time
-            inference_delay = (
-                math.ceil(self._last_inference_time / self.config.environment_dt)
-                if self._last_inference_time > 0
-                else 0
-            )
-            rtc_kwargs["inference_delay"] = inference_delay
-
-            # Optionally pass execution_horizon (falls back to config default in RTCProcessor)
-            action_index_before = self._action_queue.get_action_index()
-
-            self.logger.debug(
-                f"RTC kwargs: inference_delay={inference_delay}, "
-                f"prev_chunk_left_over={'None' if prev_chunk_left_over is None else prev_chunk_left_over.shape}, "
-                f"action_index_before={action_index_before}"
-            )
-
-        """3. Get action chunk"""
+        # 3. Inference.
         start_inference = time.perf_counter()
         action_tensor = self._get_action_chunk_with_kwargs(observations, **rtc_kwargs)
         inference_time = time.perf_counter() - start_inference
@@ -183,53 +190,33 @@ class RTCPolicyServer(PolicyServer):
             f"Inference took {inference_time:.4f}s, action shape: {action_tensor.shape}"
         )
 
-        # Keep original actions (model-space) before postprocessing for ActionQueue
-        original_actions = action_tensor.squeeze(0).clone()
+        # Original (model-space) actions are only needed to feed the ActionQueue.
+        original_actions = action_tensor.squeeze(0).clone() if rtc_enabled else None
 
-        """4. Apply postprocessor"""
+        # 4. Apply postprocessor (per-step; matches upstream).
         start_postprocess = time.perf_counter()
         _, chunk_size, _ = action_tensor.shape
-
-        processed_actions = []
-        for i in range(chunk_size):
-            single_action = action_tensor[:, i, :]
-            processed_action = self.postprocessor(single_action)
-            processed_actions.append(processed_action)
-
+        processed_actions = [
+            self.postprocessor(action_tensor[:, i, :]) for i in range(chunk_size)
+        ]
         action_tensor = torch.stack(processed_actions, dim=1).squeeze(0)
         self.logger.debug(f"Postprocessed action shape: {action_tensor.shape}")
 
-        # Postprocessed actions for ActionQueue
-        processed_actions_2d = action_tensor.clone()
-
-        """5. Merge into ActionQueue"""
-        if self._action_queue is not None:
-            inference_delay = rtc_kwargs.get("inference_delay", 0)
-            # Upstream `eval_with_real_robot.py` has a robot thread popping
-            # actions in parallel with inference, which naturally advances
-            # last_index by ~real_delay. Here the client is remote, so we
-            # simulate that consumption explicitly before merging — otherwise
-            # ActionQueue._check_and_resolve_delays warns with
-            # "indexes_diff=0, real_delay=N".
-            if self._rtc_enabled() and inference_delay > 0:
-                steps_to_consume = min(inference_delay, self._action_queue.qsize())
-                for _ in range(steps_to_consume):
-                    self._action_queue.get()
-            self._action_queue.merge(
+        # 5. Merge into the ActionQueue (RTC only).
+        if rtc_enabled:
+            self._merge_into_action_queue(
                 original_actions=original_actions,
-                processed_actions=processed_actions_2d,
-                real_delay=inference_delay,
-                action_index_before_inference=action_index_before,
+                processed_actions=action_tensor.clone(),
+                inference_delay=rtc_kwargs.get("inference_delay", 0),
+                action_index_before=action_index_before,
             )
-            self.logger.debug(f"ActionQueue merged: qsize={self._action_queue.qsize()}")
-
-        # Record when this chunk was produced so the next cycle can
-        # estimate how many actions the client consumed in the meantime.
-        self._last_chunk_sent_at = time.perf_counter()
+            # Record when this chunk was produced so the next cycle can estimate
+            # how many actions the client consumed in the meantime.
+            self._last_chunk_sent_at = time.perf_counter()
 
         action_tensor = action_tensor.detach().cpu()
 
-        """6. Convert to TimedAction list"""
+        # 6. Convert to TimedAction list.
         action_chunk = self._time_action_chunk(
             observation_t.get_timestamp(),
             list(action_tensor),
@@ -242,7 +229,6 @@ class RTCPolicyServer(PolicyServer):
             f"Observation {observation_t.get_timestep()} | "
             f"Total time: {1000 * (postprocess_stops - start_prepare):.2f}ms"
         )
-
         self.logger.debug(
             f"Observation {observation_t.get_timestep()} | "
             f"Prepare time: {1000 * prepare_time:.2f}ms | "
@@ -250,8 +236,69 @@ class RTCPolicyServer(PolicyServer):
             f"Postprocessing time: {1000 * postprocessing_time:.2f}ms | "
             f"Total time: {1000 * (postprocess_stops - start_prepare):.2f}ms"
         )
-
         return action_chunk
+
+    def _build_rtc_kwargs(self) -> tuple[dict, int | None]:
+        """Build RTC kwargs and capture the pre-inference action index.
+
+        Advances the queue for estimated client consumption, then reads the
+        leftover prefix and computes ``inference_delay`` from the last measured
+        inference latency. Assumes RTC is enabled and the queue exists.
+        """
+        # In eval_with_real_robot.py the robot thread calls action_queue.get()
+        # (advancing last_index). Here the client is a separate process, so
+        # estimate how many actions it consumed since the last chunk was sent.
+        self._simulate_client_consumption()
+
+        prev_chunk_left_over = self._action_queue.get_left_over()
+        inference_delay = (
+            math.ceil(self._last_inference_time / self.config.environment_dt)
+            if self._last_inference_time > 0
+            else 0
+        )
+        action_index_before = self._action_queue.get_action_index()
+
+        self.logger.debug(
+            f"RTC kwargs: inference_delay={inference_delay}, "
+            f"prev_chunk_left_over="
+            f"{'None' if prev_chunk_left_over is None else prev_chunk_left_over.shape}, "
+            f"action_index_before={action_index_before}"
+        )
+        return (
+            {
+                "prev_chunk_left_over": prev_chunk_left_over,
+                "inference_delay": inference_delay,
+            },
+            action_index_before,
+        )
+
+    def _merge_into_action_queue(
+        self,
+        *,
+        original_actions: Tensor,
+        processed_actions: Tensor,
+        inference_delay: int,
+        action_index_before: int | None,
+    ) -> None:
+        """Advance the queue for the chunk just executed, then merge the new
+        chunk. Assumes RTC is enabled and the queue exists.
+        """
+        # Upstream eval_with_real_robot.py has a robot thread popping actions in
+        # parallel with inference, advancing last_index by ~real_delay. The
+        # client is remote here, so simulate that consumption explicitly before
+        # merging — otherwise ActionQueue._check_and_resolve_delays warns with
+        # "indexes_diff=0, real_delay=N".
+        if inference_delay > 0:
+            steps_to_consume = min(inference_delay, self._action_queue.qsize())
+            for _ in range(steps_to_consume):
+                self._action_queue.get()
+        self._action_queue.merge(
+            original_actions=original_actions,
+            processed_actions=processed_actions,
+            real_delay=inference_delay,
+            action_index_before_inference=action_index_before,
+        )
+        self.logger.debug(f"ActionQueue merged: qsize={self._action_queue.qsize()}")
 
     def _get_action_chunk_with_kwargs(
         self, observations: dict[str, torch.Tensor], **kwargs
@@ -339,7 +386,7 @@ class RTCPolicyServer(PolicyServer):
             else float("nan")
         )
 
-        self.logger.info(
+        self.logger.debug(
             f"obs history: hist_len_sent={len(history)}, "
             f"n_obs_steps={n_obs_steps}, used={len(recent)}, "
             f"stacked_keys={sorted(stacked.keys())}, "
