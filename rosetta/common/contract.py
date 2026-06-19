@@ -227,7 +227,6 @@ class Contract:
 
     robot_type: str
     fps: int
-    max_duration_s: float
     observations: list[ObservationSpec]
     actions: list[ActionSpec]
     tasks: list[TaskSpec]
@@ -721,7 +720,6 @@ def load_contract(path: Path | str) -> Contract:
     return Contract(
         robot_type=robot_type,
         fps=fps,
-        max_duration_s=float(data.get('max_duration_s', 30.0)),
         observations=observations,
         actions=actions,
         tasks=tasks,

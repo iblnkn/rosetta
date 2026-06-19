@@ -48,6 +48,11 @@ hil_manager:
     # Rate at which to publish ManageEpisode feedback (Hz)
     feedback_rate_hz: 30.0
 
+    # Default max episode duration in seconds
+    # (used when a ManageEpisode request does not specify max_duration_s)
+    # 0 (or negative) = run until stopped, no time limit
+    default_max_duration: 0.0
+
 # ==============================================================================
 # Robot Policy  (rosetta_client_node, namespace: robot_policy)
 # Merged over rosetta_client.yaml — values here take precedence.
@@ -93,7 +98,8 @@ episode_recorder:
     storage_id: "mcap"
 
     # Default max episode duration in seconds
-    default_max_duration: 300.0
+    # 0 (or negative) = record until stopped, no time limit
+    default_max_duration: 0.0
 
 # ==============================================================================
 # Reward Classifier  (rosetta_client_node, namespace: reward_classifier)

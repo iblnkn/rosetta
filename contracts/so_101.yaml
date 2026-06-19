@@ -1,7 +1,6 @@
 robot_type: so_101
 
 fps: 30
-max_duration_s: 90.0
 
 observations:
   - key: observation.images.right

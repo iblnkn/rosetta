@@ -139,8 +139,11 @@ class EpisodeRecorderNode(LifecycleNode):
         )
         self.declare_parameter(
             'default_max_duration',
-            300.0,
-            ParameterDescriptor(description='Maximum recording duration in seconds'),
+            0.0,
+            ParameterDescriptor(
+                description='Maximum recording duration in seconds '
+                '(0 or negative = record until stopped, no limit)'
+            ),
         )
         self.declare_parameter(
             'feedback_rate_hz',
@@ -160,7 +163,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._contract = None
         self._bag_base: Path | None = None
         self._storage_id: str | None = None
-        self._default_max_duration: float = 300.0
+        self._default_max_duration: float = 0.0
         self._feedback_rate_hz: float = 2.0
         self._topics: list[
             tuple[str, str, QoSProfile | int, str]
@@ -661,7 +664,7 @@ class EpisodeRecorderNode(LifecycleNode):
             start_time = time.time()
             while not self._stop_event.is_set():
                 elapsed = time.time() - start_time
-                if elapsed >= max_duration:
+                if max_duration > 0 and elapsed >= max_duration:
                     self.get_logger().info('Timeout reached')
                     break
                 time.sleep(1.0 / self._feedback_rate_hz)
@@ -711,12 +714,15 @@ class EpisodeRecorderNode(LifecycleNode):
 
             while not self._stop_event.is_set():
                 elapsed = time.time() - start_time
-                remaining = max(0, max_duration - elapsed)
 
-                # Check timeout
-                if remaining <= 0:
-                    self.get_logger().info('Timeout reached')
-                    break
+                # Check timeout (max_duration <= 0 means record until stopped)
+                if max_duration > 0:
+                    remaining = max(0, max_duration - elapsed)
+                    if remaining <= 0:
+                        self.get_logger().info('Timeout reached')
+                        break
+                else:
+                    remaining = 0
 
                 # Check cancel
                 if goal_handle.is_cancel_requested:

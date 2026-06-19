@@ -15,7 +15,8 @@ episode_recorder:
     storage_id: "mcap"
 
     # Default max episode duration in seconds (can be overridden per-episode)
-    default_max_duration: 300.0
+    # 0 (or negative) = record until stopped, no time limit
+    default_max_duration: 0.0
 
     # Rate at which to publish recording feedback (Hz)
     feedback_rate_hz: 2.0

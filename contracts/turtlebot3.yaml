@@ -1,7 +1,6 @@
 robot_type: turtlebot3_waffle
 
 fps: 30
-max_duration_s: 60.0
 
 observations:
   # Front-facing RGB camera

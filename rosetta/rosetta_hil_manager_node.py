@@ -165,6 +165,15 @@ class RosettaHilManagerNode(LifecycleNode):
             30.0,
             ParameterDescriptor(description='Rate for publishing ManageEpisode feedback'),
         )
+        self.declare_parameter(
+            'default_max_duration',
+            0.0,
+            ParameterDescriptor(
+                description='Default max episode duration in seconds, used when the '
+                'request does not specify max_duration_s '
+                '(0 or negative = run until stopped, no limit)'
+            ),
+        )
 
         # -------------------- State --------------------
         self._contract = None
@@ -732,7 +741,7 @@ class RosettaHilManagerNode(LifecycleNode):
 
         """
         if max_duration <= 0.0:
-            max_duration = self._contract.max_duration_s
+            max_duration = self.get_parameter('default_max_duration').value
 
         self.get_logger().info(
             f"Starting episode: prompt='{prompt}', max_duration={max_duration}s, "
@@ -852,7 +861,7 @@ class RosettaHilManagerNode(LifecycleNode):
             if stop:
                 return 'human_stop'
 
-            if elapsed >= max_duration:
+            if max_duration > 0.0 and elapsed >= max_duration:
                 return 'timeout'
 
             if reward_threshold > 0.0 and reward >= reward_threshold:
