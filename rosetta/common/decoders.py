@@ -86,17 +86,6 @@ SUPPORTED_IMAGE_ENCODINGS = frozenset(enc for encs in IMAGE_ENCODINGS.values() f
 # =============================================================================
 
 
-def _nearest_resize(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
-    """Pure-numpy nearest-neighbor resize for HxW or HxWxC arrays."""
-    H, W = img.shape[:2]
-    if H == rh and W == rw:
-        return img
-    y = np.linspace(0, H - 1, rh).astype(np.int64)
-    x = np.linspace(0, W - 1, rw).astype(np.int64)
-    # Works for both 2D (HxW) and 3D (HxWxC) arrays
-    return img[y][:, x]
-
-
 def _mono_to_rgb(arr: np.ndarray) -> np.ndarray:
     """Convert HxW grayscale to HxWx3 RGB by replication."""
     return np.repeat(arr[..., None], 3, axis=-1)
@@ -187,16 +176,17 @@ def _decode_image_by_encoding(
 def decode_ros_image(
     msg,
     expected_encoding: str | None = None,
-    resize_hw: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """
     Decode ROS Image message to HWC uint8 RGB array.
+
+    Resizing is handled by the ``resize`` op in the entry's ``apply`` pipeline,
+    not here.
 
     Args:
     ----
         msg: ROS Image message
         expected_encoding: Fallback encoding if msg.encoding is missing
-        resize_hw: Optional (height, width) to resize output
 
     Returns
     -------
@@ -222,10 +212,6 @@ def decode_ros_image(
     # Decode based on encoding
     rgb = _decode_image_by_encoding(enc, raw, h, w, step)
 
-    # Resize if requested
-    if resize_hw:
-        rgb = _nearest_resize(rgb, int(resize_hw[0]), int(resize_hw[1]))
-
     return rgb
 
 
@@ -236,17 +222,24 @@ def decode_ros_image(
 
 @register_decoder('sensor_msgs/msg/Image', dtype='video')
 def _dec_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """Decode sensor_msgs/Image to HWC uint8 RGB."""
-    return decode_ros_image(msg, spec.image_encoding, spec.image_resize)
+    """
+    Decode sensor_msgs/Image to full-resolution HWC uint8 RGB.
+
+    Resizing is handled by the ``resize`` op in the entry's ``apply`` pipeline,
+    not here.
+    """
+    return decode_ros_image(msg, spec.image_encoding)
 
 
 @register_decoder('sensor_msgs/msg/CompressedImage', dtype='video')
 def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     """
-    Decode sensor_msgs/CompressedImage to HWC uint8 RGB.
+    Decode sensor_msgs/CompressedImage to full-resolution HWC uint8 RGB.
 
-    Supports jpeg, png, and other formats via cv2 or PIL fallback.
+    Supports jpeg, png, and other formats via cv2 or PIL fallback. Resizing is
+    handled by the ``resize`` op in the entry's ``apply`` pipeline, not here.
     """
+    _ = spec  # Selection/resize handled by the op pipeline, not the codec.
     if _HAS_CV2:
         data = np.frombuffer(msg.data, dtype=np.uint8)
         img = cv2.imdecode(data, cv2.IMREAD_COLOR)
@@ -255,9 +248,6 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     else:
         img = np.array(Image.open(io.BytesIO(msg.data)).convert('RGB'))
-
-    if spec.image_resize:
-        img = _nearest_resize(img, spec.image_resize[0], spec.image_resize[1])
 
     return img.astype(np.uint8)
 

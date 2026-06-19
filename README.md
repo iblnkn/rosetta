@@ -28,10 +28,11 @@
   - [Minimal Example](#minimal-example)
   - [Observations](#observations)
   - [Actions](#actions)
+  - [Ops](#ops)
   - [Teleop](#teleop)
   - [Tasks, Rewards, and Signals](#tasks-rewards-and-signals)
   - [Adjunct Topics](#adjunct-topics)
-  - [Selector Syntax](#selector-syntax)
+  - [Select Syntax](#select-syntax)
   - [Alignment Strategies](#alignment-strategies)
   - [Supported Message Types](#supported-message-types)
   - [Custom Encoders/Decoders (Experimental)](#custom-encodersdecoders-experimental)
@@ -82,22 +83,18 @@ observations:
   - key: observation.state
     topic: /joint_states
     type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, position.j2]
+    select: [position.j1, position.j2]
 
   - key: observation.images.cam
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image:
-      resize: [480, 640]
+    apply: [resize: [480, 640]]
 
 actions:
   - key: action
-    publish:
-      topic: /cmd
-      type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, position.j2]
+    topic: /cmd
+    type: sensor_msgs/msg/JointState
+    select: [position.j1, position.j2]
 ```
 
 **2. Record** demonstrations to rosbag:
@@ -248,9 +245,8 @@ Here's how a concrete contract entry translates a ROS2 topic to a LeRobot featur
 - key: observation.state
   topic: /follower_arm/joint_states
   type: sensor_msgs/msg/JointState
-  selector:
-    names: [position.shoulder_pan, position.shoulder_lift, position.elbow,
-            position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+  select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
+           position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
 ```
 
 At each timestep, this:
@@ -267,8 +263,7 @@ observations:
   - key: observation.state
     topic: /arm/joint_states
     type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, position.j2, position.j3]
+    select: [position.j1, position.j2, position.j3]
 
   - key: observation.state
     topic: /gripper/state
@@ -591,16 +586,13 @@ observations:
   - key: observation.state
     topic: /joint_states
     type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, position.j2]
+    select: [position.j1, position.j2]
 
 actions:
   - key: action
-    publish:
-      topic: /joint_commands
-      type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, position.j2]
+    topic: /joint_commands
+    type: sensor_msgs/msg/JointState
+    select: [position.j1, position.j2]
 ```
 
 ### Observations
@@ -611,8 +603,8 @@ observations:
   - key: observation.state
     topic: /joint_states
     type: sensor_msgs/msg/JointState
-    selector:
-      names: [position.j1, velocity.j1]
+    select: [position.j1, velocity.j1]
+    apply: [rad2deg]    # optional op pipeline (see Ops)
     align:
       strategy: hold    # hold (default), asof, drop
       stamp: header     # header (default), receive
@@ -620,12 +612,11 @@ observations:
       reliability: best_effort
       depth: 10
 
-  # Camera
+  # Camera (resize is an op in the apply pipeline)
   - key: observation.images.camera
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image:
-      resize: [224, 224]  # [height, width]
+    apply: [resize: [224, 224]]  # [height, width]
 ```
 
 Multiple topics can share the same `key`. Values are concatenated (see [The Contract](#the-contract)).
@@ -635,14 +626,37 @@ Multiple topics can share the same `key`. Values are concatenated (see [The Cont
 ```yaml
 actions:
   - key: action
-    publish:
-      topic: /joint_commands
-      type: sensor_msgs/msg/JointState
-      qos: {reliability: reliable, depth: 10}
-    selector:
-      names: [position.j1, position.j2]
-    safety_behavior: hold  # none, hold, zeros
+    topic: /joint_commands
+    type: sensor_msgs/msg/JointState
+    qos: {reliability: reliable, depth: 10}
+    select: [position.j1, position.j2]
+    apply: [rad2deg]          # only invertible ops allowed on actions
+    serve:
+      safety: hold            # none, hold, zeros (default zeros)
 ```
+
+### Ops
+
+`apply` is an ordered op pipeline run after `select` (field projection) and
+before `align` (resampling). On the **record/decode** path ops run front-to-back
+via their forward direction; on the **serve/encode** path (policy command → ROS)
+they run back-to-front via their inverse. An action's `apply` may only contain
+**invertible** ops (so the command can be reconstructed); a non-invertible op on
+an action is rejected at contract load.
+
+| Op | Form | Invertible | Notes |
+|----|------|:----------:|-------|
+| `rad2deg` | `rad2deg` | yes | radians (ROS) ↔ degrees (dataset) |
+| `clamp` | `clamp: [lo, hi]` | yes | clip element-wise to `[lo, hi]`; on actions this bounds the outgoing command |
+| `resize` | `resize: [h, w]` | no | nearest-neighbor image resize; observation only |
+
+```yaml
+apply: [rad2deg, clamp: [-180, 180]]   # convert then bound
+apply: [resize: [224, 224]]            # image resize (observations only)
+```
+
+Add a capability by registering a new op in `rosetta/common/ops.py`; the
+contract schema does not change.
 
 ### Teleop
 
@@ -654,13 +668,12 @@ teleop:
     - key: teleop_input
       topic: /leader_arm/joint_states
       type: sensor_msgs/msg/JointState
-      selector:
-        names: [position.j1, position.j2]
+      select: [position.j1, position.j2]
 
   events:
     topic: /joy
     type: sensor_msgs/msg/Joy
-    mappings:
+    select:               # event_name -> button/axis path
       is_intervention: buttons.5
       success: buttons.0
       terminate_episode: buttons.6
@@ -736,16 +749,17 @@ adjunct:
 
 Because the bag preserves this data, you can always add a contract mapping for these topics later and re-run `port_bags.py` without re-recording.
 
-### Selector Syntax
+### Select Syntax
 
-Dot notation extracts nested fields from ROS2 messages:
+`select` is a flat list of dot-notation paths that extract nested fields from
+ROS2 messages:
 
 ```yaml
 # JointState: {field}.{joint_name}
-names: [position.shoulder, velocity.shoulder]
+select: [position.shoulder, velocity.shoulder]
 
 # Odometry: nested path
-names: [twist.twist.linear.x, pose.pose.position.z]
+select: [twist.twist.linear.x, pose.pose.position.z]
 ```
 
 ### Alignment Strategies
@@ -794,9 +808,8 @@ observations:
 
 actions:
   - key: action
-    publish:
-      topic: /my_command
-      type: my_msgs/msg/MyCustomCommand
+    topic: /my_command
+    type: my_msgs/msg/MyCustomCommand
     decoder: my_package.converters:decode_my_command  # for reading bags
     encoder: my_package.converters:encode_my_command  # for publishing
 ```
@@ -839,7 +852,7 @@ robot = Rosetta(RosettaConfig(config_path="contract.yaml"))
 ```python
 def my_decoder(msg, spec) -> np.ndarray:
     # msg: ROS message instance
-    # spec.names: list of selector names from contract
+    # spec.names: list of selected field paths from the contract
     # spec.msg_type: ROS message type string
     return np.array([...], dtype=np.float64)
 ```
@@ -848,9 +861,9 @@ def my_decoder(msg, spec) -> np.ndarray:
 
 ```python
 def my_encoder(values, spec, stamp_ns=None):
-    # values: numpy array of action values
-    # spec.names: list of selector names from contract
-    # spec.clamp: optional (min, max) tuple
+    # values: numpy array of action values (ops in spec.apply have already been
+    #         run in the serve/inverse direction, e.g. clamp/deg2rad)
+    # spec.names: list of selected field paths from the contract
     # stamp_ns: optional timestamp in nanoseconds
     msg = MyMessage()
     # ... populate msg from values ...
@@ -1119,19 +1132,18 @@ observations:
   - key: observation.state          # Required by: SmolVLA, Wall-X
     topic: /joint_states
     type: sensor_msgs/msg/JointState
-    selector: { names: [...] }
+    select: [...]
 
   - key: observation.images.top     # At least 1 image required by most policies
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [480, 640] }
+    apply: [resize: [480, 640]]
 
 actions:
   - key: action                     # Required by all action policies
-    publish:
-      topic: /joint_commands
-      type: sensor_msgs/msg/JointState
-    selector: { names: [...] }
+    topic: /joint_commands
+    type: sensor_msgs/msg/JointState
+    select: [...]
 
 # For VLA policies, also provide a task prompt when recording:
 # ros2 action send_goal ... "{prompt: 'pick up the red block'}"
@@ -1146,7 +1158,7 @@ observations:
   - key: observation.images.wrist.right
     topic: /wrist_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [512, 512] }
+    apply: [resize: [512, 512]]
 ```
 
 

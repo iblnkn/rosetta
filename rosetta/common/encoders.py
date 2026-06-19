@@ -19,9 +19,12 @@ Each encoder is self-contained and registered with @register_encoder.
 If you need to encode a message type that isn't here, add a new encoder.
 
 Encoder signature: (action_vec, spec, stamp_ns=None) -> ROS message
-- action_vec: numpy array of action values
-- spec: ActionStreamSpec with names, clamp, msg_type
+- action_vec: numpy array of action values (op pipeline already applied)
+- spec: ActionStreamSpec with names, msg_type
 - stamp_ns: optional timestamp in nanoseconds
+
+Value transforms (deg2rad, ...) are applied by the op pipeline in
+encode_value before the encoder runs; encoders only scatter values into fields.
 """
 
 from __future__ import annotations
@@ -38,13 +41,6 @@ from .ros2_utils import dot_set
 # =============================================================================
 # Helper Functions
 # =============================================================================
-
-
-def _apply_clamp(arr: np.ndarray, clamp: tuple[float, float] | None) -> np.ndarray:
-    """Apply optional clamping to array."""
-    if clamp:
-        return np.clip(arr, clamp[0], clamp[1])
-    return arr
 
 
 def _set_header_stamp(msg, stamp_ns: int | None) -> None:
@@ -76,7 +72,7 @@ def _enc_twist(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | N
     msg_cls = get_message('geometry_msgs/msg/Twist')
     msg = msg_cls()
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
 
     if len(spec.names) != len(arr):
         raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
@@ -111,7 +107,7 @@ def _enc_twist_stamped(
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
 
     if len(spec.names) != len(arr):
         raise ValueError(f'names length ({len(spec.names)}) != action length ({len(arr)})')
@@ -136,7 +132,7 @@ def _enc_float32(
     _ = stamp_ns  # Unused - message type has no header
     msg_cls = get_message('std_msgs/msg/Float32')
     msg = msg_cls()
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float32).flatten()
     msg.data = float(arr[0])
     return msg
 
@@ -149,7 +145,7 @@ def _enc_float64(
     _ = stamp_ns  # Unused - message type has no header
     msg_cls = get_message('std_msgs/msg/Float64')
     msg = msg_cls()
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
     msg.data = float(arr[0])
     return msg
 
@@ -168,7 +164,7 @@ def _enc_float32_array(
     msg_cls = get_message('std_msgs/msg/Float32MultiArray')
     msg = msg_cls()
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float32).flatten()
     msg.data = arr.tolist()
 
     return msg
@@ -183,7 +179,7 @@ def _enc_float64_array(
     msg_cls = get_message('std_msgs/msg/Float64MultiArray')
     msg = msg_cls()
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
     msg.data = arr.tolist()
 
     return msg
@@ -198,7 +194,7 @@ def _enc_int32_array(
     msg_cls = get_message('std_msgs/msg/Int32MultiArray')
     msg = msg_cls()
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.int32).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.int32).flatten()
     msg.data = arr.tolist()
 
     return msg
@@ -225,7 +221,7 @@ def _enc_joint_state(
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
 
     if not spec.names:
         # Default: all values go to position
@@ -309,7 +305,7 @@ def _enc_joint_trajectory(
     msg = traj_cls()
     _set_header_stamp(msg, stamp_ns)
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
     point = point_cls()  # time_from_start is zero-initialized
 
     if not spec.names:
@@ -390,7 +386,7 @@ def _enc_joy(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | Non
     msg = msg_cls()
     _set_header_stamp(msg, stamp_ns)
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float32).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float32).flatten()
 
     if not spec.names:
         msg.axes = arr.tolist()
@@ -459,7 +455,7 @@ def _enc_multidof_command(
     msg_cls = get_message('control_msgs/msg/MultiDOFCommand')
     msg = msg_cls()
 
-    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+    arr = np.asarray(action_vec, dtype=np.float64).flatten()
 
     if not spec.names:
         msg.dof_names = [f'dof_{i}' for i in range(len(arr))]

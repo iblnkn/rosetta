@@ -17,7 +17,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, TYPE_CHECKING
+import time
+from typing import Any, Callable, TYPE_CHECKING
 
 from rclpy.qos import (
     DurabilityPolicy,
@@ -258,6 +259,27 @@ def dot_set(obj, path: str, value: float) -> None:
     for p in parts[:-1]:
         cur = getattr(cur, p)
     setattr(cur, parts[-1], float(value))
+
+
+# =============================================================================
+# Timing Utilities
+# =============================================================================
+
+
+def wait_until(
+    predicate: Callable[[], bool], timeout: float, poll: float = 0.1
+) -> bool:
+    """
+    Block until ``predicate()`` is true or ``timeout`` seconds elapse.
+
+    Polls at ``poll``-second intervals. Used by lifecycle ``on_deactivate``
+    callbacks to wait briefly for in-progress work to wind down. Returns True
+    if the predicate became true, False if it timed out.
+    """
+    start = time.time()
+    while not predicate() and (time.time() - start) < timeout:
+        time.sleep(poll)
+    return predicate()
 
 
 # =============================================================================

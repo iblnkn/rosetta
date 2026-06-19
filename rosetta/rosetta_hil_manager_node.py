@@ -47,7 +47,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rosetta.common.contract import load_contract
-from rosetta.common.ros2_utils import qos_profile_from_dict
+from rosetta.common.ros2_utils import qos_profile_from_dict, wait_until
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 from rosetta_interfaces.srv import StartHILEpisode
 from rosidl_runtime_py.utilities import get_message
@@ -257,10 +257,10 @@ class RosettaHilManagerNode(LifecycleNode):
 
         # --- Mux: subscribe to remapped policy output, publish to real command topic ---
         for action_spec in self._contract.actions:
-            original_topic = action_spec.publish_topic
+            original_topic = action_spec.topic
             remapped_topic = policy_remap_prefix + original_topic
             msg_cls = get_message(action_spec.type)
-            qos = qos_profile_from_dict(action_spec.publish_qos) or 10
+            qos = qos_profile_from_dict(action_spec.qos) or 10
 
             # Publisher to the real command topic
             pub = self.create_publisher(msg_cls, original_topic, qos)
@@ -407,10 +407,7 @@ class RosettaHilManagerNode(LifecycleNode):
             self._stop_requested = True
 
         # Wait for episode to complete
-        timeout = 10.0
-        start = time.time()
-        while self._policy_goal_handle is not None and (time.time() - start) < timeout:
-            time.sleep(0.1)
+        wait_until(lambda: self._policy_goal_handle is None, timeout=10.0)
 
         self.get_logger().info('Deactivated')
         return super().on_deactivate(state)
@@ -545,7 +542,7 @@ class RosettaHilManagerNode(LifecycleNode):
           failure           - human negative reward override
         """
         self.get_logger().debug(f'Joy received: buttons={list(msg.buttons)}')
-        for event_name, selector in events_spec.mappings.items():
+        for event_name, selector in events_spec.select.items():
             try:
                 value = _resolve_selector(msg, selector)
             except (AttributeError, IndexError, ValueError) as e:

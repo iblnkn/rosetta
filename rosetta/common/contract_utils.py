@@ -42,6 +42,7 @@ from .contract import (
     StreamSpec,
 )
 from .converters import DTYPES, ENCODERS, get_decoder_dtype
+from .ops import build_op, OpContext
 
 if TYPE_CHECKING:
     pass  # All types imported above
@@ -50,6 +51,14 @@ if TYPE_CHECKING:
 # =============================================================================
 # Feature Building
 # =============================================================================
+
+# All supported image encodings are normalized to 3-channel uint8 RGB by the
+# decoders (3ch color as-is, 4ch drops alpha, mono->rgb); depth/RGBD encodings
+# are explicitly rejected at decode (see decoders.DepthEncodingNotSupported).
+# The decoded output channel count is therefore always 3, independent of the
+# source encoding's channel count (spec.image_channels). This is the single
+# source of truth for the feature shape and the zero-fill shape so they agree.
+DECODED_IMAGE_CHANNELS = 3
 
 
 def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, Any]:
@@ -69,7 +78,11 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
         if not spec.image_resize:
             raise ValueError(f"Image spec '{spec.key}' must have image_resize")
         h, w = spec.image_resize
-        return {'dtype': 'video', 'shape': (h, w, 3), 'names': ['height', 'width', 'channels']}
+        return {
+            'dtype': 'video',
+            'shape': (h, w, DECODED_IMAGE_CHANNELS),
+            'names': ['height', 'width', 'channels'],
+        }
 
     if dtype == 'string':
         return {'dtype': 'string', 'shape': (1,), 'names': None}
@@ -96,13 +109,17 @@ def zeros_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
     Returns
     -------
         Zero-filled numpy array:
-        - Images: (H, W, C) uint8
+        - Images: (H, W, DECODED_IMAGE_CHANNELS) uint8
         - Vectors: (N,) with dtype from spec
 
     """
     if spec.is_image:
         h, w = spec.image_resize
-        return np.zeros((h, w, spec.image_channels), dtype=np.uint8)
+        # Use the decoded channel count (always 3, see DECODED_IMAGE_CHANNELS),
+        # NOT spec.image_channels (the source-encoding count, which may be 1/4).
+        # A zero-filled missing frame must match the shape of a real decoded
+        # frame and the feature declared by build_feature.
+        return np.zeros((h, w, DECODED_IMAGE_CHANNELS), dtype=np.uint8)
 
     dtype_map = {
         'float32': np.float32,
@@ -269,6 +286,35 @@ def get_namespaced_names(spec: StreamSpec) -> list[str]:
 
 
 # =============================================================================
+# Op Pipeline Resolution
+# =============================================================================
+
+
+def _native_dtype(msg_type: str, fallback: str = 'float64') -> str:
+    """The codec's declared dtype for a message type, or a fallback."""
+    return get_decoder_dtype(msg_type) if msg_type in DTYPES else fallback
+
+
+def _build_ops(
+    apply: list[tuple[str, Any]] | None,
+    *,
+    is_image: bool = False,
+    image_channels: int | None = None,
+) -> tuple:
+    """Resolve a parsed ``apply`` list into a tuple of runtime op instances."""
+    ctx = OpContext(is_image=is_image, image_channels=image_channels)
+    return tuple(build_op(name, args, ctx) for name, args in (apply or []))
+
+
+def _resize_from_ops(ops: tuple) -> tuple[int, int] | None:
+    """Output (h, w) from a ``resize`` op in the pipeline, if present."""
+    for op in ops:
+        if op.name == 'resize':
+            return (op.height, op.width)
+    return None
+
+
+# =============================================================================
 # Generic Spec Builder
 # =============================================================================
 
@@ -340,42 +386,41 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
                 f'LeRobot does not currently have proper depth image handling.'
             )
 
-        # Parse image config
-        resize = None
+        # Image encoding/channels (resize is an op in `apply`, not here)
         encoding = 'bgr8'
-        if o.image:
-            r = o.image.get('resize')
-            if r and len(r) == 2:
-                resize = (int(r[0]), int(r[1]))
-            if 'encoding' in o.image:
-                encoding = str(o.image['encoding']).lower()
-
-        if is_image and resize is None:
-            raise ContractValidationError(f"Image observation '{o.key}' must specify image.resize")
-
+        if o.image and 'encoding' in o.image:
+            encoding = str(o.image['encoding']).lower()
         channels = _validate_image_encoding(encoding)
         if o.image and 'channels' in o.image:
             channels = int(o.image['channels'])
 
-        # Resolve dtype
+        # Resolve declared (feature) dtype: explicit > video > custom-decoder > native
+        native = _native_dtype(o.type) if o.type in DTYPES else None
         if o.dtype:
             dtype = o.dtype
         elif is_image:
             dtype = 'video'
         elif o.decoder:
-            # Custom decoder - default to float64 if not specified
-            dtype = 'float64'
+            dtype = 'float64'  # Custom decoder - default to float64 if not specified
+        elif native:
+            dtype = native
         else:
-            if o.type not in DTYPES:
-                raise ContractValidationError(
-                    f"No decoder registered for '{o.type}'. "
-                    f'Add a decoder in decoders.py, specify dtype '
-                    f'explicitly, or provide a custom decoder.'
-                )
-            dtype = get_decoder_dtype(o.type)
+            raise ContractValidationError(
+                f"No decoder registered for '{o.type}'. "
+                f'Add a decoder in decoders.py, specify dtype '
+                f'explicitly, or provide a custom decoder.'
+            )
+
+        ops = _build_ops(o.apply, is_image=is_image, image_channels=channels)
+        resize = _resize_from_ops(ops)
+        if is_image and resize is None:
+            raise ContractValidationError(
+                f"Image observation '{o.key}' must specify a resize op "
+                f'(apply: [resize: [h, w]])'
+            )
 
         al = o.align or AlignSpec()
-        names = list((o.selector or {}).get('names', []))
+        names = list(o.select or [])
 
         kwargs = {
             'key': o.key,
@@ -393,7 +438,7 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             'dtype': dtype,
             'qos': o.qos,
             'decoder': o.decoder,
-            'unit_conversion': o.unit_conversion,
+            'ops': ops,
         }
         items.append((o.topic, kwargs, o))
 
@@ -414,27 +459,23 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
                 f'Add an encoder in encoders.py or provide a custom encoder.'
             )
 
-        names = list((a.selector or {}).get('names', []))
-        clamp = None
-        if a.from_tensor and 'clamp' in a.from_tensor:
-            lo, hi = a.from_tensor['clamp']
-            clamp = (float(lo), float(hi))
+        names = list(a.select or [])
+        ops = _build_ops(a.apply)
 
         kwargs = {
             'key': a.key,
-            'topic': a.publish_topic,
+            'topic': a.topic,
             'msg_type': a.type,
             'names': names,
             'fps': contract.fps,
             'stamp_src': contract.timestamp_source,
-            'clamp': clamp,
             'safety_behavior': (a.safety_behavior or 'none').lower(),
-            'qos': a.publish_qos,
+            'qos': a.qos,
             'decoder': a.decoder,
             'encoder': a.encoder,
-            'unit_conversion': a.unit_conversion,
+            'ops': ops,
         }
-        items.append((a.publish_topic, kwargs, a))
+        items.append((a.topic, kwargs, a))
 
     yield from _apply_namespaces(items, lambda a: a.key, ActionStreamSpec)
 
@@ -455,9 +496,18 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
                 f'Add an encoder in encoders.py or provide a custom encoder.'
             )
 
-        names = list((o.selector or {}).get('names', []))
+        names = list(o.select or [])
         if not names:
             names = ['data']
+
+        # A reward used as an action must be invertible (it publishes).
+        ops = _build_ops(o.apply)
+        for op in ops:
+            if not op.invertible:
+                raise ContractValidationError(
+                    f"Reward '{o.key}' used as an action has non-invertible op "
+                    f"'{op.name}' in apply; remove it."
+                )
 
         kwargs = {
             'key': 'action',
@@ -466,12 +516,11 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
             'names': names,
             'fps': contract.fps,
             'stamp_src': contract.timestamp_source,
-            'clamp': None,
             'safety_behavior': 'none',
             'qos': o.qos,
             'decoder': o.decoder,
             'encoder': None,
-            'unit_conversion': o.unit_conversion,
+            'ops': ops,
         }
         items.append((o.topic, kwargs, o))
 
@@ -490,7 +539,8 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
     for obs_list in extended:
         for o in obs_list:
             al = o.align or AlignSpec()
-            names = list((o.selector or {}).get('names', []))
+            names = list(o.select or [])
+            ops = _build_ops(o.apply)
 
             yield ObservationStreamSpec(
                 key=o.key,
@@ -509,7 +559,7 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
                 qos=o.qos,
                 namespace=None,
                 decoder=o.decoder,
-                unit_conversion=o.unit_conversion,
+                ops=ops,
             )
 
 
@@ -547,7 +597,8 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             dtype = get_decoder_dtype(o.type)
 
         al = o.align or AlignSpec()
-        names = list((o.selector or {}).get('names', []))
+        names = list(o.select or [])
+        ops = _build_ops(o.apply)
 
         kwargs = {
             'key': o.key,
@@ -565,7 +616,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             'dtype': dtype,
             'qos': o.qos,
             'decoder': o.decoder,
-            'unit_conversion': o.unit_conversion,
+            'ops': ops,
         }
         items.append((o.topic, kwargs, o))
 
@@ -580,26 +631,22 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
     items: list[tuple[str, dict, ActionSpec]] = []
 
     for a in contract.teleop.feedback:
-        names = list((a.selector or {}).get('names', []))
-        clamp = None
-        if a.from_tensor and 'clamp' in a.from_tensor:
-            lo, hi = a.from_tensor['clamp']
-            clamp = (float(lo), float(hi))
+        names = list(a.select or [])
+        ops = _build_ops(a.apply)
 
         kwargs = {
             'key': a.key,
-            'topic': a.publish_topic,
+            'topic': a.topic,
             'msg_type': a.type,
             'names': names,
             'fps': contract.fps,
             'stamp_src': contract.timestamp_source,
-            'clamp': clamp,
             'safety_behavior': 'none',
-            'qos': a.publish_qos,
+            'qos': a.qos,
             'decoder': a.decoder,
             'encoder': a.encoder,
-            'unit_conversion': a.unit_conversion,
+            'ops': ops,
         }
-        items.append((a.publish_topic, kwargs, a))
+        items.append((a.topic, kwargs, a))
 
     yield from _apply_namespaces(items, lambda a: a.key, ActionStreamSpec)

@@ -45,7 +45,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rosetta_interfaces.action import RunPolicy
 
-from .common.ros2_utils import is_jazzy_or_newer
+from .common.ros2_utils import is_jazzy_or_newer, wait_until
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -166,6 +166,7 @@ class RosettaClientNode(LifecycleNode):
         self._contract_path: str | None = None
         self._pretrained: str | None = None
         self._server_process: subprocess.Popen | None = None
+        self._atexit_registered = False
         self._client: RobotClient | None = None
         self._active_goal = None
         self._action_server: ActionServer | None = None
@@ -256,12 +257,7 @@ class RosettaClientNode(LifecycleNode):
             self._client.shutdown_event.set()
 
         # Wait for goal to complete (with timeout)
-        timeout = 5.0
-        start = time.time()
-        while self._active_goal is not None and (time.time() - start) < timeout:
-            time.sleep(0.1)
-
-        if self._active_goal is not None:
+        if not wait_until(lambda: self._active_goal is None, timeout=5.0):
             self.get_logger().warning('Goal did not complete within timeout')
 
         # Stop policy server
@@ -345,7 +341,11 @@ class RosettaClientNode(LifecycleNode):
             f'--port={port}',
         ]
         self._server_process = subprocess.Popen(cmd, env=os.environ.copy())
-        atexit.register(self._stop_policy_server)
+        # Register the shutdown hook once; on_activate can run many times across
+        # lifecycle cycles and re-registering would accumulate handlers.
+        if not self._atexit_registered:
+            atexit.register(self._stop_policy_server)
+            self._atexit_registered = True
 
         start_time = time.time()
         while time.time() - start_time < SERVER_STARTUP_TIMEOUT_SEC:
@@ -375,6 +375,11 @@ class RosettaClientNode(LifecycleNode):
         except subprocess.TimeoutExpired:
             self._server_process.kill()
         self._server_process = None
+        # Drop the atexit hook now that the process is gone; a later activation
+        # re-registers it. Safe to call even if not registered.
+        if self._atexit_registered:
+            atexit.unregister(self._stop_policy_server)
+            self._atexit_registered = False
 
     def _on_goal(self, _goal_request) -> GoalResponse:
         """Accept or reject a client request to begin an action."""

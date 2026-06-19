@@ -48,6 +48,8 @@ from typing import Any, Callable, Sequence, TYPE_CHECKING
 
 import numpy as np
 
+from .ops import forward_pipeline, inverse_pipeline
+
 if TYPE_CHECKING:
     from .contract import ActionStreamSpec, ObservationStreamSpec
 
@@ -188,19 +190,17 @@ def get_decoder_dtype(msg_type: str) -> str:
 
 def decode_value(msg, spec: 'ObservationStreamSpec | ActionStreamSpec') -> Any:
     """
-    Decode a ROS message using a registered or custom decoder.
+    Decode a ROS message: codec projection, then the forward op pipeline.
 
-    Checks for a custom decoder on the spec first, then falls back to the
-    global registry.
-
-    When ``spec.unit_conversion == "rad2deg"`` the ROS message contains radians
-    but the dataset (and therefore the policy) expects degrees, so the decoded
-    numeric array is converted from radians to degrees.
+    The codec (custom or registry) reduces the message to a numeric array via
+    field selection. ``spec.ops`` is then applied front-to-back (the build /
+    decode direction): e.g. ``rad2deg`` for joints, or ``resize`` for an
+    image. String values (e.g. std_msgs/String) bypass the pipeline.
 
     Args
     ----
         msg: ROS message instance
-        spec: Stream spec with msg_type and optional decoder path
+        spec: Stream spec with msg_type, optional decoder path, and ops
 
     Returns
     -------
@@ -222,9 +222,10 @@ def decode_value(msg, spec: 'ObservationStreamSpec | ActionStreamSpec') -> Any:
             raise ValueError(f'No decoder registered for message type: {spec.msg_type}')
         val = fn(msg, spec)
 
-    # Apply unit conversion: ROS (radians) -> dataset (degrees)
-    if getattr(spec, 'unit_conversion', None) == 'rad2deg' and isinstance(val, np.ndarray):
-        val = np.rad2deg(val)
+    # Run the forward op pipeline (rad2deg, resize, ...) on numeric values.
+    ops = getattr(spec, 'ops', ()) or ()
+    if ops and isinstance(val, np.ndarray):
+        val = forward_pipeline(val, ops)
 
     return val
 
@@ -237,16 +238,14 @@ def encode_value(
     """
     Encode a flat action vector into a ROS message.
 
-    Checks for a custom encoder on the spec first, then falls back to the
-    global registry.
-
-    When ``spec.unit_conversion == "rad2deg"`` the dataset stores degrees but
-    ROS expects radians, so the **inverse** conversion (deg → rad) is applied
-    before encoding.
+    Runs ``spec.ops`` in the serve direction first: ``inverse_pipeline`` walks
+    the ops back-to-front via their inverses (so ``rad2deg`` becomes deg→rad).
+    The codec (custom or registry) then scatters the resulting values into the
+    ROS message fields.
 
     Args
     ----
-        spec: Action stream spec with msg_type, names, clamp, and optional encoder path
+        spec: Action stream spec with msg_type, names, ops, and optional encoder path
         action_vec: Flat array of action values
         stamp_ns: Optional timestamp in nanoseconds for message header
 
@@ -259,9 +258,11 @@ def encode_value(
         ValueError: If no encoder found for message type
 
     """
-    # Apply inverse unit conversion: dataset (degrees) -> ROS (radians)
-    if getattr(spec, 'unit_conversion', None) == 'rad2deg':
-        action_vec = np.deg2rad(action_vec)
+    # Run the inverse op pipeline (deg2rad, ...): dataset space -> ROS space.
+    action_vec = np.asarray(action_vec, dtype=np.float64)
+    ops = getattr(spec, 'ops', ()) or ()
+    if ops:
+        action_vec = inverse_pipeline(action_vec, ops)
 
     # Check for custom encoder (experimental)
     if hasattr(spec, 'encoder') and spec.encoder:

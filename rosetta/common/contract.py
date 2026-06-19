@@ -134,13 +134,13 @@ class ObservationSpec:
     key: str
     topic: str
     type: str  # noqa: A003
-    selector: dict[str, Any] | None = None
-    image: dict[str, Any] | None = None
+    select: list[str] | None = None  # field paths to project (list form)
+    apply: list[tuple[str, Any]] | None = None  # ordered ops: [(name, args), ...]
+    image: dict[str, Any] | None = None  # optional encoding/channels hints
     align: AlignSpec | None = None
     qos: dict[str, Any] | None = None
     dtype: str | None = None
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
-    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,16 +148,14 @@ class ActionSpec:
     """Action stream description from contract YAML."""
 
     key: str
-    publish_topic: str
+    topic: str
     type: str  # noqa: A003
-    selector: dict[str, Any] | None = None
-    from_tensor: dict[str, Any] | None = None
-    publish_qos: dict[str, Any] | None = None
-    publish_strategy: dict[str, Any] | None = None
-    safety_behavior: str = 'none'
+    select: list[str] | None = None  # field paths to scatter into (list form)
+    apply: list[tuple[str, Any]] | None = None  # ordered ops: [(name, args), ...]
+    qos: dict[str, Any] | None = None
+    safety_behavior: str = 'none'  # from serve.safety
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
     encoder: str | None = None  # Custom encoder path: "module.path:function_name"
-    unit_conversion: str | None = None  # "rad2deg" | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,7 +184,7 @@ class TeleopEventsSpec:
 
     topic: str
     msg_type: str
-    mappings: dict[str, str]  # event_name -> selector
+    select: dict[str, str]  # event_name -> field path (dict form of select)
     qos: dict[str, Any] | None = None
 
 
@@ -264,7 +262,7 @@ class ObservationStreamSpec(StreamSpec):
     """Resolved observation stream configuration for runtime use."""
 
     is_image: bool
-    image_resize: tuple[int, int] | None
+    image_resize: tuple[int, int] | None  # output (h, w); derived from the resize op
     image_encoding: str
     image_channels: int
     resample_policy: str
@@ -273,20 +271,19 @@ class ObservationStreamSpec(StreamSpec):
     qos: dict[str, Any] | None = None
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
-    unit_conversion: str | None = None  # "rad2deg" | None
+    ops: tuple = ()  # Resolved forward op pipeline (rad2deg, resize, ...)
 
 
 @dataclass(frozen=True, slots=True)
 class ActionStreamSpec(StreamSpec):
     """Resolved action stream configuration for runtime use."""
 
-    clamp: tuple[float, float] | None
     safety_behavior: str
     qos: dict[str, Any] | None = None
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
     encoder: str | None = None  # Custom encoder path
-    unit_conversion: str | None = None  # "rad2deg" | None
+    ops: tuple = ()  # Resolved op pipeline; run in reverse (inverse) to serve
 
 
 # =============================================================================
@@ -393,6 +390,100 @@ def _validate_converter_path(path: str | None, context: str) -> str | None:
 
 
 # =============================================================================
+# YAML Loading - select / apply / serve helpers
+# =============================================================================
+
+
+def _parse_select(
+    raw: Any, ctx: str, *, dict_form: bool = False
+) -> 'list[str] | dict[str, str] | None':
+    """
+    Parse a ``select`` field.
+
+    List form (observations/actions) projects field paths: ``[a, b, c]``.
+    Dict form (Joy events) maps names to field paths: ``{name: buttons.10}``.
+    """
+    if raw is None:
+        return None
+    if dict_form:
+        if not isinstance(raw, dict):
+            raise ContractValidationError(f"'select' must be a mapping in {ctx}")
+        return {str(k): str(v) for k, v in raw.items()}
+    if not isinstance(raw, list):
+        raise ContractValidationError(f"'select' must be a list in {ctx}")
+    return [str(x) for x in raw]
+
+
+def _parse_apply(
+    raw: Any, ctx: str, *, require_invertible: bool = False
+) -> list[tuple[str, Any]]:
+    """
+    Parse an ``apply`` op list into ``[(name, args), ...]``.
+
+    Items are bare strings (``rad2deg`` -> ``('rad2deg', None)``) or single-key
+    mappings (``{resize: [h, w]}`` -> ``('resize', [h, w])``). Op names are
+    validated against the registry. When ``require_invertible`` (action
+    entries), a non-invertible op (e.g. ``resize``) raises here, at load.
+    """
+    if raw is None:
+        return []
+    # Local import avoids a module-load cycle: ops imports this module's
+    # ContractValidationError.
+    from .ops import OP_REGISTRY
+
+    if not isinstance(raw, list):
+        raise ContractValidationError(f"'apply' must be a list in {ctx}")
+
+    ops: list[tuple[str, Any]] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, str):
+            name, args = item, None
+        elif isinstance(item, dict):
+            if len(item) != 1:
+                raise ContractValidationError(
+                    f'apply[{i}] in {ctx} must be a single-key mapping, got keys '
+                    f'{sorted(item)}'
+                )
+            (name, args), = item.items()
+            name = str(name)
+        else:
+            raise ContractValidationError(
+                f'apply[{i}] in {ctx} must be a string or single-key mapping, '
+                f'got {type(item).__name__}'
+            )
+
+        cls = OP_REGISTRY.get(name)
+        if cls is None:
+            known = ', '.join(sorted(OP_REGISTRY)) or '(none)'
+            raise ContractValidationError(
+                f"Unknown op '{name}' in apply[{i}] of {ctx}. Registered ops: {known}"
+            )
+        if require_invertible and not cls.invertible:
+            raise ContractValidationError(
+                f"Op '{name}' in apply[{i}] of {ctx} is not invertible, so it "
+                'cannot be used on an action (the serve direction has no inverse)'
+            )
+        ops.append((name, args))
+    return ops
+
+
+def _parse_serve(raw: Any, ctx: str) -> str:
+    """
+    Parse an action's ``serve`` block into a ``safety_behavior`` string.
+
+    ``serve.safety`` is the stop behavior, validated against SafetyBehavior.
+    Defaults to ``safety='zeros'`` (the historical action default) when absent.
+    """
+    if raw is None:
+        return 'zeros'
+    if not isinstance(raw, dict):
+        raise ContractValidationError(f"'serve' must be a mapping in {ctx}")
+    return _validate_enum(
+        raw.get('safety', 'zeros'), SafetyBehavior, 'serve.safety', ctx
+    )
+
+
+# =============================================================================
 # YAML Loading - Section Parsers
 # =============================================================================
 
@@ -407,25 +498,17 @@ def _parse_observation(
     if not data['topic']:
         raise ContractValidationError(f'Empty topic in {ctx}')
 
-    uc = data.get('unit_conversion')
-    if uc is not None:
-        uc = str(uc).lower().strip()
-        if uc not in ('rad2deg',):
-            raise ContractValidationError(
-                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
-            )
-
     return ObservationSpec(
         key=data['key'],
         topic=data['topic'],
         type=data['type'],
-        selector=data.get('selector'),
+        select=_parse_select(data.get('select'), ctx),
+        apply=_parse_apply(data.get('apply'), ctx),
         image=data.get('image'),
         align=_parse_align(data.get('align'), ctx),
         qos=data.get('qos'),
         dtype=_validate_dtype(data.get('dtype'), ctx),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
-        unit_conversion=uc,
     )
 
 
@@ -437,67 +520,38 @@ def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> Observatio
     if not data['topic']:
         raise ContractValidationError(f'Empty topic in {ctx}')
 
-    uc = data.get('unit_conversion')
-    if uc is not None:
-        uc = str(uc).lower().strip()
-        if uc not in ('rad2deg',):
-            raise ContractValidationError(
-                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
-            )
-
     return ObservationSpec(
         key=data['key'],
         topic=data['topic'],
         type=data['type'],
-        selector=data.get('selector'),
+        select=_parse_select(data.get('select'), ctx),
+        apply=_parse_apply(data.get('apply'), ctx),
         image=data.get('image'),
         align=_parse_align(data.get('align'), ctx),
         qos=data.get('qos'),
         dtype=_validate_dtype(data['dtype'], ctx, required=True),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
-        unit_conversion=uc,
     )
 
 
 def _parse_action(data: dict[str, Any], idx: int, section: str = 'actions') -> ActionSpec:
-    """Parse an action spec from YAML."""
+    """Parse an action spec from YAML (flattened: topic/type/qos at entry level)."""
     ctx = f'{section}[{idx}]'
-    _require_fields(data, ['key', 'publish'], ctx)
+    _require_fields(data, ['key', 'topic', 'type'], ctx)
 
-    pub = data['publish']
-    if not isinstance(pub, dict):
-        raise ContractValidationError(f"'publish' must be a mapping in {ctx}")
-
-    _require_fields(pub, ['topic', 'type'], f'{ctx}.publish')
-
-    if not pub['topic']:
-        raise ContractValidationError(f'Empty publish.topic in {ctx}')
-
-    safety = _validate_enum(
-        data.get('safety_behavior', 'zeros'), SafetyBehavior, 'safety_behavior', ctx
-    )
-
-    # Read unit_conversion (e.g., "rad2deg")
-    uc = data.get('unit_conversion')
-    if uc is not None:
-        uc = str(uc).lower().strip()
-        if uc not in ('rad2deg',):
-            raise ContractValidationError(
-                f"Invalid unit_conversion '{uc}' in {ctx}. Must be 'rad2deg'."
-            )
+    if not data['topic']:
+        raise ContractValidationError(f'Empty topic in {ctx}')
 
     return ActionSpec(
         key=data['key'],
-        publish_topic=pub['topic'],
-        type=pub['type'],
-        selector=data.get('selector'),
-        from_tensor=data.get('from_tensor'),
-        publish_qos=pub.get('qos'),
-        publish_strategy=pub.get('strategy'),
-        safety_behavior=safety,
+        topic=data['topic'],
+        type=data['type'],
+        select=_parse_select(data.get('select'), ctx),
+        apply=_parse_apply(data.get('apply'), ctx, require_invertible=True),
+        qos=data.get('qos'),
+        safety_behavior=_parse_serve(data.get('serve'), ctx),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
         encoder=_validate_converter_path(data.get('encoder'), f'{ctx}.encoder'),
-        unit_conversion=uc,
     )
 
 
@@ -554,16 +608,14 @@ def _parse_teleop_events(data: dict[str, Any] | None) -> TeleopEventsSpec | None
         return None
 
     ctx = 'teleop.events'
-    _require_fields(data, ['topic', 'type', 'mappings'], ctx)
+    _require_fields(data, ['topic', 'type', 'select'], ctx)
 
-    mappings = data['mappings']
-    if not isinstance(mappings, dict):
-        raise ContractValidationError(f"'mappings' must be a mapping in {ctx}")
+    select = _parse_select(data['select'], ctx, dict_form=True)
 
     return TeleopEventsSpec(
         topic=data['topic'],
         msg_type=data['type'],
-        mappings={str(k): str(v) for k, v in mappings.items()},
+        select=select,
         qos=data.get('qos'),
     )
 
@@ -585,16 +637,14 @@ def _parse_teleop(data: dict[str, Any] | None) -> TeleopSpec | None:
     feedback = [
         ActionSpec(
             key=f.key,
-            publish_topic=f.publish_topic,
+            topic=f.topic,
             type=f.type,
-            selector=f.selector,
-            from_tensor=f.from_tensor,
-            publish_qos=f.publish_qos,
-            publish_strategy=f.publish_strategy,
+            select=f.select,
+            apply=f.apply,
+            qos=f.qos,
             safety_behavior='none',
             decoder=f.decoder,
             encoder=f.encoder,
-            unit_conversion=f.unit_conversion,
         )
         for f in feedback
     ]

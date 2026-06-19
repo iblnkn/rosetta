@@ -64,6 +64,7 @@ from .common.ros2_utils import (
     is_jazzy_or_newer,
     is_transient_local,
     qos_profile_from_dict,
+    wait_until,
 )
 
 # Bag metadata keys
@@ -179,10 +180,22 @@ class EpisodeRecorderNode(LifecycleNode):
         # Recording state
         self._writer: rosbag2_py.SequentialWriter | None = None
         self._writer_lock = threading.Lock()
+        # _is_recording stays strictly tied to "writer exists" -- it gates the
+        # live-write path in the subscription callback, so it must only be true
+        # while self._writer is not None.
         self._is_recording = False
+        # _busy is the accept-time guard: set under _busy_lock the moment a
+        # start is accepted (before the writer opens) so concurrent starts
+        # (service+service or service+action) can't both proceed during the
+        # writer-open window.
+        self._busy = False
+        self._busy_lock = threading.Lock()
         self._messages_written = 0
         self._topic_msg_counts: dict[str, int] = {}
         self._stop_event = threading.Event()
+        # _cancel_requested lets the cancel service ask _execute to finish the
+        # goal as CANCELED without the service thread touching the goal handle.
+        self._cancel_requested = False
         self._goal_handle = None
         self._cbg = ReentrantCallbackGroup()
         self._last_bag_dir: Optional[Path] = None
@@ -301,12 +314,7 @@ class EpisodeRecorderNode(LifecycleNode):
             self._stop_event.set()
 
             # Wait for recording to complete
-            timeout = 5.0
-            start = time.time()
-            while self._is_recording and (time.time() - start) < timeout:
-                time.sleep(0.1)
-
-            if self._is_recording:
+            if not wait_until(lambda: not self._is_recording, timeout=5.0):
                 self.get_logger().warning('Recording did not stop within timeout')
 
         self.get_logger().info('Deactivated')
@@ -531,15 +539,36 @@ class EpisodeRecorderNode(LifecycleNode):
 
         return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
 
+    # ---------- Start/stop guard ----------
+
+    def _try_acquire_busy(self) -> bool:
+        """
+        Atomically claim the recorder for a new recording.
+
+        Returns True if the caller now owns the recording slot, False if a
+        recording is already active or starting. Must be paired with
+        _release_busy() when the recording fully ends or fails to start.
+        """
+        with self._busy_lock:
+            if self._busy:
+                return False
+            self._busy = True
+            return True
+
+    def _release_busy(self) -> None:
+        """Release the recording slot claimed by _try_acquire_busy()."""
+        with self._busy_lock:
+            self._busy = False
+
     # ---------- Action callbacks ----------
 
     def _on_goal(self, goal_request) -> GoalResponse:
-        """Accept if active and not already recording."""
+        """Accept if active and not already recording/starting."""
         self.get_logger().info('Received goal request')
         if not self._accepting_goals:
             self.get_logger().warning('Rejected: node not active')
             return GoalResponse.REJECT
-        if self._is_recording:
+        if not self._try_acquire_busy():
             self.get_logger().warning('Rejected: already recording')
             return GoalResponse.REJECT
         self.get_logger().info('Goal accepted')
@@ -555,9 +584,10 @@ class EpisodeRecorderNode(LifecycleNode):
         """
         Handle external Trigger service call to cancel recording.
 
-        Sets the internal stop event and attempts to transition the active
-        goal to the canceled state. Returns a Trigger response indicating
-        whether a recording was active when the call arrived.
+        Signals the recording loop to stop and, for an action recording,
+        records that the goal should finish in the CANCELED state. The actual
+        goal-handle transition is left to _execute (the executor thread that
+        owns the handle) to avoid two threads transitioning it concurrently.
         """
         if not self._is_recording:
             response.success = False
@@ -565,18 +595,11 @@ class EpisodeRecorderNode(LifecycleNode):
             return response
 
         self.get_logger().info('cancel_recording service called: stopping recording')
-        # Signal the recording loop to stop
+        # Ask _execute to finish the goal as CANCELED, then signal the loop to
+        # stop. _execute (the goal-handle owner) performs the terminal
+        # transition; the service thread never touches the handle.
+        self._cancel_requested = True
         self._stop_event.set()
-
-        # Try to move the action goal to canceled if present
-        if self._goal_handle is not None:
-            try:
-                # If the executor/loop is inside _execute, calling canceled()
-                # here will transition the goal state. The execute loop also
-                # checks is_cancel_requested and will perform its own cleanup.
-                self._goal_handle.canceled()
-            except Exception as e:
-                self.get_logger().debug(f'Failed to cancel goal handle: {e}')
 
         response.success = True
         response.message = 'Cancel requested'
@@ -595,7 +618,9 @@ class EpisodeRecorderNode(LifecycleNode):
             response.message = 'Node not active'
             return response
 
-        if self._is_recording:
+        # Claim the recording slot before the writer exists so a concurrent
+        # start (another service call or an action goal) is rejected.
+        if not self._try_acquire_busy():
             response.accepted = False
             response.message = 'Already recording'
             return response
@@ -603,11 +628,13 @@ class EpisodeRecorderNode(LifecycleNode):
         prompt = request.prompt or ''
         self.get_logger().info(f"start_recording service called: prompt='{prompt}'")
 
-        # Start recording in a background thread (mirrors _execute logic)
+        # Start recording in a background thread (mirrors _execute logic).
+        # NOTE: _is_recording is intentionally NOT set here -- it is set inside
+        # _service_record only after _open_writer succeeds, so the live-write
+        # path never sees the flag true while the writer is still None.
         self._stop_event.clear()
         self._messages_written = 0
         self._goal_handle = None  # No action goal for service-based recording
-        self._is_recording = True  # Set recording flag immediately to start writing live messages
 
         record_thread = threading.Thread(
             target=self._service_record,
@@ -659,6 +686,9 @@ class EpisodeRecorderNode(LifecycleNode):
 
         try:
             self._open_writer(bag_dir)
+            # Set the live-write flag only after the writer exists, so the
+            # subscription callback never sees _is_recording true with a None
+            # writer (which would silently drop messages).
             self._is_recording = True
 
             start_time = time.time()
@@ -672,21 +702,26 @@ class EpisodeRecorderNode(LifecycleNode):
         except Exception as e:
             self.get_logger().error(f'Recording error: {e}')
 
-        # Finalize
-        self._close_writer()
-        try:
-            self._write_metadata(bag_dir, prompt)
-        except RuntimeError as e:
-            self.get_logger().error(f'Metadata error: {e}')
+        finally:
+            # Finalize and always release the recording slot, even on error.
+            self._close_writer()
+            try:
+                self._write_metadata(bag_dir, prompt)
+            except RuntimeError as e:
+                self.get_logger().error(f'Metadata error: {e}')
 
-        self._last_bag_dir = bag_dir
-        self.get_logger().info(f'Recorded {self._messages_written} messages to {bag_dir}')
-        self._is_recording = False
+            self._last_bag_dir = bag_dir
+            self.get_logger().info(
+                f'Recorded {self._messages_written} messages to {bag_dir}'
+            )
+            self._is_recording = False
+            self._release_busy()
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Execute recording episode."""
         self._goal_handle = goal_handle
         self._stop_event.clear()  # Reset for new recording
+        self._cancel_requested = False  # Reset cancel-service request flag
         self._messages_written = 0
         self._topic_msg_counts = {}
 
@@ -759,6 +794,7 @@ class EpisodeRecorderNode(LifecycleNode):
             goal_handle.abort()
             self._is_recording = False
             self._goal_handle = None
+            self._release_busy()
             return result
 
         self._last_bag_dir = bag_dir
@@ -780,8 +816,11 @@ class EpisodeRecorderNode(LifecycleNode):
             f'({elapsed:.1f}s)\n' + '\n'.join(lines)
         )
 
-        # Set terminal state
-        if goal_handle.is_cancel_requested:
+        # Set terminal state. _execute (the goal-handle owner) is the only
+        # place that transitions the handle. A cancel may have come via the
+        # action protocol (is_cancel_requested) or the cancel service
+        # (_cancel_requested); either way finish as CANCELED.
+        if goal_handle.is_cancel_requested or self._cancel_requested:
             result.success = False
             result.message = 'Cancelled'
             goal_handle.canceled()
@@ -792,6 +831,7 @@ class EpisodeRecorderNode(LifecycleNode):
 
         self._is_recording = False
         self._goal_handle = None
+        self._release_busy()
         return result
 
     def _cleanup(self, goal_handle, aborted: bool = False):
@@ -799,6 +839,7 @@ class EpisodeRecorderNode(LifecycleNode):
         self._close_writer()
         self._is_recording = False
         self._goal_handle = None
+        self._release_busy()
         if aborted:
             try:
                 goal_handle.abort()
