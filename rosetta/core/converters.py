@@ -44,6 +44,7 @@ Custom converters can be specified per-stream in the contract:
 from __future__ import annotations
 
 import importlib
+import importlib.metadata as _ilm
 from typing import Any, Callable, Sequence, TYPE_CHECKING
 
 import numpy as np
@@ -69,6 +70,7 @@ EncoderFn = Callable[[np.ndarray, 'ActionStreamSpec', int | None], Any]
 DECODERS: dict[str, DecoderFn] = {}
 DTYPES: dict[str, str] = {}  # msg_type -> LeRobot dtype
 ENCODERS: dict[str, EncoderFn] = {}
+ENCODER_ROUNDTRIP: dict[str, bool] = {}  # msg_type -> decode(encode(v)) == v holds
 
 # Cache for dynamically loaded custom converters
 _CONVERTER_CACHE: dict[str, Callable] = {}
@@ -79,7 +81,7 @@ _CONVERTER_CACHE: dict[str, Callable] = {}
 # =============================================================================
 
 
-def register_decoder(type_str: str, dtype: str):
+def register_decoder(type_str: str, dtype: str, *, override: bool = False):
     """
     Register a decoder for a ROS message type.
 
@@ -87,6 +89,10 @@ def register_decoder(type_str: str, dtype: str):
     ----
     type_str: ROS message type (e.g., "sensor_msgs/msg/JointState")
     dtype: LeRobot dtype (video, float64, float32, int32, int64, bool, string)
+    override: Replace an existing decoder for ``type_str``. Without it, a second
+        registration for an already-registered type is an error -- so a plugin
+        that means to replace a built-in must say so, and two plugins fighting
+        over a type fail loudly instead of silently depending on import order.
 
     Example:
     -------
@@ -97,6 +103,11 @@ def register_decoder(type_str: str, dtype: str):
     """
 
     def _wrap(fn: DecoderFn):
+        if type_str in DECODERS and not override:
+            raise ValueError(
+                f"Decoder already registered for '{type_str}'. Pass "
+                f'override=True to replace it intentionally.'
+            )
         DECODERS[type_str] = fn
         DTYPES[type_str] = dtype
         return fn
@@ -104,13 +115,22 @@ def register_decoder(type_str: str, dtype: str):
     return _wrap
 
 
-def register_encoder(type_str: str):
+def register_encoder(type_str: str, *, override: bool = False, roundtrip: bool = True):
     """
     Register an encoder for a ROS message type.
 
     Args:
     ----
     type_str: ROS message type (e.g., "geometry_msgs/msg/Twist")
+    override: Replace an existing encoder for ``type_str``. Without it, a second
+        registration for an already-registered type is an error (see
+        :func:`register_decoder`).
+    roundtrip: Whether the encode/decode pair is value-round-trippable --
+        ``decode(encode(v)) == v`` for the selected fields. True is the norm
+        and the default; the round-trip test suite verifies it for every pair.
+        Set False only for a genuinely lossy encoder (e.g. one that quantizes
+        or cannot reconstruct the selected values); the suite then checks the
+        weaker stability invariant instead.
 
     Encoder signature: (action_vec, spec, stamp_ns=None) -> ROS message
 
@@ -125,10 +145,62 @@ def register_encoder(type_str: str):
     """
 
     def _wrap(fn: EncoderFn):
+        if type_str in ENCODERS and not override:
+            raise ValueError(
+                f"Encoder already registered for '{type_str}'. Pass "
+                f'override=True to replace it intentionally.'
+            )
         ENCODERS[type_str] = fn
+        ENCODER_ROUNDTRIP[type_str] = roundtrip
         return fn
 
     return _wrap
+
+
+# =============================================================================
+# Entry-point codec plugin discovery
+# =============================================================================
+
+CODEC_ENTRY_POINT_GROUP = 'rosetta.codecs'
+"""Entry-point group third-party codec plugins register under."""
+
+_codecs_discovered = False
+
+
+def discover_codecs() -> None:
+    """
+    Import codec-plugin packages advertised under the ``rosetta.codecs`` group.
+
+    Each entry point's value is a module path; loading it runs that module's
+    ``@register_decoder`` / ``@register_encoder`` decorators, so installed
+    plugins populate the registries keyed by msg_type. The contract therefore
+    names a ``type:`` only -- a custom codec for a brand-new type needs no path
+    in the contract. To *replace* a built-in codec, the plugin registers with
+    ``override=True`` (global), or a spec uses the inline ``decoder:``/
+    ``encoder:`` path (per-spec, deterministic).
+
+    Idempotent: the scan runs once per process. A plugin that fails to import
+    is a hard error, not a silent skip.
+    """
+    global _codecs_discovered
+    if _codecs_discovered:
+        return
+    _codecs_discovered = True  # set first: a failure must not trigger a re-scan
+
+    try:
+        eps = _ilm.entry_points(group=CODEC_ENTRY_POINT_GROUP)
+    except TypeError:
+        # importlib.metadata < 3.10 dict API (ROS 2 Jazzy is 3.12; defensive).
+        eps = _ilm.entry_points().get(CODEC_ENTRY_POINT_GROUP, [])
+
+    for ep in eps:
+        try:
+            ep.load()  # imports module -> runs @register_decoder/@register_encoder
+        except Exception as e:  # noqa: BLE001 -- a broken plugin must be loud
+            raise ValueError(
+                f"Failed to load codec plugin '{ep.name}' ({ep.value}) from "
+                f"entry-point group '{CODEC_ENTRY_POINT_GROUP}': {e}"
+            ) from e
 
 
 # =============================================================================
@@ -178,6 +250,7 @@ def load_converter(path: str) -> Callable:
 
 def get_decoder_dtype(msg_type: str) -> str:
     """Get the LeRobot dtype for a message type."""
+    discover_codecs()
     if msg_type not in DTYPES:
         raise ValueError(f"No decoder registered for '{msg_type}'")
     return DTYPES[msg_type]
@@ -211,12 +284,13 @@ def decode_value(msg, spec: 'ObservationStreamSpec | ActionStreamSpec') -> Any:
         ValueError: If no decoder found for message type
 
     """
-    # Check for custom decoder (experimental)
+    # Inline path = deterministic per-spec override; it wins over the registry.
     if hasattr(spec, 'decoder') and spec.decoder:
         fn = load_converter(spec.decoder)
         val = fn(msg, spec)
     else:
-        # Fall back to registry
+        # Fall back to the registry (built-ins + discovered plugin codecs).
+        discover_codecs()
         fn = DECODERS.get(spec.msg_type)
         if not fn:
             raise ValueError(f'No decoder registered for message type: {spec.msg_type}')
@@ -264,12 +338,13 @@ def encode_value(
     if ops:
         action_vec = inverse_pipeline(action_vec, ops)
 
-    # Check for custom encoder (experimental)
+    # Inline path = deterministic per-spec override; it wins over the registry.
     if hasattr(spec, 'encoder') and spec.encoder:
         fn = load_converter(spec.encoder)
         return fn(action_vec, spec, stamp_ns)
 
-    # Fall back to registry
+    # Fall back to the registry (built-ins + discovered plugin codecs).
+    discover_codecs()
     fn = ENCODERS.get(spec.msg_type)
     if not fn:
         raise ValueError(f'No encoder registered for message type: {spec.msg_type}')

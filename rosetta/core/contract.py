@@ -424,21 +424,24 @@ def _parse_select(
 
 
 def _parse_apply(
-    raw: Any, ctx: str, *, require_invertible: bool = False
+    raw: Any, ctx: str, *, require_serveable: bool = False
 ) -> list[tuple[str, Any]]:
     """
     Parse an ``apply`` op list into ``[(name, args), ...]``.
 
     Items are bare strings (``rad2deg`` -> ``('rad2deg', None)``) or single-key
     mappings (``{resize: [h, w]}`` -> ``('resize', [h, w])``). Op names are
-    validated against the registry. When ``require_invertible`` (action
-    entries), a non-invertible op (e.g. ``resize``) raises here, at load.
+    validated against the registry. When ``require_serveable`` (action
+    entries), a FORWARD_ONLY op (e.g. ``resize``) raises here, at load.
     """
     if raw is None:
         return []
     # Local import avoids a module-load cycle: ops imports this module's
     # ContractValidationError.
-    from .ops import OP_REGISTRY
+    from .ops import discover_ops, OP_REGISTRY
+
+    # Pull in entry-point op plugins so custom ops resolve by name here.
+    discover_ops()
 
     if not isinstance(raw, list):
         raise ContractValidationError(f"'apply' must be a list in {ctx}")
@@ -467,10 +470,10 @@ def _parse_apply(
             raise ContractValidationError(
                 f"Unknown op '{name}' in apply[{i}] of {ctx}. Registered ops: {known}"
             )
-        if require_invertible and not cls.invertible:
+        if require_serveable and not cls.kind.serveable:
             raise ContractValidationError(
-                f"Op '{name}' in apply[{i}] of {ctx} is not invertible, so it "
-                'cannot be used on an action (the serve direction has no inverse)'
+                f"Op '{name}' in apply[{i}] of {ctx} is {cls.kind.name} (no "
+                'serve direction), so it cannot be used on an action'
             )
         ops.append((name, args))
     return ops
@@ -556,7 +559,7 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = 'actions') -> A
         topic=data['topic'],
         type=data['type'],
         select=_parse_select(data.get('select'), ctx),
-        apply=_parse_apply(data.get('apply'), ctx, require_invertible=True),
+        apply=_parse_apply(data.get('apply'), ctx, require_serveable=True),
         qos=data.get('qos'),
         safety_behavior=_parse_serve(data.get('serve'), ctx),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
@@ -745,6 +748,13 @@ def load_contract(path: Path | str) -> Contract:
     fps = int(data.get('fps', 30))
     if fps <= 0:
         raise ContractValidationError(f'fps must be positive, got {fps}')
+
+    # Pull in entry-point codec plugins so registry-keyed dtype/encoder lookups
+    # during spec building see plugin-provided codecs. Local import avoids a
+    # module-load cycle (converters -> ops -> contract).
+    from .converters import discover_codecs
+
+    discover_codecs()
 
     # Parse sections
     observations = [

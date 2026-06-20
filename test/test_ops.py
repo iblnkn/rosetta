@@ -19,11 +19,14 @@ import pytest
 
 from rosetta.core.contract import ContractValidationError, _parse_apply
 from rosetta.core.ops import (
-    OP_REGISTRY,
-    OpContext,
     build_op,
     forward_pipeline,
     inverse_pipeline,
+    Invertibility,
+    Op,
+    OP_REGISTRY,
+    OpContext,
+    register_op,
 )
 
 CTX = OpContext()
@@ -63,9 +66,10 @@ def test_resize_bad_args_raise(args):
         build_op('resize', args, CTX)
 
 
-def test_resize_is_not_invertible():
+def test_resize_is_forward_only():
     op = build_op('resize', [2, 2], CTX)
-    assert op.invertible is False
+    assert op.kind is Invertibility.FORWARD_ONLY
+    assert op.kind.serveable is False
     with pytest.raises(ContractValidationError):
         op.inverse(np.zeros((2, 2, 3), dtype=np.uint8))
 
@@ -89,9 +93,11 @@ def test_clamp_serve_direction_clips_via_pipeline():
     assert np.allclose(out, [0.0, 1.0, 2.0])
 
 
-def test_clamp_is_invertible_flag():
-    # invertible == "can run in the serve direction"; clamp can.
-    assert build_op('clamp', [0.0, 1.0], CTX).invertible is True
+def test_clamp_is_bidirectional():
+    # BIDIRECTIONAL == "runs in the serve direction but lossy"; clamp is.
+    op = build_op('clamp', [0.0, 1.0], CTX)
+    assert op.kind is Invertibility.BIDIRECTIONAL
+    assert op.kind.serveable is True
 
 
 @pytest.mark.parametrize('args', [[1.0], [1, 2, 3], 'x', [2.0, 1.0], [float('inf'), 1.0]])
@@ -101,15 +107,15 @@ def test_clamp_bad_args_raise(args):
 
 
 def test_action_apply_allows_clamp():
-    # clamp is invertible, so an action may carry it.
-    ops = _parse_apply([{'clamp': [-1.0, 1.0]}], "action 'action'", require_invertible=True)
+    # clamp is BIDIRECTIONAL (serveable), so an action may carry it.
+    ops = _parse_apply([{'clamp': [-1.0, 1.0]}], "action 'action'", require_serveable=True)
     assert ops == [('clamp', [-1.0, 1.0])]
 
 
-def test_action_apply_rejects_noninvertible_op_at_load():
-    # An action's apply list must be fully serveable; resize is not.
+def test_action_apply_rejects_forward_only_op_at_load():
+    # An action's apply list must be fully serveable; resize is FORWARD_ONLY.
     with pytest.raises(ContractValidationError, match='resize'):
-        _parse_apply([{'resize': [2, 2]}], "action 'action'", require_invertible=True)
+        _parse_apply([{'resize': [2, 2]}], "action 'action'", require_serveable=True)
 
 
 def test_observation_apply_allows_resize():
@@ -121,3 +127,124 @@ def test_observation_apply_allows_resize():
 def test_build_op_unknown_name_raises():
     with pytest.raises(ContractValidationError, match='Unknown op'):
         build_op('nope', None, CTX)
+
+
+# --- Round-trip gate for BIJECTIVE ops -----------------------------------
+
+
+def test_bijective_op_with_correct_inverse_builds():
+    @register_op('_test_negate', kind=Invertibility.BIJECTIVE)
+    class _Negate(Op):
+        def forward(self, arr):
+            return -arr
+
+        def inverse(self, arr):
+            return -arr
+
+    try:
+        op = build_op('_test_negate', None, CTX)  # gate must pass
+        assert np.allclose(op.inverse(op.forward(np.array([1.0, -2.0]))), [1.0, -2.0])
+    finally:
+        OP_REGISTRY.pop('_test_negate', None)
+
+
+def test_bijective_op_with_wrong_inverse_fails_round_trip_gate():
+    @register_op('_test_broken', kind=Invertibility.BIJECTIVE)
+    class _Broken(Op):
+        def forward(self, arr):
+            return arr * 2.0
+
+        def inverse(self, arr):
+            return arr * 2.0  # wrong: should be / 2.0
+
+    try:
+        with pytest.raises(ContractValidationError, match='round-trip'):
+            build_op('_test_broken', None, CTX)
+    finally:
+        OP_REGISTRY.pop('_test_broken', None)
+
+
+def test_bijective_op_honors_sample_input_domain():
+    # A domain-restricted op (log needs positive input) round-trips only when
+    # sample_input stays in-domain; the default spread (with negatives) would
+    # produce NaNs and fail the gate.
+    @register_op('_test_log', kind=Invertibility.BIJECTIVE)
+    class _Log(Op):
+        def forward(self, arr):
+            return np.log(arr)
+
+        def inverse(self, arr):
+            return np.exp(arr)
+
+        def sample_input(self):
+            return np.array([0.1, 1.0, 2.0, 10.0])
+
+    try:
+        op = build_op('_test_log', None, CTX)  # gate passes on positive domain
+        assert np.allclose(op.inverse(op.forward(np.array([3.0]))), [3.0])
+    finally:
+        OP_REGISTRY.pop('_test_log', None)
+
+
+# --- Entry-point op plugin discovery -------------------------------------
+
+
+def test_discover_ops_loads_entry_point_plugins(monkeypatch):
+    import rosetta.core.ops as ops_mod
+
+    class _FakeEP:
+        name = 'demo'
+        value = 'fake.mod'
+
+        def load(self):
+            @register_op('_ep_demo', kind=Invertibility.BIDIRECTIONAL)
+            class _Demo(Op):
+                def forward(self, arr):
+                    return arr
+
+                def inverse(self, arr):
+                    return arr
+
+    ops_mod._ops_discovered = False
+    monkeypatch.setattr(ops_mod._ilm, 'entry_points', lambda group=None: [_FakeEP()])
+    try:
+        ops_mod.discover_ops()
+        assert '_ep_demo' in OP_REGISTRY  # plugin op resolvable by name
+    finally:
+        OP_REGISTRY.pop('_ep_demo', None)
+        ops_mod._ops_discovered = False
+
+
+def test_discover_ops_runs_once(monkeypatch):
+    import rosetta.core.ops as ops_mod
+
+    calls = []
+    ops_mod._ops_discovered = False
+    monkeypatch.setattr(
+        ops_mod._ilm, 'entry_points', lambda group=None: calls.append(1) or []
+    )
+    try:
+        ops_mod.discover_ops()
+        ops_mod.discover_ops()
+        assert len(calls) == 1  # idempotent: scanned once per process
+    finally:
+        ops_mod._ops_discovered = False
+
+
+def test_discover_ops_raises_on_broken_plugin(monkeypatch):
+    import rosetta.core.ops as ops_mod
+
+    class _BadEP:
+        name = 'bad'
+        value = 'bad.mod'
+
+        def load(self):
+            raise ImportError('boom')
+
+    ops_mod._ops_discovered = False
+    monkeypatch.setattr(ops_mod._ilm, 'entry_points', lambda group=None: [_BadEP()])
+    try:
+        with pytest.raises(ContractValidationError, match='op plugin'):
+            ops_mod.discover_ops()
+    finally:
+        ops_mod._ops_discovered = False

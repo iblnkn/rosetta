@@ -35,7 +35,7 @@
   - [Select Syntax](#select-syntax)
   - [Alignment Strategies](#alignment-strategies)
   - [Supported Message Types](#supported-message-types)
-  - [Custom Encoders/Decoders (Experimental)](#custom-encodersdecoders-experimental)
+  - [Custom Encoders/Decoders](#custom-encodersdecoders)
 - [LeRobot Data Model Reference](#lerobot-data-model-reference)
   - [Key System](#key-system)
   - [EnvTransition](#envtransition)
@@ -382,7 +382,7 @@ Rosetta records demonstrations to [rosbag2](https://github.com/ros2/rosbag2) fil
 
 `port_bags.py` converts rosbag2 files to LeRobot datasets using the contract for key mapping, timestamp alignment, resampling, and dtype conversion. It applies the same `StreamBuffer` resampling logic used during live inference, ensuring your offline dataset matches what the robot would see at runtime.
 
-While you could write your own conversion script using the primitives in `rosetta.common` (contract loader, decoders, stream buffers), `port_bags.py` handles the full pipeline: reading bags, applying the contract, encoding video, building the LeRobot dataset structure, and optionally pushing to the Hub. Because the raw bag preserves all data without transformation, you can re-run `port_bags.py` with an updated contract (changing keys, adjusting `fps`, adding or removing features) without re-recording.
+While you could write your own conversion script using the primitives in `rosetta.core` (contract loader, stream buffers) and `rosetta.ros2` (decoders), `port_bags.py` handles the full pipeline: reading bags, applying the contract, encoding video, building the LeRobot dataset structure, and optionally pushing to the Hub. Because the raw bag preserves all data without transformation, you can re-run `port_bags.py` with an updated contract (changing keys, adjusting `fps`, adding or removing features) without re-recording.
 
 
 ### Relationship to LeRobot
@@ -630,7 +630,7 @@ actions:
     type: sensor_msgs/msg/JointState
     qos: {reliability: reliable, depth: 10}
     select: [position.j1, position.j2]
-    apply: [rad2deg]          # only invertible ops allowed on actions
+    apply: [rad2deg]          # only serveable ops allowed on actions
     serve:
       safety: hold            # none, hold, zeros (default zeros)
 ```
@@ -640,23 +640,58 @@ actions:
 `apply` is an ordered op pipeline run after `select` (field projection) and
 before `align` (resampling). On the **record/decode** path ops run front-to-back
 via their forward direction; on the **serve/encode** path (policy command → ROS)
-they run back-to-front via their inverse. An action's `apply` may only contain
-**invertible** ops (so the command can be reconstructed); a non-invertible op on
-an action is rejected at contract load.
+they run back-to-front via their inverse.
 
-| Op | Form | Invertible | Notes |
-|----|------|:----------:|-------|
-| `rad2deg` | `rad2deg` | yes | radians (ROS) ↔ degrees (dataset) |
-| `clamp` | `clamp: [lo, hi]` | yes | clip element-wise to `[lo, hi]`; on actions this bounds the outgoing command |
-| `resize` | `resize: [h, w]` | no | nearest-neighbor image resize; observation only |
+Each op declares an **invertibility tier** that governs where it may run:
+
+| Tier | Meaning | On actions? | Round-trip gate |
+|------|---------|:-----------:|:---------------:|
+| `FORWARD_ONLY` | decode/build only; lossy and one-way | rejected at load | — |
+| `BIDIRECTIONAL` | runs both ways but lossy (the bound is the point) | allowed | — |
+| `BIJECTIVE` | inverse exactly undoes forward | allowed | verified at load |
+
+An action's `apply` may only contain **serveable** ops (`BIDIRECTIONAL` or
+`BIJECTIVE`); a `FORWARD_ONLY` op on an action is rejected at contract load. A
+`BIJECTIVE` op is round-trip verified when the contract loads — it will not load
+unless `inverse(forward(x)) == x`, so a wrong inverse fails fast instead of
+silently corrupting actions.
+
+| Op | Form | Tier | Notes |
+|----|------|------|-------|
+| `rad2deg` | `rad2deg` | `BIJECTIVE` | radians (ROS) ↔ degrees (dataset) |
+| `clamp` | `clamp: [lo, hi]` | `BIDIRECTIONAL` | clip element-wise to `[lo, hi]`; on actions this bounds the outgoing command (lossy, so not bijective) |
+| `resize` | `resize: [h, w]` | `FORWARD_ONLY` | nearest-neighbor image resize; observation only |
 
 ```yaml
 apply: [rad2deg, clamp: [-180, 180]]   # convert then bound
 apply: [resize: [224, 224]]            # image resize (observations only)
 ```
 
-Add a capability by registering a new op in `rosetta/common/ops.py`; the
-contract schema does not change.
+Add a built-in capability by registering a new op in `rosetta/core/ops.py`; the
+contract schema does not change:
+
+```python
+from rosetta.core.ops import register_op, Op, Invertibility
+
+@register_op("my_op", kind=Invertibility.BIJECTIVE)
+class MyOp(Op):
+    def forward(self, arr): ...
+    def inverse(self, arr): ...   # round-trip verified at contract load
+```
+
+**Bring your own op as a plugin** — no fork required. Package your op and
+advertise it under the `rosetta.ops` entry-point group; Rosetta discovers and
+imports it at contract load, so the contract references it **by name only**
+(no module paths in the YAML):
+
+```toml
+# in your plugin's pyproject.toml
+[project.entry-points."rosetta.ops"]
+my_ops = "my_pkg.my_ops"   # imported once; its @register_op calls run
+```
+```yaml
+apply: [my_op]             # resolves to the plugin's registered op
+```
 
 ### Teleop
 
@@ -789,41 +824,23 @@ select: [twist.twist.linear.x, pose.pose.position.z]
 
 The dtype is auto-detected from the message type. You can override it with the `dtype` field in the contract, or use a custom decoder for non-standard types.
 
-### Custom Encoders/Decoders (Experimental)
+### Custom Encoders/Decoders
 
-> **Note:** Custom encoder/decoder support is **experimental**.
+Add support for ROS message types beyond the built-ins by writing custom
+decoders (ROS → numpy) and encoders (numpy → ROS). Codecs are keyed by message
+type in a registry; there are three ways to get yours in, cleanest first.
 
-Add support for unsupported ROS message types by writing custom decoders (ROS → numpy) and encoders (numpy → ROS).
+#### Method 1: Plugin via entry points (recommended)
 
-#### Method 1: Specify in Contract (Recommended)
-
-Point directly to your converter functions in the contract YAML:
-
-```yaml
-observations:
-  - key: observation.state
-    topic: /my_sensor
-    type: my_msgs/msg/MyCustomSensor
-    decoder: my_package.converters:decode_my_sensor  # module:function
-
-actions:
-  - key: action
-    topic: /my_command
-    type: my_msgs/msg/MyCustomCommand
-    decoder: my_package.converters:decode_my_command  # for reading bags
-    encoder: my_package.converters:encode_my_command  # for publishing
-```
-
-The module must be importable in your Python environment. Paths are validated at contract load time.
-
-#### Method 2: Global Registration
-
-Register converters globally so they're used for all instances of a message type:
+Package your codecs and advertise them under the `rosetta.codecs` entry-point
+group. Rosetta discovers and imports the module at contract load, running its
+`@register_*` decorators — so the contract names the **type only**, with no
+module paths in the YAML:
 
 ```python
-# my_converters.py
+# my_pkg/my_codecs.py
 import numpy as np
-from rosetta.common.converters import register_decoder, register_encoder
+from rosetta.core.converters import register_decoder, register_encoder
 
 @register_decoder("my_msgs/msg/MyCustomSensor", dtype="float64")
 def decode_my_sensor(msg, spec):
@@ -836,14 +853,51 @@ def encode_my_command(values, spec, stamp_ns=None):
     msg.field1, msg.field2 = float(values[0]), float(values[1])
     return msg
 ```
+```toml
+# in your plugin's pyproject.toml
+[project.entry-points."rosetta.codecs"]
+my_codecs = "my_pkg.my_codecs"
+```
+```yaml
+observations:
+  - key: observation.state
+    topic: /my_sensor
+    type: my_msgs/msg/MyCustomSensor   # codec self-registered; no path needed
+```
 
-Import before using Rosetta:
+Registering a second codec for a type that already has one is an **error** —
+two plugins can't silently fight over a type. To intentionally replace a
+built-in (e.g. you wrote a better `sensor_msgs/msg/Image` decoder), pass
+`override=True`:
 
 ```python
-import my_converters  # Registers on import
-from lerobot_robot_rosetta import Rosetta, RosettaConfig
-robot = Rosetta(RosettaConfig(config_path="contract.yaml"))
+@register_decoder("sensor_msgs/msg/Image", dtype="video", override=True)
+def my_better_image_decoder(msg, spec): ...
 ```
+
+#### Method 2: Inline path in the contract (per-spec override)
+
+Point a single spec directly at a converter function. This is **deterministic
+and per-spec** — it wins over the registry for that spec only, and needs no
+packaging. Use it for a one-off, or to use a different decoder on one topic
+while the registry default applies elsewhere:
+
+```yaml
+actions:
+  - key: action
+    topic: /my_command
+    type: my_msgs/msg/MyCustomCommand
+    decoder: my_package.converters:decode_my_command  # module:function (reading bags)
+    encoder: my_package.converters:encode_my_command  # for publishing
+```
+
+The module must be importable; paths are validated at contract load time.
+
+> **Round-trip safety:** every encoder/decoder pair is round-trip tested
+> (`decode(encode(v)) == v`). A new pair must declare its round-trip behavior
+> (`register_encoder(..., roundtrip=False)` for a genuinely lossy encoder) and
+> add a sample to the test suite, or the tests fail — coverage can't silently
+> regress.
 
 #### Function Signatures
 

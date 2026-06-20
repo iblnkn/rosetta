@@ -500,13 +500,13 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
         if not names:
             names = ['data']
 
-        # A reward used as an action must be invertible (it publishes).
+        # A reward used as an action must be serveable (it publishes).
         ops = _build_ops(o.apply)
         for op in ops:
-            if not op.invertible:
+            if not op.kind.serveable:
                 raise ContractValidationError(
-                    f"Reward '{o.key}' used as an action has non-invertible op "
-                    f"'{op.name}' in apply; remove it."
+                    f"Reward '{o.key}' used as an action has {op.kind.name} op "
+                    f"'{op.name}' in apply (no serve direction); remove it."
                 )
 
         kwargs = {
