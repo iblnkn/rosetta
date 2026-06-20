@@ -27,6 +27,15 @@ setup(
         (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
     ],
     install_requires=['setuptools', 'numpy', 'pyyaml', 'rclpy'],
+    entry_points={
+        'console_scripts': [
+            'episode_recorder_node = rosetta.ros2.nodes.episode_recorder_node:main',
+            'episode_keyboard_node = rosetta.ros2.nodes.episode_keyboard_node:main',
+            'rosetta_hil_manager_node = rosetta.ros2.nodes.rosetta_hil_manager_node:main',
+            'rosetta_client_node = rosetta.ros2.nodes.rosetta_client_node:main',
+            'port_bags = rosetta.apps.port_bags:main',
+        ],
+    },
     zip_safe=True,
     author='Isaac Blankenau',
     author_email='isaac.blankenau@gmail.com',
