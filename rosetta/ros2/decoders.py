@@ -60,7 +60,7 @@ except ImportError:
 
 from rosetta.core.contract import DEPTH_ENCODINGS, ObservationStreamSpec
 from rosetta.core.converters import register_decoder
-from rosetta.core.field_access import dot_get
+from rosetta.ros2.ros2_utils import dot_get
 
 # =============================================================================
 # Image Encoding Configuration

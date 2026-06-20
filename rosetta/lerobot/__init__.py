@@ -15,14 +15,12 @@
 """
 Rosetta LeRobot consumer layer.
 
-Adapts the framework-agnostic :mod:`rosetta.core` outputs to LeRobot: the
-episodic dataset writer (``LeRobotDataset``) and the reward classifier gRPC
-server. This is one consumer adapter; a future consumer (e.g. another VLA
-stack) would add a sibling package with its own writer consuming the same
-neutral core frames -- no shared base class is required (duck-typed). Imports
-here may pull in lerobot.
+LeRobot-specific code, built on the framework-agnostic :mod:`rosetta.core` +
+:mod:`rosetta.ros2`:
+- ``port_bags`` -- ROS2 bag -> LeRobotDataset converter (single-use, LeRobot-tied).
+- ``classifier_server`` -- reward classifier gRPC server.
 
-Note: LeRobot policy *inference* is driven from the ROS2 client node
-(``rosetta.ros2.nodes.rosetta_client_node``), which is the ROS↔LeRobot
-composition root and owns the ``RobotClient`` lifecycle directly.
+LeRobot policy *inference* is driven from the ROS2 client node
+(``rosetta.ros2.nodes.rosetta_client_node``), the ROS<->LeRobot composition root
+that owns the ``RobotClient`` lifecycle directly. Imports here may pull in lerobot.
 """

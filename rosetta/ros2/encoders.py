@@ -36,7 +36,7 @@ from rosidl_runtime_py.utilities import get_message
 
 from rosetta.core.contract import ActionStreamSpec
 from rosetta.core.converters import register_encoder
-from rosetta.core.field_access import dot_set
+from rosetta.ros2.ros2_utils import dot_set
 
 # =============================================================================
 # Helper Functions
