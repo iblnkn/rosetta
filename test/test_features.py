@@ -21,7 +21,7 @@ zero-fill with the same shape as a real decoded frame and the declared feature.
 import numpy as np
 import pytest
 
-from rosetta.common.contract_utils import (
+from rosetta.core.contract_utils import (
     DECODED_IMAGE_CHANNELS,
     build_feature,
     zeros_for_spec,

@@ -34,9 +34,9 @@ from typing import Any
 import numpy as np
 from rosidl_runtime_py.utilities import get_message
 
-from .contract import ActionStreamSpec
-from .converters import register_encoder
-from .ros2_utils import dot_set
+from rosetta.core.contract import ActionStreamSpec
+from rosetta.core.converters import register_encoder
+from rosetta.core.field_access import dot_set
 
 # =============================================================================
 # Helper Functions

@@ -29,7 +29,7 @@ from rclpy.qos import (
 )
 
 if TYPE_CHECKING:
-    from .contract import ObservationStreamSpec
+    from rosetta.core.contract import ObservationStreamSpec
 
 
 # =============================================================================
@@ -200,65 +200,12 @@ def get_qos_depth(qos: QoSProfile | int) -> int:
 
 
 # =============================================================================
-# Dotted Attribute Access (for ROS messages)
+# Dotted Attribute Access (re-exported from the framework-agnostic core)
 # =============================================================================
 
-
-def dot_get(obj, path: str):
-    """
-    Resolve a dotted attribute path on a ROS message.
-
-    Supports JointState-style pattern: "<field>.<joint_name>".
-
-    Example:
-    -------
-        dot_get(msg, "position.elbow") -> msg.position[msg.name.index("elbow")]
-        dot_get(msg, "linear.x") -> msg.linear.x
-
-    """
-    parts = path.split('.')
-
-    # JointState-like: "field.joint_name" -> field[name.index(joint_name)]
-    if len(parts) == 2 and hasattr(obj, 'name') and hasattr(obj, parts[0]):
-        field, key = parts
-        idx = list(obj.name).index(key)
-        return getattr(obj, field)[idx]
-
-    # Generic nested getattr
-    cur = obj
-    for p in parts:
-        cur = getattr(cur, p)
-    return cur
-
-
-def dot_set(obj, path: str, value: float) -> None:
-    """
-    Set a dotted attribute on a ROS message.
-
-    Supports JointState-style pattern: "<field>.<joint_name>".
-
-    Example:
-    -------
-        dot_set(msg, "position.elbow", 1.5) -> msg.position[index] = 1.5
-        dot_set(msg, "linear.x", 2.0) -> msg.linear.x = 2.0
-
-    """
-    parts = path.split('.')
-
-    # JointState-like: "field.joint_name" -> field[name.index(joint_name)] = value
-    if len(parts) == 2 and hasattr(obj, 'name') and hasattr(obj, parts[0]):
-        field, key = parts
-        arr = getattr(obj, field)
-        if isinstance(arr, (list, tuple)) and key in list(obj.name):
-            idx = list(obj.name).index(key)
-            arr[idx] = float(value)
-            return
-
-    # Generic nested setattr
-    cur = obj
-    for p in parts[:-1]:
-        cur = getattr(cur, p)
-    setattr(cur, parts[-1], float(value))
+# dot_get/dot_set are pure (no ROS) and now live in rosetta.core.field_access.
+# Re-exported here so existing `from ...ros2_utils import dot_get` keeps working.
+from rosetta.core.field_access import dot_get, dot_set  # noqa: E402,F401
 
 
 # =============================================================================

@@ -21,7 +21,7 @@ This module provides:
 - Support for custom converters specified in contract YAML
 
 Usage:
-    from rosetta.common.converters import register_decoder, register_encoder
+    from rosetta.core.converters import register_decoder, register_encoder
 
     @register_decoder("sensor_msgs/msg/JointState", dtype="float64")
     def decode_joint_state(msg, spec):

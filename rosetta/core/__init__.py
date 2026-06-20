@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility shim: episode_keyboard_node moved to :mod:`rosetta.ros2.nodes.episode_keyboard_node`."""
+"""
+Rosetta core: framework-agnostic contract, ops, codecs, and resampling.
 
-from rosetta.ros2.nodes.episode_keyboard_node import *  # noqa: F401,F403
-from rosetta.ros2.nodes.episode_keyboard_node import main  # noqa: F401
+This package has no ROS or LeRobot dependencies. It defines the contract
+schema, the op pipeline, the encode/decode registry + dispatch, the stream
+resampler, and pure field-access helpers. ROS2 and LeRobot are adapter layers
+built on top of this core (see ``rosetta.ros2`` and ``rosetta.lerobot``).
+"""

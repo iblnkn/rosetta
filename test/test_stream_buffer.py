@@ -14,8 +14,8 @@
 
 """Tests for StreamBuffer resampling policies and clock-reset handling."""
 
-from rosetta.common.contract import ResamplePolicy
-from rosetta.common.contract_utils import StreamBuffer
+from rosetta.core.contract import ResamplePolicy
+from rosetta.core.contract_utils import StreamBuffer
 
 STEP = 100  # ns between ticks
 TOL = 50    # ns asof tolerance

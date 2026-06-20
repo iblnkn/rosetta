@@ -58,9 +58,9 @@ except ImportError:
     cv2 = None  # type: ignore[assignment]
     _HAS_CV2 = False
 
-from .contract import DEPTH_ENCODINGS, ObservationStreamSpec
-from .converters import register_decoder
-from .ros2_utils import dot_get
+from rosetta.core.contract import DEPTH_ENCODINGS, ObservationStreamSpec
+from rosetta.core.converters import register_decoder
+from rosetta.core.field_access import dot_get
 
 # =============================================================================
 # Image Encoding Configuration

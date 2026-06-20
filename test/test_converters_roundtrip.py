@@ -32,14 +32,14 @@ except Exception:  # noqa: BLE001 - any failure means ROS msgs unavailable
     pytest.skip('ROS message packages unavailable', allow_module_level=True)
 
 # Import for @register_decoder / @register_encoder side effects.
-import rosetta.common.decoders  # noqa: E402,F401
-import rosetta.common.encoders  # noqa: E402,F401
-from rosetta.common.contract import load_contract  # noqa: E402
-from rosetta.common.contract_utils import (  # noqa: E402
+import rosetta.ros2.decoders  # noqa: E402,F401
+import rosetta.ros2.encoders  # noqa: E402,F401
+from rosetta.core.contract import load_contract  # noqa: E402
+from rosetta.core.contract_utils import (  # noqa: E402
     iter_action_specs,
     iter_observation_specs,
 )
-from rosetta.common.converters import decode_value, encode_value  # noqa: E402
+from rosetta.core.converters import decode_value, encode_value  # noqa: E402
 
 
 def _contract(tmp_path, apply_block):

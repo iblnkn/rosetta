@@ -23,10 +23,10 @@ import types
 import numpy as np
 
 # Import for the @register_decoder side effects that populate the registry.
-import rosetta.common.decoders  # noqa: F401
-from rosetta.common.contract import load_contract
-from rosetta.common.contract_utils import iter_observation_specs
-from rosetta.common.converters import decode_value
+import rosetta.ros2.decoders  # noqa: F401
+from rosetta.core.contract import load_contract
+from rosetta.core.contract_utils import iter_observation_specs
+from rosetta.core.converters import decode_value
 
 
 def _obs_spec(tmp_path, apply_block):

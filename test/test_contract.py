@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from rosetta.common.contract import ContractValidationError, load_contract
+from rosetta.core.contract import (
+    ContractValidationError,
+    is_valid_lerobot_dtype,
+    load_contract,
+)
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / 'contracts'
 
@@ -79,6 +83,19 @@ def test_old_syntax_action_rejected(tmp_path):
     p.write_text(OLD_SYNTAX_CONTRACT)
     with pytest.raises(ContractValidationError):
         load_contract(p)
+
+
+@pytest.mark.parametrize(
+    'dtype',
+    ['float32', 'float64', 'int32', 'int64', 'bool', 'uint8', 'video', 'image', 'string'],
+)
+def test_valid_dtypes_accepted(dtype):
+    assert is_valid_lerobot_dtype(dtype)
+
+
+@pytest.mark.parametrize('dtype', ['not_a_dtype', 'flot32', ''])
+def test_invalid_dtypes_rejected(dtype):
+    assert not is_valid_lerobot_dtype(dtype)
 
 
 def test_missing_robot_type_rejected(tmp_path):

@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility shim: episode_keyboard_node moved to :mod:`rosetta.ros2.nodes.episode_keyboard_node`."""
+"""
+Rosetta composition-root apps.
 
-from rosetta.ros2.nodes.episode_keyboard_node import *  # noqa: F401,F403
-from rosetta.ros2.nodes.episode_keyboard_node import main  # noqa: F401
+Entry points that wire together core + adapter layers (e.g. the bag-porting
+pipeline combines the ROS2 bag reader with the LeRobot dataset writer).
+"""

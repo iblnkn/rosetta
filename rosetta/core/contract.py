@@ -28,7 +28,7 @@ import importlib
 from pathlib import Path
 from typing import Any
 
-from lerobot.utils.utils import is_valid_numpy_dtype_string
+import numpy as np
 import yaml
 
 # =============================================================================
@@ -49,6 +49,15 @@ LeRobot currently lacks proper depth image handling:
 """
 
 
+def _is_valid_numpy_dtype_string(dtype: str) -> bool:
+    """Return True if ``dtype`` names a constructible numpy dtype."""
+    try:
+        np.dtype(dtype)
+        return True
+    except TypeError:
+        return False
+
+
 def is_valid_lerobot_dtype(dtype: str) -> bool:
     """
     Check if dtype is valid for LeRobot datasets.
@@ -57,7 +66,7 @@ def is_valid_lerobot_dtype(dtype: str) -> bool:
     - Any valid numpy dtype string (float32, float64, int32, int64, bool, etc.)
     - Special LeRobot types: video, image, string
     """
-    return dtype in LEROBOT_SPECIAL_DTYPES or is_valid_numpy_dtype_string(dtype)
+    return dtype in LEROBOT_SPECIAL_DTYPES or _is_valid_numpy_dtype_string(dtype)
 
 
 # =============================================================================

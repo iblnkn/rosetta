@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the op-plugin pipeline (rosetta.common.ops)."""
+"""Unit tests for the op-plugin pipeline (rosetta.core.ops)."""
 
 import numpy as np
 import pytest
 
-from rosetta.common.contract import ContractValidationError, _parse_apply
-from rosetta.common.ops import (
+from rosetta.core.contract import ContractValidationError, _parse_apply
+from rosetta.core.ops import (
     OP_REGISTRY,
     OpContext,
     build_op,

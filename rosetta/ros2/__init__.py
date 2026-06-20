@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Compatibility shim: episode_keyboard_node moved to :mod:`rosetta.ros2.nodes.episode_keyboard_node`."""
+"""
+Rosetta ROS2 adapter layer.
 
-from rosetta.ros2.nodes.episode_keyboard_node import *  # noqa: F401,F403
-from rosetta.ros2.nodes.episode_keyboard_node import main  # noqa: F401
+Binds the framework-agnostic :mod:`rosetta.core` to ROS2: message decoders /
+encoders (registered into the core codec registry), QoS / timestamp helpers,
+bag IO, and the ROS2 nodes. Imports here may pull in rclpy / rosidl / rosbag2,
+so keep this package out of the core import graph.
+"""

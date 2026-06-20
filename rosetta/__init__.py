@@ -44,12 +44,12 @@ Usage (RL Training - via rl package):
         "contract.yaml", device="cuda", use_gripper=True
     )
 
-Usage (Common utilities):
-    from rosetta.common import load_contract, Contract
+Usage (Core utilities):
+    from rosetta.core.contract import load_contract, Contract
 """
 
-# Re-export common utilities
-from .common.contract import (
+# Re-export core utilities
+from .core.contract import (
     ActionStreamSpec,
     Contract,
     load_contract,
@@ -57,7 +57,7 @@ from .common.contract import (
     ResetMode,
     ResetSpec,
 )
-from .common.contract_utils import iter_action_specs, iter_observation_specs
+from .core.contract_utils import iter_action_specs, iter_observation_specs
 
 __all__ = [
     # Contract utilities
