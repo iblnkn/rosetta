@@ -24,6 +24,7 @@ This module provides runtime utilities for working with contracts:
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any, Iterable, TYPE_CHECKING, TypeVar
 
@@ -121,15 +122,120 @@ def zeros_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
         # frame and the feature declared by build_feature.
         return np.zeros((h, w, DECODED_IMAGE_CHANNELS), dtype=np.uint8)
 
-    dtype_map = {
-        'float32': np.float32,
-        'float64': np.float64,
-        'int32': np.int32,
-        'int64': np.int64,
-        'bool': bool,
-    }
-    np_dtype = dtype_map.get(spec.dtype, np.float32)
+    np_dtype = DTYPE_MAP.get(spec.dtype, np.float32)
     return np.zeros(len(spec.names), dtype=np_dtype)
+
+
+# =============================================================================
+# Frame Assembly (shared by offline bag porting and online inference)
+# =============================================================================
+
+# LeRobot dtype string -> numpy dtype, for the numeric frame-assembly paths.
+DTYPE_MAP: dict[str, Any] = {
+    'float32': np.float32,
+    'float64': np.float64,
+    'int32': np.int32,
+    'int64': np.int64,
+    'bool': bool,
+}
+
+
+def _frame_vector_dtype(spec: 'StreamSpec') -> str:
+    """LeRobot dtype string for a numeric spec (obs declares it; action via codec)."""
+    if isinstance(spec, ObservationStreamSpec):
+        return spec.dtype
+    # ActionStreamSpec: the decoder registry knows the message's native dtype.
+    return get_decoder_dtype(spec.msg_type)
+
+
+def aggregate_frame(samples: list[tuple['StreamSpec', Any]]) -> dict[str, Any]:
+    """Assemble a frame dict from resampled stream values.
+
+    samples is an ordered list of (spec, value), where value is the resampled
+    output for that stream at one tick (a numpy array, a string, or None when
+    the stream had no data). Specs sharing a key are aggregated: numeric vectors
+    are concatenated in declaration order (missing streams zero-filled); images,
+    strings, and scalars pass through as a single value. Returns a dict from
+    each contract key to a numpy array or string.
+
+    Both the bag porter and the live bridge call this, so frame assembly lives
+    in one place.
+    """
+    # Group by output key, preserving declaration order.
+    by_key: dict[str, list[tuple['StreamSpec', Any]]] = {}
+    for spec, value in samples:
+        by_key.setdefault(spec.key, []).append((spec, value))
+
+    frame: dict[str, Any] = {}
+    for key, items in by_key.items():
+        first_spec, first_val = items[0]
+
+        if isinstance(first_spec, ObservationStreamSpec) and first_spec.is_image:
+            frame[key] = (
+                np.asarray(first_val, dtype=np.uint8)
+                if first_val is not None
+                else zeros_for_spec(first_spec)
+            )
+        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype == 'string':
+            frame[key] = str(first_val) if first_val is not None else ''
+        elif isinstance(first_spec, ObservationStreamSpec) and first_spec.dtype in (
+            'bool',
+            'int32',
+            'int64',
+        ):
+            np_dtype = DTYPE_MAP[first_spec.dtype]
+            frame[key] = (
+                np.asarray(first_val, dtype=np_dtype).flatten()
+                if first_val is not None
+                else np.zeros(1, dtype=np_dtype)
+            )
+        else:
+            dtype_str = _frame_vector_dtype(first_spec)
+            if dtype_str not in DTYPE_MAP:
+                raise ValueError(
+                    f"Unsupported dtype '{dtype_str}' for key '{key}'. Add to DTYPE_MAP."
+                )
+            np_dtype = DTYPE_MAP[dtype_str]
+
+            parts = []
+            for spec, value in items:
+                if value is None:
+                    parts.append(np.zeros(max(len(spec.names), 1), dtype=np_dtype))
+                else:
+                    parts.append(np.asarray(value, dtype=np_dtype).flatten())
+            frame[key] = np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+    return frame
+
+
+def slice_action_frame(
+    action_frame: dict[str, Any],
+    action_specs: 'list[ActionStreamSpec]',
+) -> dict[str, np.ndarray]:
+    """
+    Split a contract-key action frame into per-stream arrays, keyed by topic.
+
+    Inverse of the concatenation in :func:`aggregate_frame`: for each action
+    ``key``, the frame holds one combined vector; specs sharing that key
+    (publishing to different topics) each take their slice in declaration order,
+    sized by the spec's selector count. Returns ``{topic: np.ndarray}`` ready for
+    per-publisher ``encode_value``.
+    """
+    by_key: dict[str, list['ActionStreamSpec']] = {}
+    for spec in action_specs:
+        by_key.setdefault(spec.key, []).append(spec)
+
+    out: dict[str, np.ndarray] = {}
+    for key, specs in by_key.items():
+        if key not in action_frame:
+            raise KeyError(f"Action frame missing key '{key}'")
+        arr = np.asarray(action_frame[key], dtype=np.float64).flatten()
+        offset = 0
+        for spec in specs:
+            n = max(len(spec.names), 1)
+            out[spec.topic] = arr[offset : offset + n]
+            offset += n
+    return out
 
 
 # =============================================================================
@@ -283,6 +389,27 @@ def get_namespaced_names(spec: StreamSpec) -> list[str]:
     if spec.namespace:
         return [f'{spec.namespace}.{n}' for n in spec.names]
     return list(spec.names)
+
+
+def classify_key(key: str) -> str:
+    """Classify a contract key by prefix.
+
+        observation.images.*  -> 'image'
+        action*               -> 'action'
+        everything else       -> 'state'
+
+    Shared by the backend leaves so they don't each re-derive it.
+    """
+    if key.startswith('observation.images.'):
+        return 'image'
+    if key.startswith('action'):
+        return 'action'
+    return 'state'
+
+
+def sanitize_field_name(name: str) -> str:
+    """Reduce a contract key to a dot-free [A-Za-z0-9_] name."""
+    return re.sub(r'[^A-Za-z0-9_]', '_', name)
 
 
 # =============================================================================
@@ -439,6 +566,8 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             'qos': o.qos,
             'decoder': o.decoder,
             'ops': ops,
+            'kind': o.kind,
+            'absolute': o.absolute,
         }
         items.append((o.topic, kwargs, o))
 
@@ -474,6 +603,8 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
             'decoder': a.decoder,
             'encoder': a.encoder,
             'ops': ops,
+            'kind': a.kind,
+            'absolute': a.absolute,
         }
         items.append((a.topic, kwargs, a))
 

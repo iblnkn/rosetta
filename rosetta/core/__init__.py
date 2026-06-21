@@ -15,8 +15,9 @@
 """
 Rosetta core: framework-agnostic contract, ops, codecs, and resampling.
 
-This package has no ROS or LeRobot dependencies. It defines the contract
-schema, the op pipeline, the encode/decode registry + dispatch, the stream
-resampler, and pure field-access helpers. ROS2 and LeRobot are adapter layers
-built on top of this core (see ``rosetta.ros2`` and ``rosetta.lerobot``).
+This package has no ROS or policy-framework dependencies. It defines the
+contract schema, the op pipeline, the encode/decode registry + dispatch, the
+stream resampler, and pure field-access helpers. ROS2 (``rosetta.ros2``) and the
+framework leaves (``lerobot_robot_rosetta``, ``vla_foundry_rosetta``) are adapter
+layers built on top of this core; backends are resolved via ``rosetta.backends``.
 """

@@ -635,6 +635,108 @@ actions:
       safety: hold            # none, hold, zeros (default zeros)
 ```
 
+### Field kinds (`kind`)
+
+`kind` is an optional tag on an observation or action spec that describes what
+the value means. LeRobot ignores it. The vla_foundry / starVLA
+use it to pick per-group normalization, rotation handling, and window padding.
+The defaults leave every existing contract unchanged.
+
+`kind` has two axes, a representation and a frame. It may be a single token or a
+list (`kind: quaternion`, `kind: delta`, `kind: [quaternion, delta]`,
+`kind: [continuous, absolute]`):
+
+**Representation** (default `continuous`):
+
+| value | dims | meaning |
+|---|---|---|
+| `continuous` (default) | any | plain scalar/vector (joints, positions, velocities) |
+| `quaternion` | 4 | rotation `[x, y, z, w]` |
+| `euler_rpy` | 3 | roll / pitch / yaw |
+| `axis_angle` | 3 | rotation vector |
+| `rotation_6d` | 6 | 6-D continuous rotation |
+| `binary` | any | discrete on/off (e.g. gripper) |
+
+**Frame** (default `absolute`): `absolute` or `delta`, whether values are
+world-frame or relative. starVLA uses it for window padding (`first_last` vs
+`zero`) and relative-rotation handling. At most one tag per axis (validated).
+
+**Keys stay canonical.** Don't encode the type in the key. `action.binary`
+becomes a separate LeRobot feature and breaks policies that read `action`.
+Keep the canonical key and split a mixed vector into one spec per kind. The
+specs share the key and concatenate into one flat feature, each with its own
+`kind`:
+
+```yaml
+observations:
+  - key: observation.state          # canonical key; one flat vector to LeRobot
+    topic: /ee_pose
+    type: geometry_msgs/msg/PoseStamped
+    select: [pose.position.x, pose.position.y, pose.position.z]
+    # kind: continuous (default)
+  - key: observation.state          # same key -> concatenated after the above
+    topic: /ee_pose
+    type: geometry_msgs/msg/PoseStamped
+    select: [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+    kind: quaternion
+  - key: observation.state
+    topic: /gripper
+    type: sensor_msgs/msg/JointState
+    select: [position.gripper]
+    kind: binary
+```
+
+Validation runs at contract load: the dim count must match the `kind`
+(`quaternion` is 4, etc.), and an untagged `x/y/z/w` run warns ("looks like a
+quaternion, set `kind: quaternion`") so a rotation isn't silently min-max'd.
+
+### Backend notes (LeRobot / vla_foundry / starVLA)
+
+One contract drives all three backends. Only `kind`/`absolute` are VLA-specific
+(LeRobot ignores them). A few differences matter:
+
+- **Training is framework-native for all three.** Rosetta produces the dataset
+  and hosts deploy. You train with each framework's own tools: LeRobot with
+  `lerobot-train` on the dataset, vla_foundry with its trainer on the tar shards,
+  starVLA from the starVLA repo after pasting the generated `rosetta_dataconfig.py`.
+- **Deploy topology.** LeRobot runs a gRPC policy-server subprocess. vla_foundry
+  loads the model in-process in the ROS node (heavy on the robot). starVLA is a
+  websocket client to a separate server process (GPU box, possibly remote).
+- **State/action layout.** LeRobot keeps one feature per contract key, so
+  multi-key state like `observation.state` + `observation.environment_state` stays
+  separate. The VLA writers concatenate all state into one `observation.state`
+  column (starVLA preserves the per-`kind` slices via `meta/modality.json`). A
+  model needing separate state inputs loses that split on the VLA path.
+- **Sections consumed.** The VLA writers use observations and actions only. The
+  `rewards` / `signals` / `info` / `complementary_data` / `adjunct` sections
+  (LeRobot RL and record-only) are not part of the VLA dataset.
+- **`fps` consistency.** `fps` sets the control rate and action time-horizon. Keep
+  it identical across record, train, and deploy or the policy degrades.
+
+### Train/deploy skew
+
+Rosetta aims to make what a policy trains on match what it sees live. Offline
+conversion (`bag_frames`) and online inference (`topic_bridge`) run the same
+`StreamBuffer` resampling, `aggregate_frame`, and op pipeline from the same
+contract, so decode, `select`, `apply` ops, alignment, and key aggregation match
+across all three backends.
+
+Downstream, per backend:
+
+- **LeRobot.** Normalization is policy-internal, with the same dataset stats at
+  train and infer time. The only residual is the video codec (mp4 dataset vs raw
+  online), inherent to any video dataset.
+- **vla_foundry.** Inference reuses the training `RoboticsProcessor` and
+  normalizer, so input and output normalization match training. Make sure the
+  online image-history matches the writer's `image_indices` windowing.
+- **starVLA.** The server un-normalizes the output. The stock server leaves
+  input-state normalization to the client. The Rosetta runner stays starVLA-free
+  and sends raw state, so a state-conditioned model would see skew. Use
+  `scripts/rosetta_starvla_server.py` (the default `Dockerfile.starvla` entrypoint),
+  which normalizes input state server-side with the training transform.
+  Vision+language-only models send no state and are unaffected. Also keep the
+  runner's `image_width/height` equal to the model's training `obs_image_size`.
+
 ### Ops
 
 `apply` is an ordered op pipeline run after `select` (field projection) and
@@ -647,14 +749,14 @@ Each op declares an **invertibility tier** that governs where it may run:
 | Tier | Meaning | On actions? | Round-trip gate |
 |------|---------|:-----------:|:---------------:|
 | `FORWARD_ONLY` | decode/build only; lossy and one-way | rejected at load | — |
-| `BIDIRECTIONAL` | runs both ways but lossy (the bound is the point) | allowed | — |
+| `BIDIRECTIONAL` | runs both ways but lossy (it applies a bound) | allowed | — |
 | `BIJECTIVE` | inverse exactly undoes forward | allowed | verified at load |
 
-An action's `apply` may only contain **serveable** ops (`BIDIRECTIONAL` or
-`BIJECTIVE`); a `FORWARD_ONLY` op on an action is rejected at contract load. A
-`BIJECTIVE` op is round-trip verified when the contract loads — it will not load
-unless `inverse(forward(x)) == x`, so a wrong inverse fails fast instead of
-silently corrupting actions.
+An action's `apply` may only contain serveable ops (`BIDIRECTIONAL` or
+`BIJECTIVE`). A `FORWARD_ONLY` op on an action is rejected at contract load. A
+`BIJECTIVE` op is round-trip verified at load: it will not load unless
+`inverse(forward(x)) == x`, so a wrong inverse fails at load instead of
+corrupting actions silently.
 
 | Op | Form | Tier | Notes |
 |----|------|------|-------|
@@ -679,10 +781,10 @@ class MyOp(Op):
     def inverse(self, arr): ...   # round-trip verified at contract load
 ```
 
-**Bring your own op as a plugin** — no fork required. Package your op and
-advertise it under the `rosetta.ops` entry-point group; Rosetta discovers and
-imports it at contract load, so the contract references it **by name only**
-(no module paths in the YAML):
+**Bring your own op as a plugin**, no fork needed. Package your op and advertise
+it under the `rosetta.ops` entry-point group. Rosetta discovers and imports it at
+contract load, so the contract references it by name only (no module paths in the
+YAML):
 
 ```toml
 # in your plugin's pyproject.toml
@@ -828,14 +930,14 @@ The dtype is auto-detected from the message type. You can override it with the `
 
 Add support for ROS message types beyond the built-ins by writing custom
 decoders (ROS → numpy) and encoders (numpy → ROS). Codecs are keyed by message
-type in a registry; there are three ways to get yours in, cleanest first.
+type in a registry. There are three ways to register yours.
 
 #### Method 1: Plugin via entry points (recommended)
 
 Package your codecs and advertise them under the `rosetta.codecs` entry-point
 group. Rosetta discovers and imports the module at contract load, running its
-`@register_*` decorators — so the contract names the **type only**, with no
-module paths in the YAML:
+`@register_*` decorators, so the contract names the type only, with no module
+paths in the YAML:
 
 ```python
 # my_pkg/my_codecs.py
@@ -865,10 +967,9 @@ observations:
     type: my_msgs/msg/MyCustomSensor   # codec self-registered; no path needed
 ```
 
-Registering a second codec for a type that already has one is an **error** —
-two plugins can't silently fight over a type. To intentionally replace a
-built-in (e.g. you wrote a better `sensor_msgs/msg/Image` decoder), pass
-`override=True`:
+Registering a second codec for a type that already has one is an error, so two
+plugins can't silently conflict over a type. To replace a built-in (e.g. you
+wrote a better `sensor_msgs/msg/Image` decoder), pass `override=True`:
 
 ```python
 @register_decoder("sensor_msgs/msg/Image", dtype="video", override=True)
@@ -877,10 +978,10 @@ def my_better_image_decoder(msg, spec): ...
 
 #### Method 2: Inline path in the contract (per-spec override)
 
-Point a single spec directly at a converter function. This is **deterministic
-and per-spec** — it wins over the registry for that spec only, and needs no
-packaging. Use it for a one-off, or to use a different decoder on one topic
-while the registry default applies elsewhere:
+Point a single spec directly at a converter function. It applies to that spec
+only, overrides the registry there, and needs no packaging. Use it for a one-off,
+or to use a different decoder on one topic while the registry default applies
+elsewhere:
 
 ```yaml
 actions:
@@ -895,9 +996,8 @@ The module must be importable; paths are validated at contract load time.
 
 > **Round-trip safety:** every encoder/decoder pair is round-trip tested
 > (`decode(encode(v)) == v`). A new pair must declare its round-trip behavior
-> (`register_encoder(..., roundtrip=False)` for a genuinely lossy encoder) and
-> add a sample to the test suite, or the tests fail — coverage can't silently
-> regress.
+> (`register_encoder(..., roundtrip=False)` for a lossy encoder) and add a sample
+> to the test suite, or the tests fail.
 
 #### Function Signatures
 

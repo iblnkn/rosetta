@@ -27,6 +27,7 @@ from enum import Enum
 import importlib
 from pathlib import Path
 from typing import Any
+import warnings
 
 import numpy as np
 import yaml
@@ -122,6 +123,33 @@ class ResetMode(str, Enum):
     TOPIC = 'topic'  # Publish to topic to trigger reset
 
 
+class FieldKind(str, Enum):
+    """Value type of a state/action field.
+
+    Tells the VLA backends how to normalize or rotate the values. LeRobot
+    ignores it. Default is continuous (plain min_max), which leaves existing
+    contracts unchanged.
+    """
+
+    CONTINUOUS = 'continuous'  # plain scalar/vector (joints, positions, velocities)
+    QUATERNION = 'quaternion'  # 4D rotation [x, y, z, w]
+    EULER_RPY = 'euler_rpy'  # 3D roll/pitch/yaw
+    AXIS_ANGLE = 'axis_angle'  # 3D rotation vector
+    ROTATION_6D = 'rotation_6d'  # 6D continuous rotation representation
+    BINARY = 'binary'  # discrete on/off (e.g. gripper open/close)
+
+
+# Required dim count per kind (None = any), checked at contract load.
+FIELD_KIND_DIMS: dict[str, int | None] = {
+    'continuous': None,
+    'quaternion': 4,
+    'euler_rpy': 3,
+    'axis_angle': 3,
+    'rotation_6d': 6,
+    'binary': None,
+}
+
+
 # =============================================================================
 # Contract Dataclasses
 # =============================================================================
@@ -150,6 +178,8 @@ class ObservationSpec:
     qos: dict[str, Any] | None = None
     dtype: str | None = None
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
+    kind: str = 'continuous'  # FieldKind representation (rotation/binary/...) for VLA backends
+    absolute: bool = True  # frame axis: absolute vs delta values
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +195,8 @@ class ActionSpec:
     safety_behavior: str = 'none'  # from serve.safety
     decoder: str | None = None  # Custom decoder path: "module.path:function_name"
     encoder: str | None = None  # Custom encoder path: "module.path:function_name"
+    kind: str = 'continuous'  # FieldKind representation (rotation/binary/...) for VLA backends
+    absolute: bool = True  # frame axis: absolute vs delta values
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +313,8 @@ class ObservationStreamSpec(StreamSpec):
     namespace: str | None = None
     decoder: str | None = None  # Custom decoder path
     ops: tuple = ()  # Resolved forward op pipeline (rad2deg, resize, ...)
+    kind: str = 'continuous'  # FieldKind representation for VLA backends
+    absolute: bool = True  # frame axis: absolute vs delta values
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,6 +327,8 @@ class ActionStreamSpec(StreamSpec):
     decoder: str | None = None  # Custom decoder path
     encoder: str | None = None  # Custom encoder path
     ops: tuple = ()  # Resolved op pipeline; run in reverse (inverse) to serve
+    kind: str = 'continuous'  # FieldKind representation for VLA backends
+    absolute: bool = True  # frame axis: absolute vs delta values
 
 
 # =============================================================================
@@ -341,6 +377,76 @@ def _validate_dtype(dtype: str | None, context: str, required: bool = False) -> 
             f'Must be a valid numpy dtype or one of: {sorted(LEROBOT_SPECIAL_DTYPES)}'
         )
     return dtype
+
+
+_REP_KINDS = {e.value for e in FieldKind}  # representation axis
+_FRAME_KINDS = {'absolute', 'delta'}  # frame axis (orthogonal to representation)
+
+
+def _validate_kind(
+    kind: str | list[str] | None, names: list[str] | None, context: str
+) -> tuple[str, bool]:
+    """Validate a field kind. Returns (representation, absolute).
+
+    kind has two independent parts and can be a token or a list: a
+    representation (continuous, quaternion, euler_rpy, axis_angle, rotation_6d,
+    binary) and a frame (absolute, delta). e.g. quaternion, delta,
+    [quaternion, delta]. Defaults: continuous + absolute.
+
+    Errors on an unknown tag, more than one tag per axis, or a dim count that
+    doesn't match the representation. Warns when an untagged field looks like a
+    quaternion.
+    """
+    tags = [] if kind is None else ([kind] if isinstance(kind, str) else list(kind))
+    tags = [str(t).lower().strip() for t in tags]
+
+    reps = [t for t in tags if t in _REP_KINDS]
+    frames = [t for t in tags if t in _FRAME_KINDS]
+    unknown = [t for t in tags if t not in _REP_KINDS and t not in _FRAME_KINDS]
+    if unknown:
+        raise ContractValidationError(
+            f"Invalid kind tag(s) {unknown} in {context}. Representation must be one "
+            f'of {sorted(_REP_KINDS)}; frame one of {sorted(_FRAME_KINDS)}.'
+        )
+    if len(reps) > 1:
+        raise ContractValidationError(f'Multiple representation kinds {reps} in {context} (max 1).')
+    if len(frames) > 1:
+        raise ContractValidationError(f'Multiple frame kinds {frames} in {context} (max 1).')
+
+    kind = reps[0] if reps else 'continuous'
+    absolute = frames[0] != 'delta' if frames else True
+
+    n = len(names) if names else 0
+    expected = FIELD_KIND_DIMS.get(kind)
+    if expected is not None and n != expected:
+        raise ContractValidationError(
+            f"kind '{kind}' in {context} requires {expected} dim(s) but select "
+            f'has {n} ({names}).'
+        )
+
+    # Warn if an untagged field has an x/y/z/w run (likely a quaternion getting
+    # min_max'd). Catches it inside a larger select too, e.g. an IMU whose first
+    # 4 dims are orientation.{x,y,z,w}. Split that into its own quaternion spec.
+    if kind == 'continuous' and names:
+        leaves = [str(s).split('.')[-1].lower() for s in names]
+        has_quat_run = any(
+            set(leaves[i:i + 4]) == {'x', 'y', 'z', 'w'} for i in range(len(leaves) - 3)
+        )
+        looks_quat = has_quat_run or any('quat' in str(s).lower() for s in names)
+        if looks_quat:
+            warnings.warn(
+                f"{context}: select {names} contains an x/y/z/w run that looks like a "
+                f"quaternion but kind is 'continuous'. Split it into its own spec with "
+                f'`kind: quaternion` for correct rotation handling.',
+                stacklevel=2,
+            )
+    return kind, absolute
+
+
+def _kind_fields(data: dict[str, Any], context: str) -> dict[str, Any]:
+    """Resolve the ``kind`` YAML into spec fields ``{kind, absolute}``."""
+    kind, absolute = _validate_kind(data.get('kind'), data.get('select'), context)
+    return {'kind': kind, 'absolute': absolute}
 
 
 def _validate_converter_path(path: str | None, context: str) -> str | None:
@@ -521,6 +627,7 @@ def _parse_observation(
         qos=data.get('qos'),
         dtype=_validate_dtype(data.get('dtype'), ctx),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
+        **_kind_fields(data, ctx),
     )
 
 
@@ -543,6 +650,7 @@ def _parse_data_spec(data: dict[str, Any], idx: int, section: str) -> Observatio
         qos=data.get('qos'),
         dtype=_validate_dtype(data['dtype'], ctx, required=True),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
+        **_kind_fields(data, ctx),
     )
 
 
@@ -564,6 +672,7 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = 'actions') -> A
         safety_behavior=_parse_serve(data.get('serve'), ctx),
         decoder=_validate_converter_path(data.get('decoder'), f'{ctx}.decoder'),
         encoder=_validate_converter_path(data.get('encoder'), f'{ctx}.encoder'),
+        **_kind_fields(data, ctx),
     )
 
 

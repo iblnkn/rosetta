@@ -33,7 +33,7 @@ setup(
             'episode_keyboard_node = rosetta.ros2.nodes.episode_keyboard_node:main',
             'rosetta_hil_manager_node = rosetta.ros2.nodes.rosetta_hil_manager_node:main',
             'rosetta_client_node = rosetta.ros2.nodes.rosetta_client_node:main',
-            'port_bags = rosetta.lerobot.port_bags:main',
+            'rosetta_port = rosetta.ros2.port:main',
         ],
     },
     zip_safe=True,
