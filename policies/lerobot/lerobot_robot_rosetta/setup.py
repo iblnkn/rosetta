@@ -40,8 +40,21 @@ setup(
         'numpy',
         'lerobot',
         'rclpy',
-        'rosetta',  # Depends on rosetta.common
+        'rosetta',  # Depends on rosetta.core + rosetta.ros2
     ],
+    entry_points={
+        # Rosetta backend leaves: resolved by name by the backend-agnostic
+        # node / porter so rosetta core never imports lerobot.
+        'rosetta.policy_runners': [
+            'lerobot = lerobot_robot_rosetta.policy_runner:LeRobotPolicyRunner',
+        ],
+        'rosetta.dataset_writers': [
+            'lerobot = lerobot_robot_rosetta.dataset_writer:LeRobotDatasetWriter',
+        ],
+        'console_scripts': [
+            'rosetta_classifier_server = lerobot_robot_rosetta.classifier_server:main',
+        ],
+    },
     zip_safe=True,
     author='Isaac Blankenau',
     author_email='isaac.blankenau@gmail.com',

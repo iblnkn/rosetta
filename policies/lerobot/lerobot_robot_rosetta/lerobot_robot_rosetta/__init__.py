@@ -32,10 +32,14 @@ Usage:
 """
 
 from .config_rosetta import RosettaConfig, load_rosetta_config
+from .dataset_writer import LeRobotDatasetWriter
+from .policy_runner import LeRobotPolicyRunner
 from .rosetta import Rosetta
 
 __all__ = [
     "Rosetta",
     "RosettaConfig",
     "load_rosetta_config",
+    "LeRobotDatasetWriter",
+    "LeRobotPolicyRunner",
 ]

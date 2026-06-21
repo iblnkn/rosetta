@@ -83,13 +83,13 @@ from typing import Any
 
 from lerobot.robots.config import RobotConfig
 
-from rosetta.common.contract import (
+from rosetta.core.contract import (
     Contract,
     ObservationStreamSpec,
     ActionStreamSpec,
     load_contract,
 )
-from rosetta.common.contract_utils import (
+from rosetta.core.contract_utils import (
     iter_observation_specs,
     iter_action_specs,
     iter_reward_as_action_specs,
