@@ -44,14 +44,14 @@ from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents
 
 from .config_rosetta_teleop import RosettaTeleopConfig
-from rosetta.common.converters import decode_value, encode_value
-from rosetta.common.contract_utils import (
+from rosetta.core.converters import decode_value, encode_value
+from rosetta.core.contract_utils import (
     StreamBuffer,
     get_namespaced_names,
 )
-from rosetta.common.ros2_utils import dot_get, get_message_timestamp_ns, qos_profile_from_dict
-from rosetta.common import decoders as _decoders  # noqa: F401 - registrers decoders
-from rosetta.common import encoders as _encoders  # noqa: F401 - registrers encoders
+from rosetta.ros2.ros2_utils import dot_get, get_message_timestamp_ns, qos_profile_from_dict
+from rosetta.ros2 import decoders as _decoders  # noqa: F401 - registers decoders
+from rosetta.ros2 import encoders as _encoders  # noqa: F401 - registers encoders
 
 # Ensure side-effect imports are not removed by optimizers
 del _decoders, _encoders
@@ -236,7 +236,7 @@ class _RosettaTeleopLifecycleNode(Node):
     def _on_events(self, msg, spec) -> None:
         """Handle incoming events message."""
         with self._events_lock:
-            for event_name, selector in spec.mappings.items():
+            for event_name, selector in spec.select.items():
                 if event_name not in EVENT_NAME_TO_ENUM:
                     continue
                 try:

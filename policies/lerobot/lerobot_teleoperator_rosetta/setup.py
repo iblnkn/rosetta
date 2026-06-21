@@ -40,7 +40,7 @@ setup(
         'numpy',
         'lerobot',
         'rclpy',
-        'rosetta',  # Depends on rosetta.common
+        'rosetta',  # Depends on rosetta.core + rosetta.ros2
     ],
     zip_safe=True,
     author='Isaac Blankenau',
