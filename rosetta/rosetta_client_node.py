@@ -227,6 +227,25 @@ class RosettaClientNode(LifecycleNode):
                 read_only=True,
             ),
         )
+        self.declare_parameter(
+            "publish_debug_chunk",
+            False,
+            ParameterDescriptor(
+                description="Debug: publish each model-generated action chunk as a "
+                "multi-point trajectory_msgs/JointTrajectory (joint_names = action "
+                "features, one point per chunk step spaced by 1/fps). Inspection "
+                "only — the robot does not consume this topic.",
+            ),
+        )
+        self.declare_parameter(
+            "debug_chunk_topic",
+            "~/debug/generated_chunk",
+            ParameterDescriptor(
+                description="Topic for the debug generated-chunk JointTrajectory "
+                "(only used when publish_debug_chunk is true).",
+                read_only=True,
+            ),
+        )
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
         self._pretrained: str | None = None
@@ -249,6 +268,13 @@ class RosettaClientNode(LifecycleNode):
         # triggers a server relaunch instead of running with a stale
         # environment_dt.
         self._server_fps: int | None = None
+
+        # Debug: optional publisher that echoes each model-generated action
+        # chunk as a multi-point JointTrajectory (see publish_debug_chunk).
+        # Created lazily on the first goal when the param is enabled.
+        self._debug_chunk_pub = None
+        self._JointTrajectory = None
+        self._JointTrajectoryPoint = None
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -531,6 +557,55 @@ class RosettaClientNode(LifecycleNode):
             return f"Failed to restart policy server at {desired_fps} fps: {e}"
         return None
 
+    def _ensure_debug_chunk_publisher(self) -> None:
+        """Lazily create the debug JointTrajectory publisher (no-op if present).
+
+        Resolves the message classes at runtime (no import-time dependency on
+        trajectory_msgs) and publishes on the ``debug_chunk_topic`` param.
+        """
+        if self._debug_chunk_pub is not None:
+            return
+        from rosidl_runtime_py.utilities import get_message
+
+        self._JointTrajectory = get_message("trajectory_msgs/msg/JointTrajectory")
+        self._JointTrajectoryPoint = get_message(
+            "trajectory_msgs/msg/JointTrajectoryPoint"
+        )
+        topic = self.get_parameter("debug_chunk_topic").value
+        self._debug_chunk_pub = self.create_publisher(self._JointTrajectory, topic, 10)
+        self.get_logger().info(
+            f"Debug: publishing model-generated chunks as JointTrajectory on '{topic}'"
+        )
+
+    def _publish_debug_chunk(
+        self, joint_names: list[str], positions: list[list[float]]
+    ) -> None:
+        """Publish one model-generated action chunk as a multi-point trajectory.
+
+        ``joint_names`` is the action-feature order matching the chunk tensors;
+        each chunk step becomes a JointTrajectoryPoint at ``i / fps`` seconds,
+        with fps from the active contract. Best-effort, debug only.
+        """
+        pub = self._debug_chunk_pub
+        if pub is None or not positions:
+            return
+        fps = self._rosetta_config.fps if self._rosetta_config is not None else 30
+        dt = 1.0 / max(fps, 1)
+
+        msg = self._JointTrajectory()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.joint_names = list(joint_names)
+        points = []
+        for i, pos in enumerate(positions):
+            pt = self._JointTrajectoryPoint()
+            pt.positions = [float(x) for x in pos]
+            t = i * dt
+            pt.time_from_start.sec = int(t)
+            pt.time_from_start.nanosec = int(round((t - int(t)) * 1e9))
+            points.append(pt)
+        msg.points = points
+        pub.publish(msg)
+
     def _on_goal(self, _goal_request) -> GoalResponse:
         """Accept or reject a client request to begin an action."""
         self.get_logger().info("Received goal request")
@@ -595,6 +670,11 @@ class RosettaClientNode(LifecycleNode):
                 bundle.observation_processor_path
             )
             client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
+
+            # Debug: echo each model-generated chunk as a JointTrajectory.
+            if self.get_parameter("publish_debug_chunk").value:
+                self._ensure_debug_chunk_publisher()
+                client._debug_chunk_cb = self._publish_debug_chunk
 
             if not client.start():
                 result.success = False

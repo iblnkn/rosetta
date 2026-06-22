@@ -150,6 +150,20 @@ def _patched_receive_actions(self, verbose: bool = False):
             timed_actions = pickle.loads(actions_chunk.data)  # nosec
             deserialize_time = time.perf_counter() - deserialize_start
 
+            # Debug: echo the freshly generated chunk (pre-merge) if the node
+            # attached a publisher. joint_names follow the action-tensor order.
+            debug_cb = getattr(self, "_debug_chunk_cb", None)
+            if debug_cb is not None and timed_actions:
+                try:
+                    joint_names = list(self.robot.action_features)
+                    positions = [
+                        ta.get_action().detach().to("cpu").flatten().tolist()
+                        for ta in timed_actions
+                    ]
+                    debug_cb(joint_names, positions)
+                except Exception:
+                    self.logger.exception("Failed to publish debug action chunk")
+
             # Log device type of received actions
             if len(timed_actions) > 0:
                 received_device = timed_actions[0].get_action().device.type
