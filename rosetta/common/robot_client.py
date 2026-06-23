@@ -91,6 +91,20 @@ def _patched_aggregate_action_queues(
             if action.get_timestep() > latest_action
         }
 
+        # Debug: how many leading chunk points were already-passed and dropped.
+        # These are the prefix timesteps <= latest_action (executed during the
+        # inference/network delay) that RTC generated only to match the past.
+        dropped = len(incoming_actions) - len(incoming_by_timestep)
+        if incoming_actions:
+            first_ts = incoming_actions[0].get_timestep()
+            last_ts = incoming_actions[-1].get_timestep()
+            self.logger.info(
+                f"Chunk merge: dropped {dropped}/{len(incoming_actions)} "
+                f"already-passed points | incoming timesteps "
+                f"{first_ts}:{last_ts} | latest_action={latest_action} | "
+                f"kept {len(incoming_by_timestep)}"
+            )
+
         # Start with existing queue items
         merged: dict[int, TimedAction] = dict(current_action_queue)
 
