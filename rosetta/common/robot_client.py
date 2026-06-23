@@ -54,8 +54,14 @@ def _ts_pose(action: TimedAction) -> list[float]:
     ]
 
 
-def _dump_merge_event(latest_action, existing, incoming, merged):
-    """Append one merge event to the JSONL dump (best-effort, debug only)."""
+def _dump_merge_event(latest_action, existing, incoming, merged, incoming_full):
+    """Append one merge event to the JSONL dump (best-effort, debug only).
+
+    ``incoming`` is the post-drop chunk (timesteps > latest_action) that enters
+    the merge; ``incoming_full`` is the raw chunk including the already-passed
+    prefix (timesteps <= latest_action) the client drops -- recorded so the
+    viewer can anchor each chunk at t_observation and color the dropped prefix.
+    """
     global _merge_event_idx
     try:
         record = {
@@ -66,6 +72,11 @@ def _dump_merge_event(latest_action, existing, incoming, merged):
             "existing": {int(ts): _ts_pose(a) for ts, a in existing.items()},
             "incoming": {int(ts): _ts_pose(a) for ts, a in incoming.items()},
             "merged": {int(ts): _ts_pose(a) for ts, a in merged.items()},
+            # full incoming chunk (pre-drop) keyed by timestep; first point is
+            # t_observation (timestep i_0). Points <= latest_action are dropped.
+            "incoming_full": {
+                int(a.get_timestep()): _ts_pose(a) for a in incoming_full
+            },
         }
         with open(_MERGE_DUMP_PATH, "a") as f:
             f.write(json.dumps(record) + "\n")
@@ -162,7 +173,11 @@ def _patched_aggregate_action_queues(
         # inspection (only when ROSETTA_MERGE_DUMP is set).
         if _MERGE_DUMP_PATH is not None:
             _dump_merge_event(
-                latest_action, current_action_queue, incoming_by_timestep, merged
+                latest_action,
+                current_action_queue,
+                incoming_by_timestep,
+                merged,
+                incoming_actions,
             )
 
         # Rebuild queue in timestep order
