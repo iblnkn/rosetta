@@ -10,6 +10,8 @@ Monkey-patches ``RobotClient`` to:
 """
 
 import collections
+import json
+import os
 import pickle  # nosec
 import threading
 import time
@@ -35,6 +37,41 @@ from rosetta.common.obs_history import TimedObservationWithHistory
 # Rolling obs-history window length on the client. Must be >= any deployed
 # policy's n_obs_steps. The server trims to policy.config.n_obs_steps.
 _OBS_HISTORY_MAXLEN = 4
+
+# Optional merge-event dump. When the env var ROSETTA_MERGE_DUMP names a file,
+# every action-queue merge appends one JSON line capturing the existing-queue
+# tail, the incoming chunk, and the blended result keyed by timestep -- the raw
+# material for an offline "merge inspector". Off (zero overhead) when unset.
+_MERGE_DUMP_PATH = os.environ.get("ROSETTA_MERGE_DUMP") or None
+_merge_event_idx = 0
+
+
+def _ts_pose(action: TimedAction) -> list[float]:
+    """Flatten a TimedAction's pose tensor to a rounded python list."""
+    return [
+        round(float(x), 6)
+        for x in action.get_action().detach().to("cpu").flatten().tolist()
+    ]
+
+
+def _dump_merge_event(latest_action, existing, incoming, merged):
+    """Append one merge event to the JSONL dump (best-effort, debug only)."""
+    global _merge_event_idx
+    try:
+        record = {
+            "event": _merge_event_idx,
+            "wall_time": time.time(),
+            "latest_action": int(latest_action),
+            # timestep -> 6-dof pose, for each of the three queues
+            "existing": {int(ts): _ts_pose(a) for ts, a in existing.items()},
+            "incoming": {int(ts): _ts_pose(a) for ts, a in incoming.items()},
+            "merged": {int(ts): _ts_pose(a) for ts, a in merged.items()},
+        }
+        with open(_MERGE_DUMP_PATH, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        _merge_event_idx += 1
+    except Exception:  # pragma: no cover - diagnostics must never break control
+        pass
 
 # ---------------------------------------------------------------------------
 # 1. Patch RobotClient.__init__ — add _observation_pending event
@@ -120,6 +157,13 @@ def _patched_aggregate_action_queues(
                 )
             else:
                 merged[ts] = new_action
+
+        # Debug: dump existing/incoming/merged per-timestep for offline merge
+        # inspection (only when ROSETTA_MERGE_DUMP is set).
+        if _MERGE_DUMP_PATH is not None:
+            _dump_merge_event(
+                latest_action, current_action_queue, incoming_by_timestep, merged
+            )
 
         # Rebuild queue in timestep order
         future_action_queue = Queue()
