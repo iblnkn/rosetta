@@ -57,7 +57,7 @@ import getpass
 import logging
 import shutil
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +101,9 @@ BAG_PROMPT_KEY = "lerobot.operator_prompt"
 # Shared NAS location used when neither --root nor --repo-id is given. The dataset
 # is saved under DATASET_NAS_ROOT/<date>/<time>_dataset_<robot_type>_<task>_<user>.
 DATASET_NAS_ROOT = Path("/mnt/nas/dataset/robot_learning/lerobot")
+# Timezone used for the date/time stamp in dataset folder names (UTC+8), so the
+# naming is stable regardless of the host's local timezone.
+DATASET_TZ = timezone(timedelta(hours=8))
 # Import decoders/encoders/processors to register them
 from .common import decoders as _decoders  # noqa: F401
 from .common import encoders as _encoders  # noqa: F401
@@ -762,7 +765,7 @@ def port_bags(
                 "its own timestamp and will write to a different directory. Pass "
                 "--root/--repo-id to keep shards together."
             )
-        now = datetime.now()
+        now = datetime.now(DATASET_TZ)
         dataset_name = (
             f"{now:%H.%M.%S}_dataset_"
             f"{_sanitize_name_part(contract.robot_type)}_"
@@ -795,6 +798,40 @@ def port_bags(
         logging.info("Saved a copy of the contract to %s", contract_copy)
     except Exception as e:  # noqa: BLE001
         logging.warning("Failed to copy contract into dataset directory: %s", e)
+
+    # Record the arguments used to generate this dataset for reproducibility.
+    try:
+        dataset_dir = Path(lerobot_dataset.root)
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        args_record = {
+            "raw_dir": str(raw_dir),
+            "repo_id": repo_id,
+            "contract": str(contract_path),
+            "root": str(root) if root is not None else None,
+            "push_to_hub": push_to_hub,
+            "num_shards": num_shards,
+            "shard_index": shard_index,
+            "vcodec": vcodec,
+            "observation_processor": (
+                str(observation_processor_path)
+                if observation_processor_path is not None
+                else None
+            ),
+            "action_processor": (
+                str(action_processor_path)
+                if action_processor_path is not None
+                else None
+            ),
+            "task": task,
+            "user_name": user_name,
+            "generated_at": datetime.now(DATASET_TZ).isoformat(),
+        }
+        args_path = dataset_dir / "args.yaml"
+        with args_path.open("w") as f:
+            yaml.safe_dump(args_record, f, sort_keys=False)
+        logging.info("Saved generation arguments to %s", args_path)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Failed to write args.yaml into dataset directory: %s", e)
 
     start_time = time.time()
     num_episodes = len(bag_dirs)
