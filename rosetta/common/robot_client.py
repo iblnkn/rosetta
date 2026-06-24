@@ -100,6 +100,9 @@ def _patched_init(self, config):
     self._obs_history: collections.deque[RawObservation] = collections.deque(
         maxlen=_OBS_HISTORY_MAXLEN
     )
+    # Extra leading points to drop from each incoming chunk before merge (on top
+    # of the already-passed prefix). Set per-goal by the node; 0 = off.
+    self._drop_chunk_prefix = 0
 
 
 RobotClient.__init__ = _patched_init
@@ -132,26 +135,37 @@ def _patched_aggregate_action_queues(
             if action.get_timestep() > latest_action
         }
 
-        # Filter incoming actions to only future timesteps
+        # Filter incoming actions to future timesteps. Beyond the already-passed
+        # prefix (timestep <= latest_action), drop an extra `k` leading points so
+        # the queue keeps only the more-settled tail of each fresh chunk.
+        k = max(0, getattr(self, "_drop_chunk_prefix", 0))
+        cutoff = latest_action + k
         incoming_by_timestep = {
             action.get_timestep(): action
             for action in incoming_actions
-            if action.get_timestep() > latest_action
+            if action.get_timestep() > cutoff
         }
 
-        # Debug: how many leading chunk points were already-passed and dropped.
-        # These are the prefix timesteps <= latest_action (executed during the
-        # inference/network delay) that RTC generated only to match the past.
+        # Debug: how many leading chunk points were dropped before merge. With
+        # k == 0 these are only the already-passed prefix (timestep <=
+        # latest_action, executed during the inference/network delay); with
+        # k > 0 the first `k` future points are also dropped intentionally.
         dropped = len(incoming_actions) - len(incoming_by_timestep)
         if incoming_actions:
             first_ts = incoming_actions[0].get_timestep()
             last_ts = incoming_actions[-1].get_timestep()
             self.logger.info(
                 f"Chunk merge: dropped {dropped}/{len(incoming_actions)} "
-                f"already-passed points | incoming timesteps "
+                f"leading points (prefix_k={k}) | incoming timesteps "
                 f"{first_ts}:{last_ts} | latest_action={latest_action} | "
-                f"kept {len(incoming_by_timestep)}"
+                f"cutoff={cutoff} | kept {len(incoming_by_timestep)}"
             )
+            if not incoming_by_timestep:
+                self.logger.warning(
+                    f"drop_chunk_prefix={k} dropped the ENTIRE incoming chunk "
+                    f"(timesteps {first_ts}:{last_ts} <= cutoff {cutoff}); "
+                    "the action queue may starve. Lower drop_chunk_prefix."
+                )
 
         # Start with existing queue items
         merged: dict[int, TimedAction] = dict(current_action_queue)

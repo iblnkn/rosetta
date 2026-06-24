@@ -174,6 +174,15 @@ class RosettaClientNode(LifecycleNode):
             ),
         )
         self.declare_parameter(
+            "drop_chunk_prefix",
+            0,
+            ParameterDescriptor(
+                description="Extra leading points to drop from each incoming "
+                "chunk before merge (on top of the already-passed prefix). "
+                "0 = off. Registry entries override this."
+            ),
+        )
+        self.declare_parameter(
             "feedback_rate_hz",
             2.0,
             ParameterDescriptor(description="Rate for publishing action feedback"),
@@ -675,6 +684,14 @@ class RosettaClientNode(LifecycleNode):
             if self.get_parameter("publish_debug_chunk").value:
                 self._ensure_debug_chunk_publisher()
                 client._debug_chunk_cb = self._publish_debug_chunk
+
+            # Extra leading points to drop from each incoming chunk before merge
+            # (registry entry overrides the node-level default).
+            client._drop_chunk_prefix = int(
+                bundle.drop_chunk_prefix
+                if bundle.drop_chunk_prefix is not None
+                else self.get_parameter("drop_chunk_prefix").value
+            )
 
             if not client.start():
                 result.success = False

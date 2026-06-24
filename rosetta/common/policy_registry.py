@@ -4,8 +4,9 @@ Lets a ``RunPolicy`` caller address a model by symbolic name (e.g. ``pick``)
 instead of wiring raw pretrained paths in every goal. The YAML file maps
 names to ``PolicyBundle`` entries carrying everything that varies per policy:
 checkpoint path, policy type, and the RTC-sensitive runtime knobs
-(``actions_per_chunk``, ``chunk_size_threshold``, ``aggregate_fn_name``).
-Infrastructure knobs like ``fps`` or ``policy_device`` stay on the node.
+(``actions_per_chunk``, ``chunk_size_threshold``, ``aggregate_fn_name``,
+``drop_chunk_prefix``). Infrastructure knobs like ``fps`` or ``policy_device``
+stay on the node.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class PolicyBundle:
     actions_per_chunk: int | None = None
     chunk_size_threshold: float | None = None
     aggregate_fn_name: str | None = None
+    drop_chunk_prefix: int | None = None
     observation_processor_path: str | None = None
     contract_path: str | None = None
 
@@ -69,6 +71,7 @@ _OPTIONAL_FIELDS: dict[str, type] = {
     "actions_per_chunk": int,
     "chunk_size_threshold": float,
     "aggregate_fn_name": str,
+    "drop_chunk_prefix": int,
     "observation_processor_path": str,
     "contract_path": str,
 }
@@ -122,6 +125,8 @@ def load_registry(path: str) -> dict[str, PolicyBundle]:
             actions_per_chunk: 32                 # optional
             chunk_size_threshold: 0.7             # optional
             aggregate_fn_name: latest_only        # optional
+            drop_chunk_prefix: 3                  # optional, extra leading
+                                                  # chunk points to drop at merge
             observation_processor_path: /path/    # optional, dir with
                                                   # robot_observation_processor.json
             contract_path: /path/contract.yaml    # optional, swaps the
