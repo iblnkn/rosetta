@@ -71,10 +71,12 @@ class RTCPolicyServer(PolicyServer):
 
     # Registered policy types whose predict_action_chunk consumes server-built
     # (B, n_obs_steps, ...) observations stacked from the client's raw obs
-    # history. Everything else — ACT, plain diffusion, and the VLAs
-    # (pi0/pi05/pi0fast/smolvla, which also declare rtc_config but self-prepare
-    # from the latest per-step observation) — takes the plain upstream path.
-    STACKED_HISTORY_POLICY_TYPES = frozenset({"sns_diffusion"})
+    # history (per-camera images pre-fused under OBS_IMAGES). Everything else —
+    # stock ACT, plain diffusion, and the VLAs (pi0/pi05/pi0fast/smolvla, which
+    # also declare rtc_config but self-prepare from the latest per-step
+    # observation) — takes the plain upstream path. Keep in sync with
+    # sns_robot_learning/scripts/eval_offline.py::STACKED_HISTORY_POLICY_TYPES.
+    STACKED_HISTORY_POLICY_TYPES = frozenset({"sns_diffusion", "sns_act"})
 
     def __init__(self, config: PolicyServerConfig):
         super().__init__(config)
