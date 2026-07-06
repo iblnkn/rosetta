@@ -75,14 +75,19 @@ from .contract_utils import (
     zeros_for_spec,
 )
 
-# ROS2 utilities
-from .ros2_utils import (
-    dot_get,
-    dot_set,
-    get_message_timestamp_ns,
-    qos_profile_from_dict,
-    stamp_from_header_ns,
-)
+# ROS2 utilities. Guarded so the contract loading / validation modules stay
+# importable without rclpy (training conda env, CI) — contract_validation and
+# the sns_robot_learning contract tests rely on this.
+try:
+    from .ros2_utils import (
+        dot_get,
+        dot_set,
+        get_message_timestamp_ns,
+        qos_profile_from_dict,
+        stamp_from_header_ns,
+    )
+except ImportError:  # pragma: no cover - no rclpy in ROS-free environments
+    pass
 
 __all__ = [
     # Contract types and loading
