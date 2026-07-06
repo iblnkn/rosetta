@@ -432,13 +432,16 @@ class RTCPolicyServer(PolicyServer):
 
 
 def _patch_supported_policies() -> None:
-    """Add 'sns_diffusion' to SUPPORTED_POLICIES if not already present.
+    """Allowlist this server's custom plugin policy types in SUPPORTED_POLICIES.
 
-    We mutate the list in-place so the check in
-    ``PolicyServer.SendPolicyInstructions`` passes.
+    Upstream ``PolicyServer.SendPolicyInstructions`` rejects any policy type not
+    in ``SUPPORTED_POLICIES``. Our custom plugin policies
+    (``STACKED_HISTORY_POLICY_TYPES``, e.g. sns_diffusion / sns_act) aren't in
+    the upstream list, so add them in-place. Idempotent.
     """
-    if "sns_diffusion" not in SUPPORTED_POLICIES:
-        SUPPORTED_POLICIES.append("sns_diffusion")
+    for policy_type in RTCPolicyServer.STACKED_HISTORY_POLICY_TYPES:
+        if policy_type not in SUPPORTED_POLICIES:
+            SUPPORTED_POLICIES.append(policy_type)
 
 
 @draccus.wrap()
