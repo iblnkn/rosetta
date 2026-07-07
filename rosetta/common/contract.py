@@ -757,6 +757,14 @@ def load_contract(path: Path | str) -> Contract:
     except yaml.YAMLError as e:
         raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
 
+    markers = _find_per_role_markers(data)
+    if markers:
+        raise ContractValidationError(
+            f"{path}: found '{PER_ROLE_SENTINEL}' marker(s) at "
+            f"{', '.join(markers)}. This file is a unified contract; load it "
+            f"with load_unified_contract(path, role) so these fields resolve "
+            f"to the role's value."
+        )
     return _contract_from_dict(data)
 
 
@@ -768,106 +776,114 @@ ROLE_RECORD = "record"
 ROLE_INFERENCE = "inference"
 VALID_ROLES = frozenset({ROLE_RECORD, ROLE_INFERENCE})
 
+PER_ROLE_SENTINEL = "per-role"
+"""Marker key for values that differ across roles.
 
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge ``override`` onto ``base`` (override wins; lists replace)."""
-    out = copy.deepcopy(base)
-    for key, val in override.items():
-        if isinstance(val, dict) and isinstance(out.get(key), dict):
-            out[key] = _deep_merge(out[key], val)
-        else:
-            out[key] = copy.deepcopy(val)
-    return out
+The single way to express role-specific settings in a unified contract is the
+inline value map, written exactly where the field lives::
+
+    stamp: { per-role: { record: header, inference: receive } }
+
+``load_unified_contract`` substitutes the active role's value in place. The
+mapped value may be any YAML node — scalar, dict, or a whole stream list —
+so both value forks and structural forks are expressed the same way. A map
+lacking the requested role, containing an unknown role name, or carrying
+sibling keys fails at load time.
+"""
 
 
-def _merge_role_streams(
-    base_list: Any, delta: Any, by_key: Any, role: str, section: str
-) -> list:
-    """Apply a role delta to a list of observation/action stream dicts.
+def _child_label(prefix: str, item: Any, index: int) -> str:
+    """Path label for a list element (``[key=...]`` when addressable)."""
+    if isinstance(item, dict) and item.get("key"):
+        return f"{prefix}[key={item['key']}]"
+    return f"{prefix}[{index}]"
 
-    ``delta`` (the ``observations``/``actions`` key under a role) may be:
-      * a mapping  -> a *uniform* deep-merge applied to every stream entry
-        (e.g. ``{align: {stamp: receive}}`` or ``{safety_behavior: hold}``);
-      * a list     -> a full *replacement* of the base streams (e.g. the
-        ``emily_left_only`` inference DMP action).
-    ``by_key`` (``observations_by_key``/``actions_by_key``) is a mapping of
-    stream ``key`` -> override, deep-merged into every base entry with that key.
+
+def _find_per_role_markers(node: Any, prefix: str = "") -> list[str]:
+    """Return dotted paths of every per-role marker (either form) in ``node``.
+
+    Stream-list entries are addressed by their ``key`` when present
+    (``observations[key=observation.state].align.stamp``) so the error
+    message maps directly onto the override the user should write.
     """
-    if isinstance(delta, list):
-        out = copy.deepcopy(delta)
-    else:
-        out = [copy.deepcopy(s) for s in (base_list or [])]
-        if isinstance(delta, dict):
-            out = [_deep_merge(s, delta) for s in out]
-        elif delta is not None:
-            raise ContractValidationError(
-                f"roles.{role}.{section} must be a mapping (uniform delta) or a "
-                f"list (full replacement), got {type(delta).__name__}"
-            )
-
-    if by_key:
-        if not isinstance(by_key, dict):
-            raise ContractValidationError(
-                f"roles.{role}.{section}_by_key must be a mapping of key -> override"
-            )
-        present = {s.get("key") for s in out}
-        unknown = set(by_key) - present
-        if unknown:
-            raise ContractValidationError(
-                f"roles.{role}.{section}_by_key references unknown key(s) "
-                f"{sorted(unknown)}; base {section} keys are {sorted(present)}"
-            )
-        out = [
-            _deep_merge(s, by_key[s["key"]]) if s.get("key") in by_key else s
-            for s in out
-        ]
-
-    return out
+    found: list[str] = []
+    if isinstance(node, dict):
+        if PER_ROLE_SENTINEL in node:
+            found.append(prefix or "<root>")
+            return found
+        for k, v in node.items():
+            found.extend(_find_per_role_markers(v, f"{prefix}.{k}" if prefix else str(k)))
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            found.extend(_find_per_role_markers(item, _child_label(prefix, item, i)))
+    elif node == PER_ROLE_SENTINEL:
+        found.append(prefix or "<root>")
+    return found
 
 
-def _apply_role(data: dict[str, Any], role: str) -> dict[str, Any]:
-    """Return the role-specific view of a unified contract mapping.
+def _resolve_per_role_maps(node: Any, role: str, prefix: str = "") -> Any:
+    """Substitute every inline ``{per-role: {...}}`` map with ``role``'s value.
 
-    Strips the ``roles`` and ``processor`` keys, then deep-merges the
-    ``roles[role]`` delta onto the shared base. Stream sections support
-    uniform/replacement/per-key forms via :func:`_merge_role_streams`.
+    A marker node must be exactly ``{"per-role": {<role>: <value>, ...}}``:
+    sibling keys, a non-mapping value, unknown role names, or a missing entry
+    for the requested role all raise ``ContractValidationError``. The selected
+    value is resolved recursively, so nested maps also work.
     """
-    merged = {k: v for k, v in data.items() if k not in ("roles", "processor")}
-    merged = copy.deepcopy(merged)
-
-    delta = (data.get("roles") or {}).get(role)
-    if not delta:
-        return merged
-    if not isinstance(delta, dict):
-        raise ContractValidationError(f"roles.{role} must be a mapping")
-
-    for key, val in delta.items():
-        if key in ("observations", "actions"):
-            merged[key] = _merge_role_streams(
-                merged.get(key), val, delta.get(f"{key}_by_key"), role, key
-            )
-        elif key in ("observations_by_key", "actions_by_key"):
-            # Handled together with its base section above; apply standalone too.
-            base_key = key[: -len("_by_key")]
-            if base_key not in delta:
-                merged[base_key] = _merge_role_streams(
-                    merged.get(base_key), None, val, role, base_key
+    where = prefix or "<root>"
+    if isinstance(node, dict):
+        if PER_ROLE_SENTINEL in node:
+            if len(node) != 1:
+                raise ContractValidationError(
+                    f"{where}: '{PER_ROLE_SENTINEL}' must be the only key of its "
+                    f"mapping node, found siblings {sorted(set(node) - {PER_ROLE_SENTINEL})}"
                 )
-        elif isinstance(val, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], val)
-        else:
-            merged[key] = copy.deepcopy(val)
-
-    return merged
+            mapping = node[PER_ROLE_SENTINEL]
+            if not isinstance(mapping, dict):
+                raise ContractValidationError(
+                    f"{where}: '{PER_ROLE_SENTINEL}' must map role names to "
+                    f"values, got {type(mapping).__name__}"
+                )
+            unknown = set(mapping) - VALID_ROLES
+            if unknown:
+                raise ContractValidationError(
+                    f"{where}: unknown role name(s) {sorted(unknown)} in "
+                    f"'{PER_ROLE_SENTINEL}' map (valid: {sorted(VALID_ROLES)})"
+                )
+            if role not in mapping:
+                raise ContractValidationError(
+                    f"{where}: '{PER_ROLE_SENTINEL}' map has no value for role "
+                    f"'{role}' (has {sorted(mapping)})"
+                )
+            return _resolve_per_role_maps(copy.deepcopy(mapping[role]), role, prefix)
+        return {
+            k: _resolve_per_role_maps(v, role, f"{prefix}.{k}" if prefix else str(k))
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [
+            _resolve_per_role_maps(item, role, _child_label(prefix, item, i))
+            for i, item in enumerate(node)
+        ]
+    if node == PER_ROLE_SENTINEL:
+        raise ContractValidationError(
+            f"{where}: bare '{PER_ROLE_SENTINEL}' is not supported; declare the "
+            f"values inline, e.g. "
+            f"{{{PER_ROLE_SENTINEL}: {{record: <value>, inference: <value>}}}}"
+        )
+    return node
 
 
 def load_unified_contract(path: Path | str, role: str) -> Contract:
     """Load a unified contract and return its ``role`` view as a ``Contract``.
 
-    A unified contract holds a shared base plus a ``roles: {record, inference}``
-    block of deltas (and an optional inlined ``processor``). The selected role's
-    deltas are merged onto the base, then validated through the normal
-    :class:`Contract` path, so all existing consumers are unchanged.
+    A unified contract is a single shared description (plus an optional inlined
+    ``processor``) in which every role-specific setting is an inline
+    ``{per-role: {...}}`` value map next to the field it forks. The loader
+    substitutes ``role``'s value for each map, then validates through the
+    normal :class:`Contract` path, so all downstream consumers are unchanged.
+
+    The legacy ``roles: {record, inference}`` delta block is no longer
+    supported: a non-empty role delta raises, pointing at the inline form.
     """
     if role not in VALID_ROLES:
         raise ContractValidationError(
@@ -888,11 +904,29 @@ def load_unified_contract(path: Path | str, role: str) -> Contract:
             f"Contract must be a YAML mapping, got {type(data).__name__}"
         )
 
-    return _contract_from_dict(_apply_role(data, role))
+    roles_block = data.get("roles")
+    if isinstance(roles_block, dict):
+        nonempty = sorted(r for r, delta in roles_block.items() if delta)
+        if nonempty:
+            raise ContractValidationError(
+                f"{path}: role delta blocks are no longer supported (found "
+                f"non-empty roles: {nonempty}). Express role-specific settings "
+                f"inline where the field lives, e.g. "
+                f"stamp: {{{PER_ROLE_SENTINEL}: {{record: header, inference: receive}}}}."
+            )
+
+    base = {k: v for k, v in data.items() if k not in ("roles", "processor")}
+    resolved = _resolve_per_role_maps(copy.deepcopy(base), role)
+    return _contract_from_dict(resolved)
 
 
 def is_unified_contract(path: Path | str) -> bool:
-    """True if ``path`` is a unified contract (has a top-level ``roles`` block)."""
+    """True if ``path`` is a unified contract.
+
+    Detected by the presence of any inline ``{per-role: {...}}`` marker (the
+    canonical signal), or a top-level ``roles``/``processor`` block (legacy /
+    inlined-processor files without per-role forks).
+    """
     path = Path(path)
     if not path.exists():
         return False
@@ -900,7 +934,11 @@ def is_unified_contract(path: Path | str) -> bool:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError:
         return False
-    return isinstance(data, dict) and isinstance(data.get("roles"), dict)
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("roles"), dict) or isinstance(data.get("processor"), dict):
+        return True
+    return bool(_find_per_role_markers(data))
 
 
 def load_processor_spec(
