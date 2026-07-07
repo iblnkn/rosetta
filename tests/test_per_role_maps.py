@@ -17,6 +17,7 @@ from rosetta.common.contract import (
     PER_ROLE_SENTINEL,
     is_unified_contract,
     load_contract,
+    load_processor_spec,
     load_unified_contract,
 )
 
@@ -175,6 +176,32 @@ def test_nonempty_roles_delta_raises(tmp_path):
 def test_empty_roles_block_tolerated(tmp_path):
     path = _write(tmp_path, MAP_CONTRACT + "roles: { record: {}, inference: {} }\n")
     assert load_unified_contract(path, "record").actions[0].safety_behavior == "none"
+
+
+def test_processor_block_rejects_per_role_marker(tmp_path):
+    """The processor block has no role view; markers inside it must not
+    leak through load_processor_spec unresolved."""
+    path = _write(
+        tmp_path,
+        MAP_CONTRACT
+        + textwrap.dedent(
+            """\
+            processor:
+              steps:
+                - registry_name: numpy_image_crop_resize
+                  config:
+                    resize_size: { per-role: { record: [224, 224], inference: [256, 256] } }
+            """
+        ),
+    )
+    with pytest.raises(ContractValidationError) as exc:
+        load_processor_spec(path)
+    msg = str(exc.value)
+    assert "role-independent" in msg
+    assert "processor.steps[0].config.resize_size" in msg
+    # A marker-free processor block still loads fine.
+    clean = _write(tmp_path, MAP_CONTRACT + "processor: { steps: [] }\n")
+    assert load_processor_spec(clean) == {"steps": []}
 
 
 def test_plain_loader_redirects_on_map(tmp_path):

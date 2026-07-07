@@ -965,6 +965,16 @@ def load_processor_spec(
     if not isinstance(proc, dict):
         raise ContractValidationError("'processor' must be a mapping")
 
+    # The processor block is consumed as-is (no role view), so per-role
+    # markers inside it would leak through unresolved — reject them.
+    markers = _find_per_role_markers(proc, "processor")
+    if markers:
+        raise ContractValidationError(
+            f"{path}: '{PER_ROLE_SENTINEL}' marker(s) at {', '.join(markers)}. "
+            f"The 'processor' block is role-independent and does not support "
+            f"per-role maps."
+        )
+
     # Single pipeline form.
     if "steps" in proc:
         return proc
