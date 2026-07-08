@@ -749,7 +749,7 @@ def load_contract(path: Path | str) -> Contract:
         ContractValidationError: If the contract is invalid.
     """
     path = Path(path)
-    if not path.exists():
+    if not path.is_file():
         raise FileNotFoundError(f"Contract file not found: {path}")
 
     try:
@@ -891,7 +891,7 @@ def load_unified_contract(path: Path | str, role: str) -> Contract:
         )
 
     path = Path(path)
-    if not path.exists():
+    if not path.is_file():
         raise FileNotFoundError(f"Contract file not found: {path}")
 
     try:
@@ -928,7 +928,7 @@ def is_unified_contract(path: Path | str) -> bool:
     inlined-processor files without per-role forks).
     """
     path = Path(path)
-    if not path.exists():
+    if not path.is_file():
         return False
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -951,7 +951,7 @@ def load_processor_spec(
     Returns ``None`` when the contract has no inline processor.
     """
     path = Path(path)
-    if not path.exists():
+    if not path.is_file():
         raise FileNotFoundError(f"Contract file not found: {path}")
 
     try:
