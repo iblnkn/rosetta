@@ -171,54 +171,64 @@ def cmd_checkpoint(args) -> int:
     return _finish([r], args.warnings_as_errors)
 
 
+def _check_deploy_entry(name: str, entry: dict, r: V.CheckResult) -> None:
+    """Run every check for one registry entry, accumulating into ``r``."""
+    contract_path = entry.get("contract_path")
+    ckpt_dir = entry.get("pretrained_name_or_path")
+    actions_per_chunk = entry.get("actions_per_chunk")
+
+    if not _safe_exists(contract_path):
+        r.warn(f"contract_path missing/unreachable: {contract_path}")
+        return
+    contract = _load_for_role(contract_path, ROLE_RECORD)
+
+    cfg = None
+    cfg_path = Path(ckpt_dir) / "config.json" if ckpt_dir else None
+    if _safe_exists(cfg_path):
+        cfg = json.loads(cfg_path.read_text())
+        r.merge(V.check_contract_vs_checkpoint(contract, cfg, context=f"{name}: contract vs checkpoint"))
+        r.merge(V.check_chunk_consistency(cfg.get("n_action_steps"), actions_per_chunk,
+                                          context=f"{name}: chunk"))
+    else:
+        r.warn(f"checkpoint config.json unreachable: {cfg_path}")
+
+    # processor: the unified contract's inline block (the only deployable
+    # form; legacy single-role contracts are reference-only). Mirror the
+    # client node's hard gate: anything it would reject is an error here.
+    spec = None
+    if is_unified_contract(contract_path):
+        try:
+            spec = load_processor_spec(contract_path)
+        except Exception as e:  # noqa: BLE001
+            r.error(f"{name}: invalid processor block: {e}")
+        else:
+            if spec is None:
+                r.error(f"{name}: unified contract has no inline "
+                        "`processor:` block — the client node rejects "
+                        "every goal against this entry")
+    else:
+        r.error(f"{name}: legacy single-role contract — reference-only, "
+                "not deployable; migrate to a unified contract")
+    if spec:
+        r.merge(V.check_processor_vs_contract(
+            spec, contract,
+            policy_crop_shape=(cfg or {}).get("crop_shape"),
+            policy_resize_shape=(cfg or {}).get("resize_shape"),
+            context=f"{name}: processor"))
+
+
 def cmd_deploy(args) -> int:
     reg = yaml.safe_load(Path(args.registry).read_text()) or {}
     policies = reg.get("policies", {}) or {}
     results = []
     for name, entry in policies.items():
         r = V.CheckResult(context=f"registry entry '{name}'")
-        contract_path = entry.get("contract_path")
-        ckpt_dir = entry.get("pretrained_name_or_path")
-        actions_per_chunk = entry.get("actions_per_chunk")
-
-        if not _safe_exists(contract_path):
-            r.warn(f"contract_path missing/unreachable: {contract_path}")
-            results.append(r); _print_result(r); continue
-        contract = _load_for_role(contract_path, ROLE_RECORD)
-
-        cfg = None
-        cfg_path = Path(ckpt_dir) / "config.json" if ckpt_dir else None
-        if _safe_exists(cfg_path):
-            cfg = json.loads(cfg_path.read_text())
-            r.merge(V.check_contract_vs_checkpoint(contract, cfg, context=f"{name}: contract vs checkpoint"))
-            r.merge(V.check_chunk_consistency(cfg.get("n_action_steps"), actions_per_chunk,
-                                              context=f"{name}: chunk"))
-        else:
-            r.warn(f"checkpoint config.json unreachable: {cfg_path}")
-
-        # processor: the unified contract's inline block (the only deployable
-        # form; legacy single-role contracts are reference-only). Mirror the
-        # client node's hard gate: anything it would reject is an error here.
-        spec = None
-        if is_unified_contract(contract_path):
-            try:
-                spec = load_processor_spec(contract_path)
-            except Exception as e:  # noqa: BLE001
-                r.error(f"{name}: invalid processor block: {e}")
-            else:
-                if spec is None:
-                    r.error(f"{name}: unified contract has no inline "
-                            "`processor:` block — the client node rejects "
-                            "every goal against this entry")
-        else:
-            r.error(f"{name}: legacy single-role contract — reference-only, "
-                    "not deployable; migrate to a unified contract")
-        if spec:
-            r.merge(V.check_processor_vs_contract(
-                spec, contract,
-                policy_crop_shape=(cfg or {}).get("crop_shape"),
-                policy_resize_shape=(cfg or {}).get("resize_shape"),
-                context=f"{name}: processor"))
+        try:
+            _check_deploy_entry(name, entry or {}, r)
+        except Exception as e:  # noqa: BLE001 - one broken entry (bad
+            # contract, malformed config.json, ...) must not stop the rest
+            # of the registry from being checked; partial results are kept.
+            r.error(str(e))
         results.append(r)
         _print_result(r)
     return _finish(results, args.warnings_as_errors)
