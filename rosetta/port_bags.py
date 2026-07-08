@@ -76,6 +76,7 @@ from .common.contract import (ROLE_RECORD, ActionStreamSpec,
 from .common.contract_utils import (StreamBuffer, build_features,
                                     get_namespaced_names, iter_specs,
                                     zeros_for_spec)
+from .common.contract_validation import check_processor_vs_contract
 from .common.converters import decode_value, get_decoder_dtype
 from .common.decoders import _nearest_resize
 from .common.ros2_utils import get_message_timestamp_ns
@@ -703,6 +704,13 @@ def port_bags(
                     "Contract has an inline processor but the LeRobot processor "
                     "module is unavailable. Install lerobot with processor support."
                 )
+            # Unconditionally strict (unlike the warn-by-default deploy gate):
+            # processor output is baked into every frame here, and a
+            # processor/contract shape drift would fail every episode at
+            # add_frame — after the dataset dir was already created.
+            check_processor_vs_contract(inline_spec, contract).raise_or_warn(
+                strict=True
+            )
             logging.info("Building observation processor from inline contract spec.")
             obs_processor = _processors.build_observation_processor(
                 inline_spec,
