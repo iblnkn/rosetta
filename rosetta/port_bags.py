@@ -167,6 +167,21 @@ def _sanitize_name_part(value: str) -> str:
     return str(value).strip().replace("/", "-").replace(" ", "-").replace("_", "-")
 
 
+def _default_user_name() -> str | None:
+    """``getpass.getuser()`` that returns ``None`` instead of raising.
+
+    ``getuser()`` raises when the uid has no passwd entry and none of the
+    USER/LOGNAME-style env vars are set (slim containers, scrubbed SLURM
+    environments). Resolved lazily — never as an argparse ``default=``,
+    which would crash every invocation at parser build time — and the
+    naming convention falls back to "unknown" downstream.
+    """
+    try:
+        return getpass.getuser()
+    except Exception:
+        return None
+
+
 def _get_topic_types(reader: rosbag2_py.SequentialReader) -> dict[str, str]:
     """Get topic -> type mapping from bag."""
     return {t.name: t.type for t in reader.get_all_topics_and_types()}
@@ -981,16 +996,18 @@ def main():
     parser.add_argument(
         "--user-name",
         type=str,
-        default=getpass.getuser(),
+        default=None,
         help=(
             "User name used in the unified dataset naming convention "
-            "(default: current system user)."
+            "(default: current system user, or 'unknown' when it cannot "
+            "be resolved)."
         ),
     )
 
     args = parser.parse_args()
 
     task = _read_task_name(args.task_config) if args.task_config else None
+    user_name = args.user_name or _default_user_name()
 
     try:
         port_bags(
@@ -1005,7 +1022,7 @@ def main():
             observation_processor_path=args.observation_processor,
             action_processor_path=args.action_processor,
             task=task,
-            user_name=args.user_name,
+            user_name=user_name,
         )
     except KeyboardInterrupt:
         logging.info("\nInterrupted by user")
