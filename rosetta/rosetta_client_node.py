@@ -1021,14 +1021,20 @@ class RosettaClientNode(LifecycleNode):
         ``_TopicBridge`` against ``target_contract_path``.
 
         Returns ``None`` on success or no-op, or an error string on failure.
-        On failure the node is left without a bridge — recover via lifecycle
-        cleanup → configure → activate (or restart).
+        On failure the node is left without a bridge and ``_contract_path``
+        is cleared, so the next goal (any target) rebuilds the bridge
+        instead of no-oping on a stale path.
 
         Note: subscribers will see the lifecycle action publishers disappear
         and reappear; the new bridge needs a brief warmup before
         ``StreamBuffer`` returns real (non-zero) observations.
         """
-        if target_contract_path == self._contract_path:
+        # The no-op is only valid while a live bridge backs the current path;
+        # after a failed swap self._bridge is None and a rebuild is required.
+        if (
+            target_contract_path == self._contract_path
+            and self._bridge is not None
+        ):
             return None
 
         self.get_logger().info(
@@ -1062,10 +1068,12 @@ class RosettaClientNode(LifecycleNode):
             if new_bridge.is_active:
                 new_bridge.activate_publishers()
         except Exception as e:
+            # No bridge is backing any contract now — clear the path so the
+            # same-path no-op above cannot skip the rebuild on the next goal.
+            self._contract_path = None
             return (
                 f"Failed to load contract '{target_contract_path}': {e}. "
-                "Node has no active bridge; lifecycle-cleanup and reconfigure "
-                "to recover."
+                "Node has no active bridge; the next goal will rebuild it."
             )
 
         self._rosetta_config = new_config
