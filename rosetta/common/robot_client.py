@@ -10,8 +10,6 @@ Monkey-patches ``RobotClient`` to:
 """
 
 import collections
-import json
-import os
 import pickle  # nosec
 import threading
 import time
@@ -32,57 +30,12 @@ from lerobot.transport import (
     services_pb2,  # type: ignore
 )
 
+from rosetta.common import chunk_debug
 from rosetta.common.obs_history import TimedObservationWithHistory
 
 # Rolling obs-history window length on the client. Must be >= any deployed
 # policy's n_obs_steps. The server trims to policy.config.n_obs_steps.
 _OBS_HISTORY_MAXLEN = 4
-
-# Optional merge-event dump. When the env var ROSETTA_MERGE_DUMP names a file,
-# every action-queue merge appends one JSON line capturing the existing-queue
-# tail, the incoming chunk, and the blended result keyed by timestep -- the raw
-# material for an offline "merge inspector". Off (zero overhead) when unset.
-_MERGE_DUMP_PATH = os.environ.get("ROSETTA_MERGE_DUMP") or None
-_merge_event_idx = 0
-
-
-def _ts_pose(action: TimedAction) -> list[float]:
-    """Flatten a TimedAction's pose tensor to a rounded python list."""
-    return [
-        round(float(x), 6)
-        for x in action.get_action().detach().to("cpu").flatten().tolist()
-    ]
-
-
-def _dump_merge_event(latest_action, existing, incoming, merged, incoming_full):
-    """Append one merge event to the JSONL dump (best-effort, debug only).
-
-    ``incoming`` is the post-drop chunk (timesteps > latest_action) that enters
-    the merge; ``incoming_full`` is the raw chunk including the already-passed
-    prefix (timesteps <= latest_action) the client drops -- recorded so the
-    viewer can anchor each chunk at t_observation and color the dropped prefix.
-    """
-    global _merge_event_idx
-    try:
-        record = {
-            "event": _merge_event_idx,
-            "wall_time": time.time(),
-            "latest_action": int(latest_action),
-            # timestep -> 6-dof pose, for each of the three queues
-            "existing": {int(ts): _ts_pose(a) for ts, a in existing.items()},
-            "incoming": {int(ts): _ts_pose(a) for ts, a in incoming.items()},
-            "merged": {int(ts): _ts_pose(a) for ts, a in merged.items()},
-            # full incoming chunk (pre-drop) keyed by timestep; first point is
-            # t_observation (timestep i_0). Points <= latest_action are dropped.
-            "incoming_full": {
-                int(a.get_timestep()): _ts_pose(a) for a in incoming_full
-            },
-        }
-        with open(_MERGE_DUMP_PATH, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        _merge_event_idx += 1
-    except Exception:  # pragma: no cover - diagnostics must never break control
-        pass
 
 # ---------------------------------------------------------------------------
 # 1. Patch RobotClient.__init__ — add _observation_pending event
@@ -184,15 +137,14 @@ def _patched_aggregate_action_queues(
                 merged[ts] = new_action
 
         # Debug: dump existing/incoming/merged per-timestep for offline merge
-        # inspection (only when ROSETTA_MERGE_DUMP is set).
-        if _MERGE_DUMP_PATH is not None:
-            _dump_merge_event(
-                latest_action,
-                current_action_queue,
-                incoming_by_timestep,
-                merged,
-                incoming_actions,
-            )
+        # inspection (no-op unless ROSETTA_MERGE_DUMP is set).
+        chunk_debug.maybe_dump_merge_event(
+            latest_action,
+            current_action_queue,
+            incoming_by_timestep,
+            merged,
+            incoming_actions,
+        )
 
         # Rebuild queue in timestep order
         future_action_queue = Queue()
@@ -238,18 +190,8 @@ def _patched_receive_actions(self, verbose: bool = False):
             deserialize_time = time.perf_counter() - deserialize_start
 
             # Debug: echo the freshly generated chunk (pre-merge) if the node
-            # attached a publisher. joint_names follow the action-tensor order.
-            debug_cb = getattr(self, "_debug_chunk_cb", None)
-            if debug_cb is not None and timed_actions:
-                try:
-                    joint_names = list(self.robot.action_features)
-                    positions = [
-                        ta.get_action().detach().to("cpu").flatten().tolist()
-                        for ta in timed_actions
-                    ]
-                    debug_cb(joint_names, positions)
-                except Exception:
-                    self.logger.exception("Failed to publish debug action chunk")
+            # attached a publisher (publish_debug_chunk param).
+            chunk_debug.emit_generated_chunk(self, timed_actions)
 
             # Log device type of received actions
             if len(timed_actions) > 0:
