@@ -181,12 +181,15 @@ def contract_interface(contract: Contract) -> dict[str, Any]:
         for a in contract.actions
     ]
 
+    # dim mirrors build_features' `len(names) or 1`: the dataset writer
+    # stores a nameless numeric stream as shape (1,), so the validators
+    # must expect 1, not 0.
     state = {
-        k: {"names": v, "dim": len(v)}
+        k: {"names": v, "dim": len(v) or 1}
         for k, v in _aggregate_namespaced_names(numeric_items).items()
     }
     actions = {
-        k: {"names": v, "dim": len(v)}
+        k: {"names": v, "dim": len(v) or 1}
         for k, v in _aggregate_namespaced_names(action_items).items()
     }
 
