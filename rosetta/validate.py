@@ -127,6 +127,15 @@ def cmd_contract(args) -> int:
 
 
 def cmd_migrate(args) -> int:
+    if not args.record and not args.inference:
+        # check_unified_vs_legacy compares only the roles it is given, so
+        # --unified alone would run zero comparisons yet report [OK].
+        print(
+            "error: migrate needs at least one of --record/--inference to "
+            "compare against; --unified alone checks nothing",
+            file=sys.stderr,
+        )
+        return 2
     r = V.check_unified_vs_legacy(args.unified, args.record, args.inference)
     _print_result(r)
     return _finish([r], args.warnings_as_errors)
