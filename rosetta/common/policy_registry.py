@@ -3,10 +3,19 @@
 Lets a ``RunPolicy`` caller address a model by symbolic name (e.g. ``pick``)
 instead of wiring raw pretrained paths in every goal. The YAML file maps
 names to ``PolicyBundle`` entries carrying everything that varies per policy:
-checkpoint path, policy type, and the RTC-sensitive runtime knobs
+checkpoint path, policy type, the RTC-sensitive runtime knobs
 (``actions_per_chunk``, ``chunk_size_threshold``, ``aggregate_fn_name``,
-``drop_chunk_prefix``). Infrastructure knobs like ``fps`` or ``policy_device``
-stay on the node.
+``drop_chunk_prefix``), and optionally the robot contract to deploy against.
+Infrastructure knobs like ``fps`` or ``policy_device`` stay on the node.
+
+``contract_path`` should point at a *unified* Rosetta contract: one file
+covering record + inference, in which any field whose value differs between
+roles carries an inline ``{per-role: {record: ..., inference: ...}}`` map,
+plus an inlined ``processor:`` block. At goal time the client node swaps its
+topic bridge to that contract's **inference** view (per-role fields resolve
+to their inference values) and reads the observation processor from the
+inline block. Legacy single-role contracts are reference-only and not
+deployable: goals whose contract lacks an inline processor are rejected.
 """
 
 from __future__ import annotations
@@ -35,7 +44,6 @@ class PolicyBundle:
     chunk_size_threshold: float | None = None
     aggregate_fn_name: str | None = None
     drop_chunk_prefix: int | None = None
-    observation_processor_path: str | None = None
     contract_path: str | None = None
 
 
@@ -72,7 +80,6 @@ _OPTIONAL_FIELDS: dict[str, type] = {
     "chunk_size_threshold": float,
     "aggregate_fn_name": str,
     "drop_chunk_prefix": int,
-    "observation_processor_path": str,
     "contract_path": str,
 }
 
@@ -127,12 +134,14 @@ def load_registry(path: str) -> dict[str, PolicyBundle]:
             aggregate_fn_name: latest_only        # optional
             drop_chunk_prefix: 3                  # optional, extra leading
                                                   # chunk points to drop at merge
-            observation_processor_path: /path/    # optional, dir with
-                                                  # robot_observation_processor.json
-            contract_path: /path/contract.yaml    # optional, swaps the
-                                                  # node's topic bridge
-                                                  # to a different contract
-                                                  # at goal time
+            contract_path: /path/robot.yaml       # optional, swaps the node's
+                                                  # topic bridge at goal time.
+                                                  # Point at a unified contract:
+                                                  # the node loads its inference
+                                                  # view (inline per-role fields
+                                                  # resolve to their inference
+                                                  # values) and uses the inline
+                                                  # processor: block
     """
     if not os.path.isfile(path):
         raise PolicyRegistryError(f"Registry file not found: {path}")
@@ -146,6 +155,10 @@ def load_registry(path: str) -> dict[str, PolicyBundle]:
         )
 
     policies = data["policies"]
+    if policies is None:
+        # A `policies:` key with no entries (comments only) is a legitimate
+        # empty registry, not a malformed file.
+        return {}
     if not isinstance(policies, dict):
         raise PolicyRegistryError(
             f"Registry {path}: 'policies' must be a mapping of name -> entry"

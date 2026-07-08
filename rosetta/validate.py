@@ -186,7 +186,8 @@ def cmd_deploy(args) -> int:
         else:
             r.warn(f"checkpoint config.json unreachable: {cfg_path}")
 
-        # processor: inline (unified contract) or external dir.
+        # processor: the unified contract's inline block (the only deployable
+        # form; legacy single-role contracts are reference-only).
         spec = None
         if is_unified_contract(contract_path):
             try:
@@ -194,10 +195,8 @@ def cmd_deploy(args) -> int:
             except Exception:
                 spec = None
         else:
-            pdir = entry.get("observation_processor_path")
-            pjson = Path(pdir) / "robot_observation_processor.json" if pdir else None
-            if _safe_exists(pjson):
-                spec = json.loads(pjson.read_text())
+            r.warn(f"{name}: legacy single-role contract — reference-only, "
+                   "not deployable; migrate to a unified contract")
         if spec:
             r.merge(V.check_processor_vs_contract(
                 spec, contract,

@@ -213,15 +213,6 @@ class RosettaClientNode(LifecycleNode):
             ),
         )
         self.declare_parameter(
-            "observation_processor_path",
-            "",
-            ParameterDescriptor(
-                description="Path to saved RobotObservationProcessor JSON config. "
-                "If empty, uses identity processor (no transform).",
-                read_only=True,
-            ),
-        )
-        self.declare_parameter(
             "policy_registry_path",
             "",
             ParameterDescriptor(
@@ -669,10 +660,7 @@ class RosettaClientNode(LifecycleNode):
             config = self._build_config(task, bundle)
             client = RobotClient(config)
             self._client = client
-            processor = self._build_observation_processor(
-                bundle.observation_processor_path,
-                contract_path=bundle.contract_path,
-            )
+            processor = self._build_observation_processor(bundle.contract_path)
             client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
 
             # Debug: echo each model-generated chunk as a JointTrajectory.
@@ -815,26 +803,23 @@ class RosettaClientNode(LifecycleNode):
                 "contract_path:= at launch."
             )
 
-        # Resolve observation processor: registry entry > unified contract's
-        # inline processor > node-level default. Required: running without a
-        # processor causes image-shape mismatches, so reject the goal here.
-        if (
-            not bundle.observation_processor_path
-            and not self._contract_has_inline_processor(bundle.contract_path)
-        ):
-            node_default = self.get_parameter("observation_processor_path").value
-            if node_default:
-                bundle.observation_processor_path = node_default
+        if not os.path.isfile(bundle.contract_path):
+            return None, (
+                f"Contract file not found for {entry_hint}: "
+                f"{bundle.contract_path}"
+            )
 
-        if (
-            not bundle.observation_processor_path
-            and not self._contract_has_inline_processor(bundle.contract_path)
-        ):
+        # Resolve observation processor: the unified contract's inline
+        # `processor:` block is the only source (legacy single-role contracts
+        # are reference-only and not deployable). Required: running without a
+        # processor causes image-shape mismatches, so reject the goal here.
+        if not self._contract_has_inline_processor(bundle.contract_path):
             return None, (
                 f"No observation processor resolved for {entry_hint}. "
-                "Set 'observation_processor_path', inline a `processor:` block in "
-                "the (unified) contract, or set the node-level default. Running "
-                "without a processor causes image-shape mismatches."
+                "Deployable contracts must be unified and carry an inline "
+                "`processor:` block; legacy single-role contracts are "
+                "reference-only. Running without a processor causes "
+                "image-shape mismatches."
             )
 
         # Consistency gate: contract <-> checkpoint <-> processor <-> chunk size.
@@ -888,21 +873,15 @@ class RosettaClientNode(LifecycleNode):
                     apc = self.get_parameter("actions_per_chunk").value
                 res.merge(V.check_chunk_consistency(cfg.get("n_action_steps"), apc))
 
-            # Processor: inline (unified contract) or external dir.
+            # Processor: the unified contract's inline block (the only
+            # deployable form; bundle resolution already rejected anything
+            # else).
             spec = None
             if is_unified_contract(cpath):
                 try:
                     spec = load_processor_spec(cpath)
                 except Exception:
                     spec = None
-            elif bundle.observation_processor_path:
-                pj = os.path.join(
-                    bundle.observation_processor_path,
-                    "robot_observation_processor.json",
-                )
-                if os.path.isfile(pj):
-                    with open(pj) as f:
-                        spec = json.load(f)
             if spec is not None:
                 res.merge(
                     V.check_processor_vs_contract(
@@ -1115,25 +1094,12 @@ class RosettaClientNode(LifecycleNode):
             return False
 
     def _build_observation_processor(
-        self, processor_path: str | None, contract_path: str | None = None
+        self, contract_path: str | None
     ) -> RobotProcessorPipeline:
-        """Build the observation processor.
-
-        Prefers an explicit ``processor_path`` dir; otherwise falls back to the
-        unified contract's inline ``processor:`` block. ``_resolve_policy_bundle``
-        guarantees at least one of these is available.
+        """Build the observation processor from the unified contract's inline
+        ``processor:`` block — the only deployable form.
+        ``_resolve_policy_bundle`` guarantees it is present.
         """
-        if processor_path:
-            self.get_logger().info(
-                f"Loading observation processor from: {processor_path}"
-            )
-            return RobotProcessorPipeline.from_pretrained(
-                processor_path,
-                config_filename="robot_observation_processor.json",
-                to_transition=observation_to_transition,
-                to_output=transition_to_observation,
-            )
-
         from rosetta.common.contract import load_processor_spec
         from rosetta.common.processors import build_observation_processor
 
