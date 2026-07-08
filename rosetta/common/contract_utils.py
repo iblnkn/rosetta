@@ -116,25 +116,28 @@ def build_features(specs: Iterable[StreamSpec]) -> dict[str, dict[str, Any]]:
 def _aggregate_namespaced_names(
     items: list[tuple[str, str, list[str]]]
 ) -> dict[str, list[str]]:
-    """Aggregate selector names per key, applying the same per-key namespacing
-    as :func:`_apply_namespaces` (derived from topics; only multi-topic keys are
-    prefixed). ``items`` is a list of ``(key, topic, names)`` tuples.
+    """Aggregate selector names per key, namespaced exactly as the dataset
+    writer does it (shared :func:`_topic_namespace_map` policy): namespaces
+    derive from multi-topic keys but are applied globally **by topic**, so a
+    single-topic key whose topic also feeds a multi-topic key is prefixed
+    here just as it is in the written dataset. ``items`` is a list of
+    ``(key, topic, names)`` tuples.
     """
     by_key: dict[str, list[tuple[str, list[str]]]] = {}
     for key, topic, names in items:
         by_key.setdefault(key, []).append((topic, names))
 
+    ns_map = _topic_namespace_map(
+        [[topic for topic, _ in group] for group in by_key.values()]
+    )
+
     out: dict[str, list[str]] = {}
     for key, group in by_key.items():
-        if len(group) > 1:
-            ns_map = _derive_namespaces([t for t, _ in group])
-            agg: list[str] = []
-            for topic, names in group:
-                ns = ns_map.get(topic, "")
-                agg.extend(f"{ns}.{n}" if ns else n for n in names)
-            out[key] = agg
-        else:
-            out[key] = list(group[0][1])
+        agg: list[str] = []
+        for topic, names in group:
+            ns = ns_map.get(topic, "")
+            agg.extend(f"{ns}.{n}" if ns else n for n in names)
+        out[key] = agg
     return out
 
 
@@ -376,6 +379,38 @@ def _derive_namespaces(topics: list[str]) -> dict[str, str]:
     return {t: ".".join([p for p in t.split("/") if p]) for t in topics}
 
 
+def _topic_namespace_map(groups: list[list[str]]) -> dict[str, str]:
+    """Build the global ``topic -> namespace`` map the dataset writer applies.
+
+    ``groups`` holds each key's topic list. Only multi-topic groups derive
+    namespaces, but the merged map is applied **by topic** to every spec —
+    so a topic that also feeds a single-topic key is prefixed there too.
+    This is the single source of the namespacing policy, shared by the
+    dataset writer (:func:`_apply_namespaces`) and the ROS-free validator
+    path (:func:`_aggregate_namespaced_names`); the two must agree or the
+    validators flag drift on datasets their own contract produced.
+
+    A topic appearing in two multi-topic groups whose derivations disagree
+    would make the merged map depend on key order (the old silent-overwrite
+    behavior); that ambiguity is rejected instead.
+    """
+    out: dict[str, str] = {}
+    for topics in groups:
+        if len(topics) <= 1:
+            continue
+        derived = _derive_namespaces(topics)
+        for topic, ns in derived.items():
+            if topic in out and out[topic] != ns:
+                raise ContractValidationError(
+                    f"Topic '{topic}' is aggregated under multiple keys with "
+                    f"conflicting derived namespaces ('{out[topic]}' vs "
+                    f"'{ns}'); dataset feature names would depend on key "
+                    f"order. Rename the topics or keys to disambiguate."
+                )
+        out.update(derived)
+    return out
+
+
 def get_namespaced_names(spec: StreamSpec) -> list[str]:
     """Get selector names with namespace prefix applied."""
     if spec.namespace:
@@ -410,17 +445,18 @@ def _apply_namespaces(
         key = key_getter(original)
         by_key.setdefault(key, []).append((topic, kwargs, original))
 
-    # Compute namespaces for multi-topic groups
-    topic_to_namespace: dict[str, str] = {}
     for key, group in by_key.items():
-        if len(group) > 1:
-            if forbid_image_aggregation and group[0][1].get("is_image"):
-                raise ContractValidationError(
-                    f"Cannot aggregate multiple image topics under key '{key}'. "
-                    f"Each image must have a unique key."
-                )
-            topics = [topic for topic, _, _ in group]
-            topic_to_namespace.update(_derive_namespaces(topics))
+        if len(group) > 1 and forbid_image_aggregation and group[0][1].get("is_image"):
+            raise ContractValidationError(
+                f"Cannot aggregate multiple image topics under key '{key}'. "
+                f"Each image must have a unique key."
+            )
+
+    # Namespaces derive from multi-topic groups but apply globally by topic
+    # (shared policy with the validator path — see _topic_namespace_map).
+    topic_to_namespace = _topic_namespace_map(
+        [[topic for topic, _, _ in group] for group in by_key.values()]
+    )
 
     # Yield specs with namespace
     for topic, kwargs, _ in items:
