@@ -20,10 +20,13 @@ deployable: goals whose contract lacks an inline processor are rejected.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 class PolicyRegistryError(ValueError):
@@ -88,6 +91,27 @@ def _parse_entry(name: str, raw: dict) -> PolicyBundle:
     if not isinstance(raw, dict):
         raise PolicyRegistryError(
             f"Registry entry '{name}' must be a mapping; got {type(raw).__name__}"
+        )
+
+    # Unknown keys are ignored for forward/backward compatibility, but say so:
+    # a stale key silently changing behavior (e.g. the removed
+    # observation_processor_path pin) must not go unnoticed.
+    unknown = sorted(
+        set(raw) - {"pretrained_name_or_path", "policy_type"} - set(_OPTIONAL_FIELDS)
+    )
+    if unknown:
+        hint = ""
+        if "observation_processor_path" in unknown:
+            hint = (
+                " ('observation_processor_path' was removed: deploy now reads "
+                "the observation processor from the contract's inline "
+                "`processor:` block)"
+            )
+        logger.warning(
+            "Registry entry '%s': ignoring unrecognized key(s) %s%s",
+            name,
+            unknown,
+            hint,
         )
 
     missing = [k for k in ("pretrained_name_or_path", "policy_type") if k not in raw]

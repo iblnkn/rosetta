@@ -35,6 +35,32 @@ def test_missing_policies_key_raises(tmp_path):
         load_registry(str(path))
 
 
+def test_unknown_entry_keys_warn_but_load(tmp_path, caplog):
+    """Stale keys (e.g. the removed observation_processor_path pin) must not
+    be dropped silently — the operator gets a warning naming them."""
+    import logging
+
+    path = _write(
+        tmp_path,
+        """\
+        policies:
+          pick:
+            pretrained_name_or_path: user/model
+            policy_type: sns_diffusion
+            observation_processor_path: /old/pinned/processor
+        """,
+    )
+    with caplog.at_level(
+        logging.WARNING, logger="rosetta.common.policy_registry"
+    ):
+        reg = load_registry(str(path))
+    assert set(reg) == {"pick"}
+    assert not hasattr(reg["pick"], "observation_processor_path")
+    messages = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "observation_processor_path" in messages
+    assert "inline" in messages
+
+
 def test_entry_parses(tmp_path):
     path = _write(
         tmp_path,
