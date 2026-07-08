@@ -204,6 +204,36 @@ def test_processor_block_rejects_per_role_marker(tmp_path):
     assert load_processor_spec(clean) == {"steps": []}
 
 
+def test_task_keyed_processor_rejected(tmp_path):
+    """Only the single-pipeline {steps: [...]} form is supported; a
+    task-keyed map must fail at load time (everywhere: validate, port,
+    deploy) instead of leaking past gates that cannot supply a task."""
+    path = _write(
+        tmp_path,
+        MAP_CONTRACT
+        + textwrap.dedent(
+            """\
+            processor:
+              tossing:
+                steps: []
+            """
+        ),
+    )
+    with pytest.raises(ContractValidationError) as exc:
+        load_processor_spec(path)
+    msg = str(exc.value)
+    assert "task-keyed processor maps are not supported" in msg
+    assert "tossing" in msg
+
+
+def test_processor_loader_rejects_non_mapping_document(tmp_path):
+    path = tmp_path / "contract.yaml"
+    path.write_text("- just\n- a\n- list\n")
+    with pytest.raises(ContractValidationError) as exc:
+        load_processor_spec(path)
+    assert "must be a YAML mapping" in str(exc.value)
+
+
 def test_plain_loader_redirects_on_map(tmp_path):
     path = _write(tmp_path, MAP_CONTRACT)
     with pytest.raises(ContractValidationError) as exc:

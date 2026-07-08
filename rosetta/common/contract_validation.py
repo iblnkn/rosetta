@@ -335,15 +335,10 @@ def check_unified_contract(path: Path | str, *, context: str = "") -> CheckResul
         except Exception as e:  # noqa: BLE001 - report any load/merge error
             res.error(f"role '{role}' failed to load: {e}")
     try:
-        # Single-pipeline processors are validated here; task-keyed ones need a task.
-        spec = None
-        try:
-            spec = load_processor_spec(path)
-        except Exception:
-            spec = None  # task-keyed or absent; validated where a task is known
+        spec = load_processor_spec(path)
         if spec and ROLE_RECORD in roles:
             res.merge(check_processor_vs_contract(spec, roles[ROLE_RECORD]))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - an invalid processor block is an error
         res.error(f"processor validation error: {e}")
     return res
 

@@ -941,13 +941,11 @@ def is_unified_contract(path: Path | str) -> bool:
     return bool(_find_per_role_markers(data))
 
 
-def load_processor_spec(
-    path: Path | str, task: str | None = None
-) -> dict[str, Any] | None:
+def load_processor_spec(path: Path | str) -> dict[str, Any] | None:
     """Return the inlined observation-processor spec from a unified contract.
 
-    The ``processor`` block is either a single pipeline mapping
-    (``{steps: [...]}``) or a task-keyed map (``{tossing: {steps: ...}, ...}``).
+    The ``processor`` block must be a single pipeline mapping
+    (``{steps: [...]}``); task-keyed processor maps are not supported.
     Returns ``None`` when the contract has no inline processor.
     """
     path = Path(path)
@@ -959,7 +957,12 @@ def load_processor_spec(
     except yaml.YAMLError as e:
         raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
 
-    proc = (data or {}).get("processor")
+    if not isinstance(data, dict):
+        raise ContractValidationError(
+            f"Contract must be a YAML mapping, got {type(data).__name__}"
+        )
+
+    proc = data.get("processor")
     if not proc:
         return None
     if not isinstance(proc, dict):
@@ -975,17 +978,10 @@ def load_processor_spec(
             f"per-role maps."
         )
 
-    # Single pipeline form.
-    if "steps" in proc:
-        return proc
-
-    # Task-keyed form.
-    if task is None:
+    if "steps" not in proc:
         raise ContractValidationError(
-            f"'processor' is task-keyed ({sorted(proc)}); a task must be provided"
+            f"{path}: 'processor' must be a single pipeline mapping with a "
+            f"'steps' list (found keys {sorted(proc)}); task-keyed processor "
+            f"maps are not supported."
         )
-    if task not in proc:
-        raise ContractValidationError(
-            f"No processor for task '{task}'; available: {sorted(proc)}"
-        )
-    return proc[task]
+    return proc

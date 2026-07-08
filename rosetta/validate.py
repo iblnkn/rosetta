@@ -151,7 +151,8 @@ def cmd_checkpoint(args) -> int:
     # Also surface the crop-vs-resize footgun if a processor is inlined.
     try:
         spec = load_processor_spec(args.contract) if is_unified_contract(args.contract) else None
-    except Exception:
+    except Exception as e:  # noqa: BLE001
+        r.error(f"invalid processor block: {e}")
         spec = None
     if spec:
         r.merge(V.check_processor_vs_contract(spec, contract,
@@ -187,16 +188,22 @@ def cmd_deploy(args) -> int:
             r.warn(f"checkpoint config.json unreachable: {cfg_path}")
 
         # processor: the unified contract's inline block (the only deployable
-        # form; legacy single-role contracts are reference-only).
+        # form; legacy single-role contracts are reference-only). Mirror the
+        # client node's hard gate: anything it would reject is an error here.
         spec = None
         if is_unified_contract(contract_path):
             try:
                 spec = load_processor_spec(contract_path)
-            except Exception:
-                spec = None
+            except Exception as e:  # noqa: BLE001
+                r.error(f"{name}: invalid processor block: {e}")
+            else:
+                if spec is None:
+                    r.error(f"{name}: unified contract has no inline "
+                            "`processor:` block — the client node rejects "
+                            "every goal against this entry")
         else:
-            r.warn(f"{name}: legacy single-role contract — reference-only, "
-                   "not deployable; migrate to a unified contract")
+            r.error(f"{name}: legacy single-role contract — reference-only, "
+                    "not deployable; migrate to a unified contract")
         if spec:
             r.merge(V.check_processor_vs_contract(
                 spec, contract,

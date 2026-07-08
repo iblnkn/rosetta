@@ -813,7 +813,12 @@ class RosettaClientNode(LifecycleNode):
         # `processor:` block is the only source (legacy single-role contracts
         # are reference-only and not deployable). Required: running without a
         # processor causes image-shape mismatches, so reject the goal here.
-        if not self._contract_has_inline_processor(bundle.contract_path):
+        spec, spec_err = self._load_inline_processor(bundle.contract_path)
+        if spec_err is not None:
+            return None, (
+                f"Invalid observation processor for {entry_hint}: {spec_err}"
+            )
+        if spec is None:
             return None, (
                 f"No observation processor resolved for {entry_hint}. "
                 "Deployable contracts must be unified and carry an inline "
@@ -875,13 +880,11 @@ class RosettaClientNode(LifecycleNode):
 
             # Processor: the unified contract's inline block (the only
             # deployable form; bundle resolution already rejected anything
-            # else).
-            spec = None
-            if is_unified_contract(cpath):
-                try:
-                    spec = load_processor_spec(cpath)
-                except Exception:
-                    spec = None
+            # else, so this load cannot fail here — and if it ever does, the
+            # enclosing catch-all logs the check as skipped.
+            spec = (
+                load_processor_spec(cpath) if is_unified_contract(cpath) else None
+            )
             if spec is not None:
                 res.merge(
                     V.check_processor_vs_contract(
@@ -1083,23 +1086,28 @@ class RosettaClientNode(LifecycleNode):
         return None
 
     @staticmethod
-    def _contract_has_inline_processor(contract_path: str | None) -> bool:
-        """True if ``contract_path`` is a unified contract with an inline processor."""
-        if not contract_path:
-            return False
-        try:
-            from rosetta.common.contract import (is_unified_contract,
-                                                 load_processor_spec)
+    def _load_inline_processor(
+        contract_path: str | None,
+    ) -> tuple[dict | None, str | None]:
+        """Load the unified contract's inline ``processor:`` spec.
 
+        Returns ``(spec, None)`` when present, ``(None, None)`` when the
+        contract is not unified or carries no processor block, and
+        ``(None, error)`` when the contract or its processor block is
+        invalid or unreadable — so the goal can be rejected with the real
+        cause instead of a generic "no processor" message.
+        """
+        if not contract_path:
+            return None, None
+        from rosetta.common.contract import (is_unified_contract,
+                                             load_processor_spec)
+
+        try:
             if not is_unified_contract(contract_path):
-                return False
-            try:
-                return load_processor_spec(contract_path) is not None
-            except Exception:
-                # Task-keyed processor (needs a task) still counts as present.
-                return True
-        except Exception:
-            return False
+                return None, None
+            return load_processor_spec(contract_path), None
+        except Exception as e:
+            return None, str(e)
 
     def _build_observation_processor(
         self, contract_path: str | None
