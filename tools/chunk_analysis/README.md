@@ -3,7 +3,7 @@
 Builds the interactive "Merge timeline (timestep axis)" HTML — chunks on the
 merge-timestep grid, per joint: black = realized executed command
 (reconstructed from the merged queue), color = each chunk anchored at
-t_observation, gray dashed = dropped already-passed prefix, cyan = observed
+t_observation, red dashed = dropped already-passed prefix, cyan = observed
 state, plus a merge scrubber to isolate the chunks live in the queue at one
 instant.
 
@@ -11,7 +11,7 @@ instant.
 
 The dump comes from the runtime hook in `rosetta/common/chunk_debug.py`:
 set the client node's `merge_dump_dir` param to a directory, and every
-RunPolicy goal writes its own file there — `merge_<stamp>_<task>.jsonl`,
+RunPolicy goal writes its own file there — `merge_<stamp>_<pid>_<task-slug>.jsonl`,
 one goal = one episode = one dump. The first line is a `{"header": ...}`
 provenance record (task, policy, contract, chunk config, and
 `action_features` — the joint order of every pose vector); each following
