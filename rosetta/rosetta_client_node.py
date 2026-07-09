@@ -240,6 +240,17 @@ class RosettaClientNode(LifecycleNode):
                 read_only=True,
             ),
         )
+        self.declare_parameter(
+            "merge_dump_dir",
+            "",
+            ParameterDescriptor(
+                description="Debug: when non-empty, write one merge-event JSONL "
+                "per RunPolicy goal into this directory "
+                "(merge_<stamp>_<task>.jsonl; header record + one line per "
+                "action-queue merge). Consumed by tools/chunk_analysis. "
+                "Empty = off.",
+            ),
+        )
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
         self._pretrained: str | None = None
@@ -652,6 +663,48 @@ class RosettaClientNode(LifecycleNode):
                 if bundle.drop_chunk_prefix is not None
                 else self.get_parameter("drop_chunk_prefix").value
             )
+
+            # Debug: per-goal merge-event dump (one JSONL per goal, so each
+            # file is a single clean run for tools/chunk_analysis).
+            dump_dir = str(self.get_parameter("merge_dump_dir").value or "").strip()
+            if dump_dir:
+                from rosetta.common.chunk_debug import MergeDumpWriter, new_dump_path
+
+                try:
+                    # Action-feature order = the dump's pose vector layout;
+                    # the offline viewers label joints from this.
+                    action_features = list(client.robot.action_features)
+                except Exception:
+                    action_features = None
+                try:
+                    client._merge_dump = MergeDumpWriter(
+                        new_dump_path(dump_dir, task),
+                        header={
+                            "task": task,
+                            "policy": bundle.pretrained_name_or_path,
+                            "contract_path": bundle.contract_path,
+                            "action_features": action_features,
+                            "actions_per_chunk": getattr(
+                                config, "actions_per_chunk", None
+                            ),
+                            "chunk_size_threshold": getattr(
+                                config, "chunk_size_threshold", None
+                            ),
+                            "drop_chunk_prefix": client._drop_chunk_prefix,
+                            "fps": (
+                                self._rosetta_config.fps
+                                if self._rosetta_config is not None
+                                else None
+                            ),
+                        },
+                    )
+                    self.get_logger().info(
+                        f"Merge-event dump for this goal: {client._merge_dump.path}"
+                    )
+                except Exception as e:
+                    self.get_logger().warning(
+                        f"Merge-event dump disabled for this goal: {e}"
+                    )
 
             if not client.start():
                 result.success = False

@@ -56,6 +56,9 @@ def _patched_init(self, config):
     # Extra leading points to drop from each incoming chunk before merge (on top
     # of the already-passed prefix). Set per-goal by the node; 0 = off.
     self._drop_chunk_prefix = 0
+    # Per-goal merge-event dump writer (chunk_debug.MergeDumpWriter); attached
+    # by the node when its merge_dump_dir param is set. None = off.
+    self._merge_dump = None
 
 
 RobotClient.__init__ = _patched_init
@@ -137,14 +140,16 @@ def _patched_aggregate_action_queues(
                 merged[ts] = new_action
 
         # Debug: dump existing/incoming/merged per-timestep for offline merge
-        # inspection (no-op unless ROSETTA_MERGE_DUMP is set).
-        chunk_debug.maybe_dump_merge_event(
-            latest_action,
-            current_action_queue,
-            incoming_by_timestep,
-            merged,
-            incoming_actions,
-        )
+        # inspection (the node attaches a per-goal writer when merge_dump_dir
+        # is set; None = off).
+        if self._merge_dump:
+            self._merge_dump.dump(
+                latest_action,
+                current_action_queue,
+                incoming_by_timestep,
+                merged,
+                incoming_actions,
+            )
 
         # Rebuild queue in timestep order
         future_action_queue = Queue()

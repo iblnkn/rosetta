@@ -4,12 +4,15 @@ Every chunk/queue inspection hook lives here, isolated from the control
 path. Deleting this module (plus its few one-line call sites) removes the
 whole analysis feature; nothing here is required for control.
 
-* **Merge-event dump** (client side). When the env var ``ROSETTA_MERGE_DUMP``
-  names a file, every action-queue merge appends one JSON line capturing the
-  existing-queue tail, the incoming chunk (post-drop and full), and the
-  blended result keyed by timestep. Consumed offline by the viewers in
-  ``tools/chunk_analysis/`` (``build_merge_inspector.py``,
-  ``build_merge_timeline.py``). Off (zero overhead) when unset.
+* **Merge-event dump** (client side). When the node's ``merge_dump_dir``
+  param is non-empty, every RunPolicy goal gets its own JSONL file
+  (``merge_<stamp>_<task-slug>.jsonl``): a header record with the goal's
+  config, then one line per action-queue merge capturing the existing-queue
+  tail, the incoming chunk (post-drop and full), and the blended result
+  keyed by timestep. The node attaches a ``MergeDumpWriter`` to the goal's
+  client as ``client._merge_dump``; one goal = one file = one clean run for
+  ``tools/chunk_analysis/build_merge_timeline.py``. Off (zero overhead)
+  when the param is empty.
 
 * **Generated-chunk echo** (node side). When the ``publish_debug_chunk``
   node param is true, each model-generated chunk — as received per
@@ -25,14 +28,12 @@ Everything here is best-effort: diagnostics must never break control.
 
 import json
 import os
+import re
 import time
 
 # ---------------------------------------------------------------------------
-# Merge-event dump (env-gated JSONL)
+# Merge-event dump (per-goal JSONL)
 # ---------------------------------------------------------------------------
-
-_MERGE_DUMP_PATH = os.environ.get("ROSETTA_MERGE_DUMP") or None
-_merge_event_idx = 0
 
 
 def _ts_pose(action) -> list[float]:
@@ -43,39 +44,83 @@ def _ts_pose(action) -> list[float]:
     ]
 
 
-def maybe_dump_merge_event(latest_action, existing, incoming, merged, incoming_full):
-    """Append one merge event to the JSONL dump; no-op unless enabled.
+def new_dump_path(dump_dir: str, task: str) -> str:
+    """Claim a fresh per-goal dump path inside ``dump_dir`` (created if needed).
 
-    ``existing``/``incoming``/``merged`` are ``{timestep: TimedAction}`` as
-    seen by the merge; ``incoming`` is the post-drop chunk (timesteps beyond
-    the cutoff) that enters the merge, while ``incoming_full`` is the raw
-    chunk list including the already-passed prefix the client drops --
-    recorded so the viewer can anchor each chunk at t_observation and color
-    the dropped prefix.
+    ``merge_<YYYYmmdd_HHMMSS>_<pid>_<task-slug>.jsonl``, created atomically
+    (``O_EXCL``) with a numeric suffix on collision. The PID mostly keeps
+    concurrent writers apart (and says who wrote the file), but PIDs can
+    coincide across container PID namespaces on a shared dump dir — the
+    atomic create is what actually guarantees one goal per file.
     """
-    if _MERGE_DUMP_PATH is None:
-        return
-    global _merge_event_idx
-    try:
-        record = {
-            "event": _merge_event_idx,
-            "wall_time": time.time(),
-            "latest_action": int(latest_action),
-            # timestep -> pose, for each of the three queues
-            "existing": {int(ts): _ts_pose(a) for ts, a in existing.items()},
-            "incoming": {int(ts): _ts_pose(a) for ts, a in incoming.items()},
-            "merged": {int(ts): _ts_pose(a) for ts, a in merged.items()},
-            # full incoming chunk (pre-drop) keyed by timestep; first point is
-            # t_observation (timestep i_0). Points <= latest_action are dropped.
-            "incoming_full": {
-                int(a.get_timestep()): _ts_pose(a) for a in incoming_full
-            },
-        }
-        with open(_MERGE_DUMP_PATH, "a") as f:
+    os.makedirs(dump_dir, exist_ok=True)
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", (task or "").strip()).strip("-")
+    slug = slug[:40] or "task"
+    base = f"merge_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}_{slug}"
+    path = os.path.join(dump_dir, f"{base}.jsonl")
+    n = 1
+    while True:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError:
+            path = os.path.join(dump_dir, f"{base}_{n}.jsonl")
+            n += 1
+        else:
+            return path
+
+
+class MergeDumpWriter:
+    """Per-goal merge-event JSONL writer.
+
+    One instance = one file = one RunPolicy goal: the node creates a writer
+    at goal start (when ``merge_dump_dir`` is set) and attaches it to the
+    goal's RobotClient as ``client._merge_dump``, so the event counter and
+    file lifetime match the goal exactly. The optional ``header`` becomes
+    the file's first record as ``{"header": {...}}`` (viewers skip it).
+    """
+
+    def __init__(self, path: str, header: dict | None = None):
+        self.path = str(path)
+        self._event_idx = 0
+        if header is not None:
+            # Not swallowed: a failure here surfaces at goal start (once),
+            # where the node logs it and runs the goal without a dump.
+            self._append({"header": header})
+
+    def _append(self, record: dict) -> None:
+        with open(self.path, "a") as f:
             f.write(json.dumps(record) + "\n")
-        _merge_event_idx += 1
-    except Exception:  # pragma: no cover - diagnostics must never break control
-        pass
+
+    def dump(self, latest_action, existing, incoming, merged, incoming_full):
+        """Append one merge event (best-effort, debug only).
+
+        ``existing``/``incoming``/``merged`` are ``{timestep: TimedAction}``
+        as seen by the merge; ``incoming`` is the post-drop chunk (timesteps
+        beyond the cutoff) that enters the merge, while ``incoming_full`` is
+        the raw chunk list including the already-passed prefix the client
+        drops -- recorded so the viewer can anchor each chunk at
+        t_observation and color the dropped prefix.
+        """
+        try:
+            record = {
+                "event": self._event_idx,
+                "wall_time": time.time(),
+                "latest_action": int(latest_action),
+                # timestep -> pose, for each of the three queues
+                "existing": {int(ts): _ts_pose(a) for ts, a in existing.items()},
+                "incoming": {int(ts): _ts_pose(a) for ts, a in incoming.items()},
+                "merged": {int(ts): _ts_pose(a) for ts, a in merged.items()},
+                # full incoming chunk (pre-drop) keyed by timestep; first point
+                # is t_observation (timestep i_0). Points <= latest_action are
+                # dropped.
+                "incoming_full": {
+                    int(a.get_timestep()): _ts_pose(a) for a in incoming_full
+                },
+            }
+            self._append(record)
+            self._event_idx += 1
+        except Exception:  # pragma: no cover - diagnostics must never break control
+            pass
 
 
 # ---------------------------------------------------------------------------
