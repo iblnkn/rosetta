@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p> -->
 
-**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots. 
+**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots.
 
 ## Table of Contents
 
@@ -114,7 +114,7 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [480, 640]
+      shape: [480, 640]
 
 actions:
   - key: action
@@ -179,33 +179,37 @@ ros2 action send_goal /rosetta_client/run_policy \
 > DO NOT launch the sns_autonomy!
 
 Launch the Rosetta client with the appropriate contract and pretrained policy checkpoint:
+> Note: the legacy single-role contracts under `rosetta_contracts/inference/` are frozen
+> reference material; prefer the unified contracts in
+> `sns_robot_learning/configs/rosetta_contracts/` for new deployments.
+
 * ACT
   ```bash
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
     policy_type:=act
   # isaac
-  ros2 launch rosetta rosetta_client_launch.py
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
+  ros2 launch rosetta rosetta_client_launch.py \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
     policy_type:=act
   ```
 * Diffusion Policy
   ```bash
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
     policy_type:=diffusion
   # isaac
   ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac_infer.yaml \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac.yaml \
     pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
     policy_type:=diffusion
   ```
 * Start inference:
   ```
-  ros2 action send_goal /run_policy     rosetta_interfaces/action/RunPolicy "{prompt: ''}"
+  ros2 action send_goal /rosetta_client/run_policy     rosetta_interfaces/action/RunPolicy "{prompt: ''}"
   ```
 
 
@@ -237,11 +241,16 @@ Rosetta consists of five packages that implement LeRobot's official interfaces:
 rosetta/
 ├── launch/
 │   ├── episode_recorder_launch.py
-│   └── rosetta_client_launch.py
+│   ├── rosetta_client_launch.py
+│   └── rosetta_hil_launch.py
 └── params/
     ├── episode_recorder.yaml    # Default config for Episode Recorder
-    └── rosetta_client.yaml      # Default config for Rosetta Client
+    └── rosetta_hil_manager.yaml # Default config for HIL manager
 ```
+
+The Rosetta client's default params file lives with the deployment configs in
+`sns_robot_learning/params/rosetta_client.yaml` (the launch file's `params_file`
+default points there).
 
 ### LeRobot Plugin Architecture
 
@@ -366,7 +375,7 @@ ros2 action send_goal /episode_recorder/record_episode \
 **Parameters** (all available as launch arguments):
 
 | Parameter              | Default                                | Description                                      |
-| ---------------------- | -------------------------------------- | ------------------------------------------------ |
+|------------------------|----------------------------------------|--------------------------------------------------|
 | `contract_path`        | `contracts/so_101.yaml`                | Path to contract YAML                            |
 | `bag_base_dir`         | `/workspaces/rosetta_ws/datasets/bags` | Directory for rosbag output                      |
 | `storage_id`           | `mcap`                                 | Rosbag format: `mcap` (recommended) or `sqlite3` |
@@ -447,7 +456,7 @@ python -m rosetta.port_bags \
     --root ./datasets/lerobot
 ```
 
- For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples. 
+ For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples.
 
 
 
@@ -545,24 +554,34 @@ ros2 action send_goal /rosetta_client/run_policy \
 
 **Remote inference:** When `launch_local_server` is `false`, the node connects to a LeRobot gRPC policy server at `server_address`. This server is a standard LeRobot component with no ROS2 dependency. It can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server.
 
-**Parameters** (all available as launch arguments):
+**Parameters** (node parameters, set via the launch file's `params_file` or
+overridden per policy by a registry entry; `contract_path`,
+`policy_registry_path`, `server_address`, `launch_local_server`, `use_sim_time`,
+`log_level`, `configure`, and `activate` are also exposed as launch arguments):
 
-| Parameter                 | Default                 | Description                                                                     |
-| ------------------------- | ----------------------- | ------------------------------------------------------------------------------- |
-| `contract_path`           | `contracts/so_101.yaml` | Path to contract YAML                                                           |
-| `pretrained_name_or_path` | *(see params file)*     | HuggingFace model ID or local path                                              |
-| `server_address`          | `127.0.0.1:8080`        | Policy server address                                                           |
-| `policy_type`             | `act`                   | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc.                 |
-| `policy_device`           | `cuda`                  | Inference device: `cuda`, `cpu`, `mps`, or `cuda:0`                             |
-| `actions_per_chunk`       | `30`                    | Actions per inference chunk                                                     |
-| `chunk_size_threshold`    | `0.95`                  | When to request new chunk (0.0-1.0)                                             |
-| `aggregate_fn_name`       | `weighted_average`      | Chunk aggregation: `weighted_average`, `latest_only`, `average`, `conservative` |
-| `feedback_rate_hz`        | `2.0`                   | Execution feedback publish rate                                                 |
-| `launch_local_server`     | `true`                  | Auto-start policy server subprocess                                             |
-| `obs_similarity_atol`     | `-1.0`                  | Observation filtering tolerance (-1.0 to disable)*                              |
-| `log_level`               | `info`                  | Logging level: `debug`, `info`, `warn`, `error`                                 |
-| `configure`               | `true`                  | Auto-configure on startup                                                       |
-| `activate`                | `true`                  | Auto-activate on startup                                                        |
+| Parameter                 | Default                   | Description                                                                                                       |
+|---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------------|
+| `contract_path`           | *(empty)*                 | Path to contract YAML; empty = the policy-registry entry must supply one                                          |
+| `pretrained_name_or_path` | *(see params file)*       | HuggingFace model ID or local path                                                                                |
+| `policy_registry_path`    | *(empty)*                 | Path to policy registry YAML (per-policy overrides)                                                               |
+| `server_address`          | `127.0.0.1:8080`          | Policy server address                                                                                             |
+| `policy_type`             | `act`                     | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc.                                                   |
+| `policy_device`           | `cuda`                    | Inference device: `cuda`, `cpu`, `mps`, or `cuda:0`                                                               |
+| `actions_per_chunk`       | `24`                      | Actions per inference chunk                                                                                       |
+| `chunk_size_threshold`    | `0.5`                     | When to request new chunk (0.0-1.0)                                                                               |
+| `aggregate_fn_name`       | `weighted_average`        | Chunk aggregation: `weighted_average`, `latest_only`, `average`, `conservative`                                   |
+| `drop_chunk_prefix`       | `0`                       | Extra leading points to drop from each incoming chunk before merge (on top of the already-passed prefix); 0 = off |
+| `is_classifier`           | `false`                   | Use the reward section as action output (reward classifiers)                                                      |
+| `sim_time_multiplier`     | `1.0`                     | Multiplier on contract fps sent to LeRobot (for scaled sim time)                                                  |
+| `feedback_rate_hz`        | `2.0`                     | Execution feedback publish rate                                                                                   |
+| `launch_local_server`     | `true`                    | Auto-start policy server subprocess                                                                               |
+| `obs_similarity_atol`     | `1.0`                     | Observation filtering tolerance (-1.0 to disable)*                                                                |
+| `publish_debug_chunk`     | `false`                   | Debug: publish each model-generated chunk as a `JointTrajectory`                                                  |
+| `debug_chunk_topic`       | `~/debug/generated_chunk` | Topic for the debug generated-chunk trajectory                                                                    |
+| `merge_dump_dir`          | *(empty)*                 | Debug: write per-goal merge-event JSONL files for `tools/chunk_analysis`                                          |
+| `log_level`               | `info`                    | Logging level: `debug`, `info`, `warn`, `error`                                                                   |
+| `configure`               | `true`                    | Auto-configure on startup                                                                                         |
+| `activate`                | `true`                    | Auto-activate on startup                                                                                          |
 
 *\*`obs_similarity_atol`: The policy server filters observations that are "too similar" (L2 norm of state difference < threshold). The default threshold (1.0) assumes joint states change significantly between frames. Many robots have smaller movements, causing most observations to be skipped. Set to `-1.0` to disable filtering.*
 
@@ -645,7 +664,7 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [224, 224]  # [height, width]
+      shape: [224, 224]  # [height, width]
 ```
 
 Multiple topics can share the same `key`. Values are concatenated (see [The Contract](#the-contract)).
@@ -714,6 +733,10 @@ signals:
     type: std_msgs/msg/Bool
 ```
 
+> Note: `std_msgs/msg/Bool` has no built-in decoder yet — a contract using it
+> needs a [custom decoder](#custom-encodersdecoders-experimental) until one is
+> registered.
+
 For VLA policies, the `task` string can also be provided via the `prompt` argument when recording or running a policy, so you don't need a ROS2 topic for it.
 
 ### Adjunct Topics
@@ -756,20 +779,29 @@ names: [twist.twist.linear.x, pose.pose.position.z]
 
 ### Supported Message Types
 
-| Type                              | Extracted Fields                                   |
-| --------------------------------- | -------------------------------------------------- |
-| `sensor_msgs/msg/JointState`      | position, velocity, effort by joint name           |
-| `sensor_msgs/msg/Image`           | RGB uint8 array                                    |
-| `sensor_msgs/msg/CompressedImage` | Decoded to RGB uint8                               |
-| `geometry_msgs/msg/Twist`         | linear.xyz, angular.xyz                            |
-| `nav_msgs/msg/Odometry`           | pose, twist fields                                 |
-| `sensor_msgs/msg/Joy`             | axes, buttons arrays                               |
-| `sensor_msgs/msg/Imu`             | orientation, angular_velocity, linear_acceleration |
-| `std_msgs/msg/Float32`            | Scalar float32                                     |
-| `std_msgs/msg/Float64`            | Scalar float64                                     |
-| `std_msgs/msg/String`             | Text string                                        |
-| `std_msgs/msg/Bool`               | Boolean                                            |
-| `std_msgs/msg/Float64MultiArray`  | Vector float64                                     |
+| Type                                  | Extracted Fields                                     |
+|---------------------------------------|------------------------------------------------------|
+| `sensor_msgs/msg/JointState`          | position, velocity, effort by joint name             |
+| `sensor_msgs/msg/Image`               | RGB uint8 array                                      |
+| `sensor_msgs/msg/CompressedImage`     | Decoded to RGB uint8                                 |
+| `geometry_msgs/msg/Twist`             | linear.xyz, angular.xyz                              |
+| `geometry_msgs/msg/TwistStamped`      | linear.xyz, angular.xyz                              |
+| `geometry_msgs/msg/PointStamped`      | point.xyz                                            |
+| `geometry_msgs/msg/PoseStamped`       | position.xyz, orientation.xyzw                       |
+| `nav_msgs/msg/Odometry`               | pose, twist fields                                   |
+| `sensor_msgs/msg/Joy`                 | axes, buttons arrays                                 |
+| `sensor_msgs/msg/Imu`                 | orientation, angular_velocity, linear_acceleration   |
+| `control_msgs/msg/MultiDOFCommand`    | values / values_dot by DOF name                      |
+| `control_msgs/msg/GripperCommand`     | position, max_effort                                 |
+| `trajectory_msgs/msg/JointTrajectory` | first point's position/velocity/effort by joint name |
+| `std_msgs/msg/Float32`                | Scalar float32                                       |
+| `std_msgs/msg/Float64`                | Scalar float64                                       |
+| `std_msgs/msg/Int32`                  | Scalar int32                                         |
+| `std_msgs/msg/Int64`                  | Scalar int64                                         |
+| `std_msgs/msg/String`                 | Text string                                          |
+| `std_msgs/msg/Float32MultiArray`      | Vector float32                                       |
+| `std_msgs/msg/Float64MultiArray`      | Vector float64                                       |
+| `std_msgs/msg/Int32MultiArray`        | Vector int32                                         |
 
 The dtype is auto-detected from the message type. You can override it with the `dtype` field in the contract, or use a custom decoder for non-standard types.
 
@@ -1122,7 +1154,7 @@ observations:
   - key: observation.images.top     # At least 1 image required by most policies
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [480, 640] }
+    image: { shape: [480, 640] }
 
 actions:
   - key: action                     # Required by all action policies
@@ -1144,7 +1176,7 @@ observations:
   - key: observation.images.wrist.right
     topic: /wrist_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
-    image: { resize: [512, 512] }
+    image: { shape: [512, 512] }
 ```
 
 

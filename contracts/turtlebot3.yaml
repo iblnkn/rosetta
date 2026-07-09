@@ -9,7 +9,7 @@ observations:
     topic: /camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [224, 224]
+      shape: [224, 224]
     align: {strategy: hold, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 
@@ -18,7 +18,7 @@ observations:
     topic: /overhead_camera/image_raw/compressed
     type: sensor_msgs/msg/CompressedImage
     image:
-      resize: [224, 224]
+      shape: [224, 224]
     align: {strategy: hold, stamp: header}
     qos: {reliability: best_effort, history: keep_last, depth: 10}
 

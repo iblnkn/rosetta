@@ -34,27 +34,27 @@ import threading
 import time
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
-from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
-from rcl_interfaces.msg import ParameterDescriptor
-
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.processor import RobotProcessorPipeline
-import rosetta.common.robot_client as _robot_client  # noqa: F401  — apply monkey-patches
-from lerobot.processor.converters import (
-    observation_to_transition,
-    transition_to_observation,
-)
-from rosetta_interfaces.action import RunPolicy
-
+from lerobot.processor.converters import (observation_to_transition,
+                                          transition_to_observation)
 from lerobot_robot_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import _TopicBridge
+from rcl_interfaces.msg import ParameterDescriptor
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.lifecycle import (LifecycleNode, LifecycleState,
+                             TransitionCallbackReturn)
+from rosetta_interfaces.action import RunPolicy
 
-from .common.ros2_utils import is_jazzy_or_newer
+import rosetta.common.robot_client as _robot_client  # noqa: F401  — apply monkey-patches
+
 from .common import processors as _processors  # noqa: F401
+from .common.policy_registry import (PolicyBundle, PolicyRegistryError,
+                                     load_registry, validate_pretrained)
+from .common.ros2_utils import is_jazzy_or_newer
 
 SERVER_STARTUP_TIMEOUT_SEC = 30.0
 SERVER_STARTUP_POLL_SEC = 0.5
@@ -110,7 +110,11 @@ class RosettaClientNode(LifecycleNode):
             "pretrained_name_or_path",
             "",
             ParameterDescriptor(
-                description="Path or HF repo ID of trained policy", read_only=True
+                description="Default path or HF repo ID of trained policy. "
+                "Per-goal override available via RunPolicy.pretrained_name_or_path. "
+                "Read-only: the node snapshots this at configure time; select "
+                "models dynamically via RunPolicy.policy_name / goal fields.",
+                read_only=True,
             ),
         )
         self.declare_parameter(
@@ -124,7 +128,8 @@ class RosettaClientNode(LifecycleNode):
             "policy_type",
             "act",
             ParameterDescriptor(
-                description="Policy architecture (act, diffusion, etc.)", read_only=True
+                description="Default policy architecture (act, diffusion, sns_diffusion, ...). "
+                "Registry entries and RunPolicy.policy_type override this."
             ),
         )
         self.declare_parameter(
@@ -134,23 +139,41 @@ class RosettaClientNode(LifecycleNode):
                 description="Device for policy inference (cuda, cpu)", read_only=True
             ),
         )
+        # actions_per_chunk / chunk_size_threshold / aggregate_fn_name are
+        # fallbacks for goals whose registry entry omits them (and for the
+        # registry-less HIL launch, which configures the client entirely
+        # through node params). Registry entries take precedence.
         self.declare_parameter(
             "actions_per_chunk",
-            50,
-            ParameterDescriptor(description="Number of actions to request per chunk"),
+            24,
+            ParameterDescriptor(
+                description="Number of actions to request per chunk. "
+                "Registry entries override this."
+            ),
         )
         self.declare_parameter(
             "chunk_size_threshold",
             0.5,
             ParameterDescriptor(
-                description="Queue threshold ratio to request new chunk (0.0-1.0)"
+                description="Queue threshold ratio to request new chunk (0.0-1.0). "
+                "Registry entries override this."
             ),
         )
         self.declare_parameter(
             "aggregate_fn_name",
             "weighted_average",
             ParameterDescriptor(
-                description="Action aggregation function (weighted_average, etc.)"
+                description="Action aggregation function (weighted_average, etc.). "
+                "Registry entries override this."
+            ),
+        )
+        self.declare_parameter(
+            "drop_chunk_prefix",
+            0,
+            ParameterDescriptor(
+                description="Extra leading points to drop from each incoming "
+                "chunk before merge (on top of the already-passed prefix). "
+                "0 = off. Registry entries override this."
             ),
         )
         self.declare_parameter(
@@ -190,17 +213,50 @@ class RosettaClientNode(LifecycleNode):
             ),
         )
         self.declare_parameter(
-            "observation_processor_path",
+            "policy_registry_path",
             "",
             ParameterDescriptor(
-                description="Path to saved RobotObservationProcessor JSON config. "
-                "If empty, uses identity processor (no transform).",
+                description="Path to policy registry YAML. "
+                "If non-empty, RunPolicy.policy_name can address bundled policy configs.",
                 read_only=True,
+            ),
+        )
+        self.declare_parameter(
+            "publish_debug_chunk",
+            False,
+            ParameterDescriptor(
+                description="Debug: publish each model-generated action chunk as a "
+                "multi-point trajectory_msgs/JointTrajectory (joint_names = action "
+                "features, one point per chunk step spaced by 1/fps). Inspection "
+                "only — the robot does not consume this topic.",
+            ),
+        )
+        self.declare_parameter(
+            "debug_chunk_topic",
+            "~/debug/generated_chunk",
+            ParameterDescriptor(
+                description="Topic for the debug generated-chunk JointTrajectory "
+                "(only used when publish_debug_chunk is true).",
+                read_only=True,
+            ),
+        )
+        self.declare_parameter(
+            "merge_dump_dir",
+            "",
+            ParameterDescriptor(
+                description="Debug: when non-empty, write one merge-event JSONL "
+                "per RunPolicy goal into this directory "
+                "(merge_<stamp>_<task>.jsonl; header record + one line per "
+                "action-queue merge). Consumed by tools/chunk_analysis. "
+                "Empty = off.",
             ),
         )
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract_path: str | None = None
         self._pretrained: str | None = None
+        self._active_pretrained: str = ""
+        self._active_policy_name: str = ""
+        self._policy_registry: dict[str, PolicyBundle] = {}
         self._server_process: subprocess.Popen | None = None
         self._client: RobotClient | None = None
         self._active_goal = None
@@ -211,6 +267,19 @@ class RosettaClientNode(LifecycleNode):
         self._rosetta_config: RosettaConfig | None = None
         self._bridge: _TopicBridge | None = None
 
+        # fps the local policy server subprocess was launched with (None when
+        # not running). Checked against the active contract at goal time so an
+        # fps-changing contract swap (or a deferred-contract startup guess)
+        # triggers a server relaunch instead of running with a stale
+        # environment_dt.
+        self._server_fps: int | None = None
+
+        # Debug: optional ChunkDebugPublisher (rosetta.common.chunk_debug)
+        # that echoes each model-generated action chunk as a multi-point
+        # JointTrajectory (see publish_debug_chunk). Created lazily on the
+        # first goal when the param is enabled.
+        self._debug_chunk_pub = None
+
         self.get_logger().info("Node created (unconfigured)")
 
     # -------------------- Lifecycle callbacks --------------------
@@ -220,33 +289,48 @@ class RosettaClientNode(LifecycleNode):
         self._contract_path = self.get_parameter("contract_path").value
         self._pretrained = self.get_parameter("pretrained_name_or_path").value
 
-        if not self._contract_path:
-            self.get_logger().error("contract_path parameter required")
-            return TransitionCallbackReturn.FAILURE
-        if not self._pretrained:
-            self.get_logger().error("pretrained_name_or_path parameter required")
-            return TransitionCallbackReturn.FAILURE
-        # Distinguish local paths from HF repo IDs (e.g. "user/model").
-        # Local paths start with /, ./, or ../
-        _looks_local = self._pretrained.startswith(("/", "./", "../"))
-        if _looks_local and not os.path.isdir(self._pretrained):
-            self.get_logger().error(
-                f"Local model path does not exist: {self._pretrained}. "
-                "Use a HuggingFace repo ID (e.g. 'user/model') or a valid local directory."
-            )
-            return TransitionCallbackReturn.FAILURE
+        # contract_path may be empty: when the registry owns contracts, the
+        # first goal's `bundle.contract_path` stands up the topic bridge via
+        # `_swap_contract_if_needed`. We only build the bridge eagerly here
+        # if a node-level default was supplied.
+        if self._pretrained:
+            err = validate_pretrained(self._pretrained)
+            if err is not None:
+                self.get_logger().error(f"Invalid default pretrained: {err}")
+                return TransitionCallbackReturn.FAILURE
 
-        # Create topic bridge (observation subscriptions + lifecycle action publishers)
-        # Bridge uses contract fps (unscaled) for ROS2 timing (watchdog, etc.)
-        # ROS2 clock respects use_sim_time and /clock, so watchdog operates in sim time
+        registry_path = self.get_parameter("policy_registry_path").value
+        if registry_path:
+            try:
+                self._policy_registry = load_registry(registry_path)
+            except PolicyRegistryError as e:
+                self.get_logger().error(f"Failed to load policy registry: {e}")
+                return TransitionCallbackReturn.FAILURE
+            self.get_logger().info(
+                f"Loaded policy registry from {registry_path} "
+                f"with {len(self._policy_registry)} entries: "
+                f"{sorted(self._policy_registry.keys())}"
+            )
+
+        # Eagerly build the topic bridge only if a node-level contract was
+        # supplied; otherwise defer to the first goal. Bridge uses contract
+        # fps (unscaled) for ROS2 timing (watchdog, etc.). ROS2 clock respects
+        # use_sim_time and /clock, so watchdog operates in sim time.
         is_classifier = self.get_parameter("is_classifier").value
-        self._rosetta_config = RosettaConfig(
-            id="rosetta",
-            config_path=self._contract_path,
-            is_classifier=is_classifier,
-        )
-        self._bridge = _TopicBridge(self._rosetta_config)
-        self._bridge.setup(self)
+        if self._contract_path:
+            self._rosetta_config = RosettaConfig(
+                id="rosetta",
+                config_path=self._contract_path,
+                is_classifier=is_classifier,
+            )
+            self._bridge = _TopicBridge(self._rosetta_config)
+            self._bridge.setup(self)
+        else:
+            self.get_logger().info(
+                "No node-level contract_path; bridge initialization deferred "
+                "to first goal (must resolve contract_path via registry or "
+                "RunPolicy goal field)."
+            )
 
         # Create action server (can receive goals but rejects when not active)
         self._action_server = ActionServer(
@@ -369,12 +453,33 @@ class RosettaClientNode(LifecycleNode):
         if self.get_parameter("is_classifier").value:
             module = "rosetta.common.classifier_server"
         else:
-            # Rosetta wrapper patches DiffusionPolicy.predict_action_chunk to
-            # handle observation queue population + image stacking internally,
-            # then delegates to the original lerobot serve().
+            # Registers SNSDiffusionConfig ("sns_diffusion") with PreTrainedConfig,
+            # then delegates to lerobot's async-inference serve().
             module = "rosetta.common.policy_server"
 
-        self.get_logger().info(f"Launching {module} on {host}:{port}...")
+        # Forward the control-loop fps so the server's environment_dt matches
+        # the client. Without this the server defaults to 30 Hz, which (a)
+        # makes TimedAction timestamps and FPSTracker logs wrong, and (b)
+        # miscalibrates the RTC server's queue-consumption simulation and
+        # inference_delay computation.
+        # When the contract is deferred (registry-owned), fps is unknown here;
+        # guess 30 and let _ensure_server_fps() relaunch on the first goal if
+        # the resolved contract disagrees.
+        contract_fps = (
+            self._rosetta_config.fps if self._rosetta_config is not None else 30
+        )
+        sim_multiplier = self.get_parameter("sim_time_multiplier").value
+        server_fps = max(1, int(contract_fps * sim_multiplier))
+
+        # Also forward inference_latency. The server's GetActions rate limiter
+        # pads each call to at least this many seconds. The default is 1/30
+        # regardless of --fps.
+        server_inference_latency = 1.0 / server_fps
+
+        self.get_logger().info(
+            f"Launching {module} on {host}:{port} "
+            f"(fps={server_fps}, inference_latency={server_inference_latency:.4f}s)..."
+        )
 
         cmd = [
             sys.executable,
@@ -382,8 +487,11 @@ class RosettaClientNode(LifecycleNode):
             module,
             f"--host={host}",
             f"--port={port}",
+            f"--fps={server_fps}",
+            f"--inference_latency={server_inference_latency}",
         ]
         self._server_process = subprocess.Popen(cmd, env=os.environ.copy())
+        self._server_fps = server_fps
         atexit.register(self._stop_policy_server)
 
         start_time = time.time()
@@ -406,6 +514,7 @@ class RosettaClientNode(LifecycleNode):
 
     def _stop_policy_server(self) -> None:
         """Terminate the policy server process."""
+        self._server_fps = None
         if self._server_process is None or self._server_process.poll() is not None:
             return
 
@@ -416,6 +525,68 @@ class RosettaClientNode(LifecycleNode):
         except subprocess.TimeoutExpired:
             self._server_process.kill()
         self._server_process = None
+
+    def _ensure_server_fps(self) -> str | None:
+        """Relaunch the local policy server if its fps no longer matches.
+
+        The server's fps (-> environment_dt) is a subprocess CLI arg, fixed
+        at launch. Two ways it can go stale: the server was started before
+        any contract was loaded (deferred registry-owned contract, fps
+        guessed as 30), or a goal swapped in a contract with a different
+        fps. Either way TimedAction timestamps and the RTC server's
+        queue-consumption simulation would run at the wrong rate, so
+        restart the server with the contract-derived fps.
+
+        Returns ``None`` on success or no-op, or an error string on failure.
+        """
+        if self._rosetta_config is None:
+            return None
+        if not self.get_parameter("launch_local_server").value:
+            # Remote server: its fps is the operator's responsibility.
+            return None
+
+        sim_multiplier = self.get_parameter("sim_time_multiplier").value
+        desired_fps = max(1, int(self._rosetta_config.fps * sim_multiplier))
+        if self._server_fps == desired_fps:
+            return None
+
+        self.get_logger().info(
+            f"Policy server fps ({self._server_fps}) does not match "
+            f"contract-derived fps ({desired_fps}); restarting server."
+        )
+        try:
+            self._stop_policy_server()
+            self._start_policy_server()
+        except Exception as e:
+            return f"Failed to restart policy server at {desired_fps} fps: {e}"
+        return None
+
+    def _ensure_debug_chunk_publisher(self) -> None:
+        """Lazily create the debug chunk publisher (no-op if present).
+
+        All publish mechanics live in rosetta.common.chunk_debug; the node
+        only owns the instance and the ``debug_chunk_topic`` param.
+        """
+        if self._debug_chunk_pub is not None:
+            return
+        from rosetta.common.chunk_debug import ChunkDebugPublisher
+
+        self._debug_chunk_pub = ChunkDebugPublisher(
+            self, self.get_parameter("debug_chunk_topic").value
+        )
+
+    def _publish_debug_chunk(
+        self, joint_names: list[str], positions: list[list[float]]
+    ) -> None:
+        """Publish one model-generated chunk (see chunk_debug.ChunkDebugPublisher).
+
+        fps comes from the active contract so each chunk step lands at
+        ``i / fps`` seconds. Best-effort, debug only.
+        """
+        if self._debug_chunk_pub is None:
+            return
+        fps = self._rosetta_config.fps if self._rosetta_config is not None else 30
+        self._debug_chunk_pub.publish(joint_names, positions, fps)
 
     def _on_goal(self, _goal_request) -> GoalResponse:
         """Accept or reject a client request to begin an action."""
@@ -442,15 +613,98 @@ class RosettaClientNode(LifecycleNode):
         task = goal_handle.request.prompt
         result = RunPolicy.Result()
 
-        self.get_logger().info(f"Starting: task='{task}'")
+        bundle, err = self._resolve_policy_bundle(goal_handle.request)
+        if err is not None:
+            result.success = False
+            result.message = err
+            self.get_logger().error(err)
+            return self._finish(goal_handle, result)
+
+        swap_err = self._swap_contract_if_needed(bundle.contract_path)
+        if swap_err is not None:
+            result.success = False
+            result.message = swap_err
+            self.get_logger().error(swap_err)
+            return self._finish(goal_handle, result)
+
+        fps_err = self._ensure_server_fps()
+        if fps_err is not None:
+            result.success = False
+            result.message = fps_err
+            self.get_logger().error(fps_err)
+            return self._finish(goal_handle, result)
+
+        self._active_pretrained = bundle.pretrained_name_or_path
+        self._active_policy_name = goal_handle.request.policy_name
+
+        self.get_logger().info(
+            f"Starting: task='{task}' "
+            f"policy_name='{self._active_policy_name}' "
+            f"policy_type={bundle.policy_type} "
+            f"pretrained={bundle.pretrained_name_or_path}"
+        )
 
         try:
-            config = self._build_config(task)
+            config = self._build_config(task, bundle)
             client = RobotClient(config)
             self._client = client
-            processor = self._build_observation_processor()
-            if processor is not None:
-                client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
+            processor = self._build_observation_processor(bundle.contract_path)
+            client.robot = _ObsProcessingRobotWrapper(client.robot, processor)
+
+            # Debug: echo each model-generated chunk as a JointTrajectory.
+            if self.get_parameter("publish_debug_chunk").value:
+                self._ensure_debug_chunk_publisher()
+                client._debug_chunk_cb = self._publish_debug_chunk
+
+            # Extra leading points to drop from each incoming chunk before merge
+            # (registry entry overrides the node-level default).
+            client._drop_chunk_prefix = int(
+                bundle.drop_chunk_prefix
+                if bundle.drop_chunk_prefix is not None
+                else self.get_parameter("drop_chunk_prefix").value
+            )
+
+            # Debug: per-goal merge-event dump (one JSONL per goal, so each
+            # file is a single clean run for tools/chunk_analysis).
+            dump_dir = str(self.get_parameter("merge_dump_dir").value or "").strip()
+            if dump_dir:
+                from rosetta.common.chunk_debug import MergeDumpWriter, new_dump_path
+
+                try:
+                    # Action-feature order = the dump's pose vector layout;
+                    # the offline viewers label joints from this.
+                    action_features = list(client.robot.action_features)
+                except Exception:
+                    action_features = None
+                try:
+                    client._merge_dump = MergeDumpWriter(
+                        new_dump_path(dump_dir, task),
+                        header={
+                            "task": task,
+                            "policy": bundle.pretrained_name_or_path,
+                            "contract_path": bundle.contract_path,
+                            "action_features": action_features,
+                            "actions_per_chunk": getattr(
+                                config, "actions_per_chunk", None
+                            ),
+                            "chunk_size_threshold": getattr(
+                                config, "chunk_size_threshold", None
+                            ),
+                            "drop_chunk_prefix": client._drop_chunk_prefix,
+                            "fps": (
+                                self._rosetta_config.fps
+                                if self._rosetta_config is not None
+                                else None
+                            ),
+                        },
+                    )
+                    self.get_logger().info(
+                        f"Merge-event dump for this goal: {client._merge_dump.path}"
+                    )
+                except Exception as e:
+                    self.get_logger().warning(
+                        f"Merge-event dump disabled for this goal: {e}"
+                    )
 
             if not client.start():
                 result.success = False
@@ -508,10 +762,182 @@ class RosettaClientNode(LifecycleNode):
             with client.latest_action_lock:
                 feedback.published_actions = max(0, client.latest_action)
             feedback.status = "executing"
+            feedback.active_pretrained = self._active_pretrained
+            feedback.active_policy_name = self._active_policy_name
             goal_handle.publish_feedback(feedback)
 
-    def _build_config(self, task: str) -> RobotClientConfig:
-        """Build RobotClientConfig from ROS2 parameters."""
+    def _resolve_policy_bundle(
+        self, request: RunPolicy.Goal
+    ) -> tuple[PolicyBundle | None, str | None]:
+        """Resolve request into a PolicyBundle, applying explicit > registry > default.
+
+        Returns ``(bundle, None)`` on success or ``(None, error_message)`` on failure.
+        """
+        # Start from registry entry if a name was supplied.
+        if request.policy_name:
+            if request.policy_name not in self._policy_registry:
+                available = sorted(self._policy_registry.keys()) or "<empty registry>"
+                return None, (
+                    f"Unknown policy_name '{request.policy_name}'. "
+                    f"Available: {available}"
+                )
+            bundle = PolicyBundle(**vars(self._policy_registry[request.policy_name]))
+        else:
+            bundle = PolicyBundle(
+                pretrained_name_or_path="",
+                policy_type=self.get_parameter("policy_type").value,
+            )
+
+        # Explicit goal fields override registry/default.
+        if request.pretrained_name_or_path:
+            bundle.pretrained_name_or_path = request.pretrained_name_or_path
+        if request.policy_type:
+            bundle.policy_type = request.policy_type
+
+        # Final fallback for pretrained path: node default.
+        if not bundle.pretrained_name_or_path and self._pretrained:
+            bundle.pretrained_name_or_path = self._pretrained
+
+        if not bundle.pretrained_name_or_path:
+            return None, (
+                "No pretrained_name_or_path: supply RunPolicy.pretrained_name_or_path, "
+                "a registered policy_name, or set the node default param"
+            )
+
+        err = validate_pretrained(bundle.pretrained_name_or_path)
+        if err is not None:
+            return None, f"Rejected goal: {err}"
+
+        entry_hint = (
+            f"registry entry '{request.policy_name}'"
+            if request.policy_name
+            else "the resolved policy"
+        )
+
+        # Resolve contract first: registry entry > launch-time node default. We
+        # fall back to the launch-time param (not self._contract_path) so
+        # that a goal without a registry override always swings back to the
+        # node-default contract rather than inheriting a previously-swapped
+        # one. With the registry-owns-contracts pattern the launch-time
+        # default may be empty, in which case the registry entry is the
+        # only source. The actual bridge swap (when this differs from the
+        # currently-loaded contract, or when no bridge exists yet) happens
+        # at the start of _execute.
+        if not bundle.contract_path:
+            bundle.contract_path = self.get_parameter("contract_path").value
+
+        if not bundle.contract_path:
+            return None, (
+                f"No contract_path resolved for {entry_hint}. "
+                "Set 'contract_path' on the registry entry or pass "
+                "contract_path:= at launch."
+            )
+
+        if not os.path.isfile(bundle.contract_path):
+            return None, (
+                f"Contract file not found for {entry_hint}: "
+                f"{bundle.contract_path}"
+            )
+
+        # Resolve observation processor: the unified contract's inline
+        # `processor:` block is the only source (legacy single-role contracts
+        # are reference-only and not deployable). Required: running without a
+        # processor causes image-shape mismatches, so reject the goal here.
+        spec, spec_err = self._load_inline_processor(bundle.contract_path)
+        if spec_err is not None:
+            return None, (
+                f"Invalid observation processor for {entry_hint}: {spec_err}"
+            )
+        if spec is None:
+            return None, (
+                f"No observation processor resolved for {entry_hint}. "
+                "Deployable contracts must be unified and carry an inline "
+                "`processor:` block; legacy single-role contracts are "
+                "reference-only. Running without a processor causes "
+                "image-shape mismatches."
+            )
+
+        # Consistency gate: contract <-> checkpoint <-> processor <-> chunk size.
+        # Warn-only by default; rejects the goal when ROSETTA_CONTRACT_STRICT is set.
+        gate_err = self._check_bundle_consistency(bundle)
+        if gate_err:
+            return None, gate_err
+
+        return bundle, None
+
+    def _check_bundle_consistency(self, bundle: PolicyBundle) -> str | None:
+        """Best-effort consistency check for a resolved bundle.
+
+        Compares the (record/base view of the) contract against the checkpoint
+        ``config.json`` (image keys, state/action dims), the observation
+        processor (resize vs contract image shape), and ``actions_per_chunk`` vs
+        the model's ``n_action_steps``. Logs warnings; returns an error string
+        (rejecting the goal) only when ``ROSETTA_CONTRACT_STRICT`` is set and a
+        hard error is found. Never raises.
+        """
+        try:
+            import json
+            import os
+
+            from rosetta.common import contract_validation as V
+            from rosetta.common.contract import (ROLE_RECORD,
+                                                 is_unified_contract,
+                                                 load_contract,
+                                                 load_processor_spec,
+                                                 load_unified_contract)
+
+            cpath = bundle.contract_path
+            if not cpath or not os.path.isfile(cpath):
+                return None
+
+            contract = (
+                load_unified_contract(cpath, ROLE_RECORD)
+                if is_unified_contract(cpath)
+                else load_contract(cpath)
+            )
+            res = V.CheckResult(context="deploy: contract vs checkpoint/processor")
+
+            cfg = None
+            cfg_path = os.path.join(bundle.pretrained_name_or_path, "config.json")
+            if os.path.isfile(cfg_path):
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+                res.merge(V.check_contract_vs_checkpoint(contract, cfg))
+                apc = bundle.actions_per_chunk
+                if apc is None:
+                    apc = self.get_parameter("actions_per_chunk").value
+                res.merge(V.check_chunk_consistency(cfg.get("n_action_steps"), apc))
+
+            # Processor: the unified contract's inline block (the only
+            # deployable form; bundle resolution already rejected anything
+            # else, so this load cannot fail here — and if it ever does, the
+            # enclosing catch-all logs the check as skipped.
+            spec = (
+                load_processor_spec(cpath) if is_unified_contract(cpath) else None
+            )
+            if spec is not None:
+                res.merge(
+                    V.check_processor_vs_contract(
+                        spec,
+                        contract,
+                        policy_crop_shape=(cfg or {}).get("crop_shape"),
+                        policy_resize_shape=(cfg or {}).get("resize_shape"),
+                    )
+                )
+
+            for w in res.warnings:
+                self.get_logger().warning(f"[contract] {w}")
+            for e in res.errors:
+                self.get_logger().error(f"[contract] {e}")
+
+            if res.errors and V.strict_from_env():
+                return "Contract consistency check failed: " + "; ".join(res.errors)
+        except Exception as e:  # never block deploy on the gate itself
+            self.get_logger().warning(f"[contract] consistency check skipped: {e}")
+        return None
+
+    def _build_config(self, task: str, bundle: PolicyBundle) -> RobotClientConfig:
+        """Build RobotClientConfig from ROS2 parameters and a resolved PolicyBundle."""
         robot_config = RosettaConfig(
             id="rosetta",
             config_path=self._contract_path,
@@ -545,17 +971,34 @@ class RosettaClientNode(LifecycleNode):
                 f"control loop fps={control_loop_fps}Hz (wall time)"
             )
 
+        # Bundle fields override node-level defaults when provided.
+        actions_per_chunk = (
+            bundle.actions_per_chunk
+            if bundle.actions_per_chunk is not None
+            else self.get_parameter("actions_per_chunk").value
+        )
+        chunk_size_threshold = (
+            bundle.chunk_size_threshold
+            if bundle.chunk_size_threshold is not None
+            else self.get_parameter("chunk_size_threshold").value
+        )
+        aggregate_fn_name = (
+            bundle.aggregate_fn_name
+            if bundle.aggregate_fn_name is not None
+            else self.get_parameter("aggregate_fn_name").value
+        )
+
         config_kwargs = dict(
             robot=robot_config,
             server_address=self.get_parameter("server_address").value,
-            policy_type=self.get_parameter("policy_type").value,
-            pretrained_name_or_path=self._pretrained,
+            policy_type=bundle.policy_type,
+            pretrained_name_or_path=bundle.pretrained_name_or_path,
             policy_device=self.get_parameter("policy_device").value,
             task=task,
             fps=control_loop_fps,  # Wall-time polling rate for control_loop()
-            actions_per_chunk=self.get_parameter("actions_per_chunk").value,
-            chunk_size_threshold=self.get_parameter("chunk_size_threshold").value,
-            aggregate_fn_name=self.get_parameter("aggregate_fn_name").value,
+            actions_per_chunk=actions_per_chunk,
+            chunk_size_threshold=chunk_size_threshold,
+            aggregate_fn_name=aggregate_fn_name,
         )
 
         # obs_similarity_atol: controls observation filtering in the policy server.
@@ -589,6 +1032,8 @@ class RosettaClientNode(LifecycleNode):
         """Clean up and set goal status."""
         self._client = None
         self._active_goal = None
+        self._active_pretrained = ""
+        self._active_policy_name = ""
 
         if goal_handle.is_cancel_requested:
             goal_handle.canceled()
@@ -600,19 +1045,120 @@ class RosettaClientNode(LifecycleNode):
         self.get_logger().info(f"Finished: {result.message}")
         return result
 
-    def _build_observation_processor(self) -> RobotProcessorPipeline | None:
-        """Load observation processor from ROS2 parameter, or return None."""
-        processor_path = self.get_parameter("observation_processor_path").value
+    def _swap_contract_if_needed(self, target_contract_path: str) -> str | None:
+        """Rebuild the topic bridge if the resolved contract differs from current.
 
-        if not processor_path:
-            self.get_logger().debug("No observation_processor_path set, skipping")
+        Called between goals (``_on_goal`` rejects when ``_active_goal`` is set,
+        so no goal is in flight here). On a swap we send a safety action on the
+        old bridge, tear it down, and build a new ``RosettaConfig`` +
+        ``_TopicBridge`` against ``target_contract_path``.
+
+        Returns ``None`` on success or no-op, or an error string on failure.
+        On failure the node is left without a bridge and ``_contract_path``
+        is cleared, so the next goal (any target) rebuilds the bridge
+        instead of no-oping on a stale path.
+
+        Note: subscribers will see the lifecycle action publishers disappear
+        and reappear; the new bridge needs a brief warmup before
+        ``StreamBuffer`` returns real (non-zero) observations.
+        """
+        # The no-op is only valid while a live bridge backs the current path;
+        # after a failed swap self._bridge is None and a rebuild is required.
+        if (
+            target_contract_path == self._contract_path
+            and self._bridge is not None
+        ):
             return None
 
-        self.get_logger().info(f"Loading observation processor from: {processor_path}")
+        self.get_logger().info(
+            f"Swapping contract: {self._contract_path} -> {target_contract_path}"
+        )
 
-        return RobotProcessorPipeline.from_pretrained(
-            processor_path,
-            config_filename="robot_observation_processor.json",
+        if self._bridge is not None:
+            try:
+                self._bridge.send_safety_action()
+            except Exception as e:
+                self.get_logger().warning(
+                    f"send_safety_action() failed during contract swap: {e}"
+                )
+            self._bridge.teardown()
+            self._bridge = None
+            self._rosetta_config = None
+
+        try:
+            is_classifier = self.get_parameter("is_classifier").value
+            new_config = RosettaConfig(
+                id="rosetta",
+                config_path=target_contract_path,
+                is_classifier=is_classifier,
+            )
+            new_bridge = _TopicBridge(new_config)
+            new_bridge.setup(self)
+            # setup() creates lifecycle publishers in the inactive state. The
+            # node is already active here (swap only runs between goals), so
+            # the framework will not auto-activate them — do it ourselves,
+            # otherwise pub.publish() is a silent no-op.
+            if new_bridge.is_active:
+                new_bridge.activate_publishers()
+        except Exception as e:
+            # No bridge is backing any contract now — clear the path so the
+            # same-path no-op above cannot skip the rebuild on the next goal.
+            self._contract_path = None
+            return (
+                f"Failed to load contract '{target_contract_path}': {e}. "
+                "Node has no active bridge; the next goal will rebuild it."
+            )
+
+        self._rosetta_config = new_config
+        self._bridge = new_bridge
+        self._contract_path = target_contract_path
+        self.get_logger().info(f"Contract swap complete: {target_contract_path}")
+        return None
+
+    @staticmethod
+    def _load_inline_processor(
+        contract_path: str | None,
+    ) -> tuple[dict | None, str | None]:
+        """Load the unified contract's inline ``processor:`` spec.
+
+        Returns ``(spec, None)`` when present, ``(None, None)`` when the
+        contract is not unified or carries no processor block, and
+        ``(None, error)`` when the contract or its processor block is
+        invalid or unreadable — so the goal can be rejected with the real
+        cause instead of a generic "no processor" message.
+        """
+        if not contract_path:
+            return None, None
+        from rosetta.common.contract import (is_unified_contract,
+                                             load_processor_spec)
+
+        try:
+            if not is_unified_contract(contract_path):
+                return None, None
+            return load_processor_spec(contract_path), None
+        except Exception as e:
+            return None, str(e)
+
+    def _build_observation_processor(
+        self, contract_path: str | None
+    ) -> RobotProcessorPipeline:
+        """Build the observation processor from the unified contract's inline
+        ``processor:`` block — the only deployable form.
+        ``_resolve_policy_bundle`` guarantees it is present.
+        """
+        from rosetta.common.contract import load_processor_spec
+        from rosetta.common.processors import build_observation_processor
+
+        spec = load_processor_spec(contract_path)
+        if spec is None:
+            raise ValueError(
+                f"No observation processor available for contract {contract_path}"
+            )
+        self.get_logger().info(
+            "Building observation processor from inline contract spec."
+        )
+        return build_observation_processor(
+            spec,
             to_transition=observation_to_transition,
             to_output=transition_to_observation,
         )

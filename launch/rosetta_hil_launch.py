@@ -75,7 +75,9 @@ def generate_launch_description():
     rosetta_share = get_package_share_directory('rosetta')
 
     default_contract = os.path.join(rosetta_share, 'contracts', 'so_101_hil.yaml')  # fallback only
-    default_rosetta_params = os.path.join(rosetta_share, 'params', 'rosetta_client.yaml')
+    # rosetta_client.yaml lives in sns_robot_learning (pure-Python, not a ROS
+    # package, so no share dir). Pin the absolute SNS source path.
+    default_rosetta_params = '/root/ws_rl/src/sns_robot_learning/params/rosetta_client.yaml'
     default_recorder_params = os.path.join(rosetta_share, 'params', 'episode_recorder.yaml')
     default_hil_params = os.path.join(rosetta_share, 'params', 'rosetta_hil_manager.yaml')
 

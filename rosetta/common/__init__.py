@@ -75,14 +75,25 @@ from .contract_utils import (
     zeros_for_spec,
 )
 
-# ROS2 utilities
-from .ros2_utils import (
-    dot_get,
-    dot_set,
-    get_message_timestamp_ns,
-    qos_profile_from_dict,
-    stamp_from_header_ns,
-)
+# ROS2 utilities. Guarded so the contract loading / validation modules stay
+# importable without rclpy (training conda env, CI) — contract_validation and
+# the sns_robot_learning contract tests rely on this.
+try:
+    from .ros2_utils import (
+        dot_get,
+        dot_set,
+        get_message_timestamp_ns,
+        qos_profile_from_dict,
+        stamp_from_header_ns,
+    )
+except ModuleNotFoundError as e:  # pragma: no cover - no rclpy in ROS-free envs
+    # Only a missing rclpy is expected here; anything else (a broken
+    # transitive import, a typo inside ros2_utils) must fail loudly.
+    if (e.name or "").partition(".")[0] != "rclpy":
+        raise
+    _HAVE_ROS2_UTILS = False
+else:
+    _HAVE_ROS2_UTILS = True
 
 __all__ = [
     # Contract types and loading
@@ -127,10 +138,16 @@ __all__ = [
     "iter_teleop_input_specs",
     "StreamBuffer",
     "zeros_for_spec",
-    # ROS2 utilities
-    "dot_get",
-    "dot_set",
-    "get_message_timestamp_ns",
-    "qos_profile_from_dict",
-    "stamp_from_header_ns",
 ]
+
+# The ROS2 utility names are public only when rclpy is present (guarded
+# import above); advertising them unconditionally broke star-imports in the
+# exact ROS-free environments the guard exists for.
+if _HAVE_ROS2_UTILS:
+    __all__ += [
+        "dot_get",
+        "dot_set",
+        "get_message_timestamp_ns",
+        "qos_profile_from_dict",
+        "stamp_from_header_ns",
+    ]

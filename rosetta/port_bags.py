@@ -40,50 +40,54 @@ Usage:
         --repo-id my_org/my_dataset \\
         --contract /path/to/contract.yaml \\
         --push-to-hub
+
+    # Unified NAS convention (no --root/--repo-id): saves to
+    #   /mnt/nas/dataset/robot_learning/lerobot/<date>/<time>_dataset_<robot>_<task>_<user>
+    python -m rosetta.port_bags \\
+        --raw-dir /path/to/bags \\
+        --contract /path/to/contract.yaml \\
+        --task-config configs/task/tossing.yaml \\
+        --user-name alice
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
+import shutil
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import rosbag2_py
 import yaml
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.utils.utils import get_elapsed_time_in_days_hours_minutes_seconds
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.utils.utils import get_elapsed_time_in_days_hours_minutes_seconds
-
-from .common.converters import DTYPES, decode_value, get_decoder_dtype
-from .common.contract import (
-    ActionStreamSpec,
-    ObservationStreamSpec,
-    StreamSpec,
-    load_contract,
-)
-from .common.contract_utils import (
-    build_feature,
-    get_namespaced_names,
-    iter_specs,
-    StreamBuffer,
-    zeros_for_spec,
-)
+from .common.contract import (ROLE_RECORD, ActionStreamSpec,
+                              ObservationStreamSpec, StreamSpec,
+                              is_unified_contract, load_contract,
+                              load_processor_spec, load_unified_contract)
+from .common.contract_utils import (StreamBuffer, build_features,
+                                    get_namespaced_names, iter_specs,
+                                    zeros_for_spec)
+from .common.contract_validation import check_processor_vs_contract
+from .common.converters import decode_value, get_decoder_dtype
+from .common.decoders import _nearest_resize
 from .common.ros2_utils import get_message_timestamp_ns
 
 # Type alias for processors (optional import)
 try:
     from lerobot.processor import RobotProcessorPipeline
-    from lerobot.processor.converters import (
-        observation_to_transition,
-        transition_to_observation,
-        robot_action_to_transition,
-        transition_to_robot_action,
-    )
+    from lerobot.processor.converters import (observation_to_transition,
+                                              robot_action_to_transition,
+                                              transition_to_observation,
+                                              transition_to_robot_action)
 
     PROCESSORS_AVAILABLE = True
 except ImportError:
@@ -94,11 +98,17 @@ except ImportError:
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
 BAG_CUSTOM_DATA_KEY = "custom_data"
 BAG_PROMPT_KEY = "lerobot.operator_prompt"
+
+# Shared NAS location used when neither --root nor --repo-id is given. The dataset
+# is saved under DATASET_NAS_ROOT/<date>/<time>_dataset_<robot_type>_<task>_<user>.
+DATASET_NAS_ROOT = Path("/mnt/nas/dataset/robot_learning/lerobot")
+# Timezone used for the date/time stamp in dataset folder names (UTC+8), so the
+# naming is stable regardless of the host's local timezone.
+DATASET_TZ = timezone(timedelta(hours=8))
 # Import decoders/encoders/processors to register them
 from .common import decoders as _decoders  # noqa: F401
 from .common import encoders as _encoders  # noqa: F401
 from .common import processors as _processors  # noqa: F401
-
 
 # ---------- Bag discovery ----------
 
@@ -134,6 +144,42 @@ def _read_prompt(meta: dict[str, Any]) -> str:
     if isinstance(custom_data, dict):
         return custom_data.get(BAG_PROMPT_KEY, "")
     return ""
+
+
+def _read_task_name(task_config_path: Path) -> str:
+    """Read the `task_name` field from a task config YAML (e.g. configs/task/*.yaml)."""
+    with task_config_path.open() as f:
+        cfg = yaml.safe_load(f) or {}
+    task_name = cfg.get("task_name")
+    if not task_name:
+        raise ValueError(
+            f"No 'task_name' field found in task config {task_config_path}"
+        )
+    return str(task_name)
+
+
+def _sanitize_name_part(value: str) -> str:
+    """Make a string safe for use inside a dataset directory name.
+
+    Underscores are replaced with dashes so they don't collide with the
+    underscore separators in the dataset name (e.g. "so_101" -> "so-101").
+    """
+    return str(value).strip().replace("/", "-").replace(" ", "-").replace("_", "-")
+
+
+def _default_user_name() -> str | None:
+    """``getpass.getuser()`` that returns ``None`` instead of raising.
+
+    ``getuser()`` raises when the uid has no passwd entry and none of the
+    USER/LOGNAME-style env vars are set (slim containers, scrubbed SLURM
+    environments). Resolved lazily — never as an argparse ``default=``,
+    which would crash every invocation at parser build time — and the
+    naming convention falls back to "unknown" downstream.
+    """
+    try:
+        return getpass.getuser()
+    except Exception:
+        return None
 
 
 def _get_topic_types(reader: rosbag2_py.SequentialReader) -> dict[str, str]:
@@ -174,37 +220,13 @@ def _build_buffers(
 def _build_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
     """Build LeRobot feature definitions from contract specs.
 
-    Specs sharing the same key are aggregated (names concatenated for vectors).
+    Delegates the contract -> feature mapping to
+    ``contract_utils.build_features`` (the single source shared with the
+    validators), then appends the dataset-writer frame-boundary markers.
     """
-    # Group specs by output key
-    by_key: dict[str, list[StreamSpec]] = {}
-    for spec in specs:
-        by_key.setdefault(spec.key, []).append(spec)
+    features = build_features(specs)
 
-    features = {}
-    for key, key_specs in by_key.items():
-        first = key_specs[0]
-        dtype = DTYPES[first.msg_type]
-
-        if dtype in ("video", "image"):
-            # Images: no aggregation
-            features[key] = build_feature(first)
-        elif dtype == "string":
-            # Strings: no aggregation
-            features[key] = build_feature(first)
-        else:
-            # Numeric: aggregate names from all specs
-            all_names = []
-            for spec in key_specs:
-                all_names.extend(get_namespaced_names(spec))
-            n = len(all_names) or 1
-            features[key] = {
-                "dtype": dtype,
-                "shape": (n,),
-                "names": all_names if all_names else None,
-            }
-
-    # Frame boundary markers
+    # Frame boundary markers (dataset-writer concern, not contract-derived)
     features["is_first"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_last"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_terminal"] = {"dtype": "bool", "shape": (1,), "names": None}
@@ -435,6 +457,32 @@ def _sample_frame(
     return frame
 
 
+def _conform_images_to_specs(
+    frame: dict[str, Any],
+    image_specs: list[ObservationStreamSpec],
+) -> None:
+    """Resize a frame's image entries to the contract's declared shape, in place.
+
+    Decoders return native camera resolution; the dataset image feature is
+    declared from ``spec.image_shape`` (see ``build_feature``), and
+    ``zeros_for_spec`` placeholders are emitted at that shape. On the
+    no-observation-processor path nothing else resizes the frame, so without
+    this step native-resolution frames would mismatch the declared feature and
+    ``add_frame`` would reject them. Nearest-neighbor matches the historical
+    decode-time resize, so datasets ported before the decoder change stay
+    consistent. Already-correct frames (incl. ``zeros_for_spec``) short-circuit
+    in ``_nearest_resize``.
+    """
+    for spec in image_specs:
+        img = frame.get(spec.key)
+        if img is None or spec.image_shape is None:
+            continue
+        h, w = spec.image_shape
+        frame[spec.key] = _nearest_resize(
+            np.asarray(img, dtype=np.uint8), int(h), int(w)
+        )
+
+
 def _stream_frames_from_bag(
     bag_dir: Path,
     specs: list[StreamSpec],
@@ -471,6 +519,13 @@ def _stream_frames_from_bag(
 
     topic_types = _get_topic_types(reader)
     buffers = _build_buffers(specs, topic_types)
+
+    # Without an observation processor to crop/resize, image frames come out at
+    # native camera resolution and must be conformed to the contract's declared
+    # feature shape before add_frame (decoders no longer resize).
+    image_specs = [
+        s for s in specs if isinstance(s, ObservationStreamSpec) and s.is_image
+    ]
 
     # Filter reader to only yield messages for contract topics, skipping all others
     reader.set_filter(rosbag2_py.StorageFilter(topics=list(buffers.keys())))
@@ -517,6 +572,9 @@ def _stream_frames_from_bag(
             else:
                 # Direct sampling (original path, no processor overhead)
                 frame = _sample_frame(current_tick_ns, buffers)
+
+            if obs_processor is None:
+                _conform_images_to_specs(frame, image_specs)
 
             frame["is_first"] = np.array([frames_emitted == 0], dtype=bool)
             frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
@@ -565,6 +623,9 @@ def _stream_frames_from_bag(
         else:
             frame = _sample_frame(current_tick_ns, buffers)
 
+        if obs_processor is None:
+            _conform_images_to_specs(frame, image_specs)
+
         frame["is_first"] = np.array([frames_emitted == 0], dtype=bool)
         frame["is_last"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
         frame["is_terminal"] = np.array([current_tick_idx == n_frames - 1], dtype=bool)
@@ -582,7 +643,7 @@ def _stream_frames_from_bag(
 
 def port_bags(
     raw_dir: Path,
-    repo_id: str,
+    repo_id: str | None,
     contract_path: Path,
     root: Path | None = None,
     push_to_hub: bool = False,
@@ -591,14 +652,19 @@ def port_bags(
     vcodec: str = "libsvtav1",
     observation_processor_path: Path | None = None,
     action_processor_path: Path | None = None,
+    task: str | None = None,
+    user_name: str | None = None,
 ):
     """
     Port ROS2 bags to LeRobot dataset format.
 
     Args:
         raw_dir: Directory containing bag subdirectories.
-        repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset").
-        contract_path: Path to Rosetta contract YAML.
+        repo_id: HuggingFace repository ID (e.g., "my_org/my_dataset"). If both
+            this and ``root`` are None, the dataset is saved under the shared NAS
+            location using the unified naming convention (see ``DATASET_NAS_ROOT``).
+        contract_path: Path to Rosetta contract YAML. A copy is saved inside the
+            output dataset directory for provenance.
         root: Output directory for dataset. Defaults to ~/.cache/huggingface/lerobot.
         push_to_hub: Whether to upload to HuggingFace Hub after porting.
         num_shards: Total number of shards for parallel processing.
@@ -607,8 +673,17 @@ def port_bags(
             'libx264'/'h264' (fast), 'hevc', 'h264_nvenc' (GPU).
         observation_processor_path: Path to saved RobotObservationProcessor config directory.
         action_processor_path: Path to saved RobotActionProcessor config directory.
+        task: Task name used in the unified naming convention (typically read from a
+            task config YAML). Falls back to "unknown" if not provided.
+        user_name: User name used in the unified naming convention. Falls back to
+            "unknown" if not provided.
     """
-    contract = load_contract(contract_path)
+    # Unified contracts carry record + inference + processor in one file; port
+    # bags with the record-role view. Legacy single-role contracts still work.
+    if is_unified_contract(contract_path):
+        contract = load_unified_contract(contract_path, ROLE_RECORD)
+    else:
+        contract = load_contract(contract_path)
     specs = list(iter_specs(contract))
     features = _build_features(specs)
 
@@ -634,6 +709,29 @@ def port_bags(
             to_transition=observation_to_transition,
             to_output=transition_to_observation,
         )
+    elif is_unified_contract(contract_path):
+        # No explicit processor dir: use the contract's inline processor (if any)
+        # so the crop/resize baked into the dataset matches what deploy applies.
+        inline_spec = load_processor_spec(contract_path)
+        if inline_spec is not None:
+            if not PROCESSORS_AVAILABLE:
+                raise ImportError(
+                    "Contract has an inline processor but the LeRobot processor "
+                    "module is unavailable. Install lerobot with processor support."
+                )
+            # Unconditionally strict (unlike the warn-by-default deploy gate):
+            # processor output is baked into every frame here, and a
+            # processor/contract shape drift would fail every episode at
+            # add_frame — after the dataset dir was already created.
+            check_processor_vs_contract(inline_spec, contract).raise_or_warn(
+                strict=True
+            )
+            logging.info("Building observation processor from inline contract spec.")
+            obs_processor = _processors.build_observation_processor(
+                inline_spec,
+                to_transition=observation_to_transition,
+                to_output=transition_to_observation,
+            )
 
     if action_processor_path:
         logging.info("Loading action processor from %s", action_processor_path)
@@ -643,6 +741,17 @@ def port_bags(
             to_transition=robot_action_to_transition,
             to_output=transition_to_robot_action,
         )
+
+    if obs_processor is None:
+        n_image_specs = sum(
+            1 for s in specs if isinstance(s, ObservationStreamSpec) and s.is_image
+        )
+        if n_image_specs:
+            logging.info(
+                "No observation processor given; resizing %d image stream(s) to the "
+                "contract image_shape (nearest-neighbor, no crop).",
+                n_image_specs,
+            )
 
     all_bag_dirs = find_bag_dirs(raw_dir)
     total_bags = len(all_bag_dirs)
@@ -668,8 +777,32 @@ def port_bags(
         logging.warning("No bags to process in this shard")
         return
 
-    # LeRobot uses root directly as dataset path, so append repo_id
-    dataset_root = root / repo_id if root else None
+    # Resolve the output location.
+    if repo_id is None and root is None:
+        # Unified convention: no explicit root/repo-id, so save under the shared
+        # NAS root with a date/time-stamped, self-describing dataset name:
+        #   DATASET_NAS_ROOT/<YYYY.MM.DD>/<HH.MM.SS>_dataset_<robot>_<task>_<user>
+        if num_shards is not None:
+            logging.warning(
+                "Unified naming convention used with sharding: each shard computes "
+                "its own timestamp and will write to a different directory. Pass "
+                "--root/--repo-id to keep shards together."
+            )
+        now = datetime.now(DATASET_TZ)
+        dataset_name = (
+            f"{now:%H.%M.%S}_dataset_"
+            f"{_sanitize_name_part(contract.robot_type)}_"
+            f"{_sanitize_name_part(task or 'unknown')}_"
+            f"{_sanitize_name_part(user_name or 'unknown')}"
+        )
+        dataset_root = DATASET_NAS_ROOT / f"{now:%Y.%m.%d}" / dataset_name
+        repo_id = dataset_name
+        logging.info("No --root/--repo-id given; saving dataset to %s", dataset_root)
+    else:
+        repo_id = repo_id or raw_dir.name
+        # LeRobot uses root directly as dataset path, so append repo_id.
+        dataset_root = root / repo_id if root else None
+
     lerobot_dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=dataset_root,
@@ -678,6 +811,50 @@ def port_bags(
         features=features,
         vcodec=vcodec,
     )
+
+    # Save a copy of the contract alongside the dataset for provenance/reproducibility.
+    try:
+        dataset_dir = Path(lerobot_dataset.root)
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        contract_copy = dataset_dir / contract_path.name
+        shutil.copy2(contract_path, contract_copy)
+        logging.info("Saved a copy of the contract to %s", contract_copy)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Failed to copy contract into dataset directory: %s", e)
+
+    # Record the arguments used to generate this dataset for reproducibility.
+    try:
+        dataset_dir = Path(lerobot_dataset.root)
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        args_record = {
+            "raw_dir": str(raw_dir),
+            "repo_id": repo_id,
+            "contract": str(contract_path),
+            "root": str(root) if root is not None else None,
+            "push_to_hub": push_to_hub,
+            "num_shards": num_shards,
+            "shard_index": shard_index,
+            "vcodec": vcodec,
+            "observation_processor": (
+                str(observation_processor_path)
+                if observation_processor_path is not None
+                else None
+            ),
+            "action_processor": (
+                str(action_processor_path)
+                if action_processor_path is not None
+                else None
+            ),
+            "task": task,
+            "user_name": user_name,
+            "generated_at": datetime.now(DATASET_TZ).isoformat(),
+        }
+        args_path = dataset_dir / "args.yaml"
+        with args_path.open("w") as f:
+            yaml.safe_dump(args_record, f, sort_keys=False)
+        logging.info("Saved generation arguments to %s", args_path)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("Failed to write args.yaml into dataset directory: %s", e)
 
     start_time = time.time()
     num_episodes = len(bag_dirs)
@@ -756,7 +933,11 @@ def main():
         "--repo-id",
         type=str,
         default=None,
-        help="HuggingFace repository ID (e.g., my_org/my_dataset). Defaults to raw-dir name.",
+        help=(
+            "HuggingFace repository ID (e.g., my_org/my_dataset). If --root is set "
+            "but this is omitted, defaults to the raw-dir name. If neither --root "
+            "nor --repo-id is set, the unified NAS naming convention is used."
+        ),
     )
     parser.add_argument(
         "--contract", type=Path, required=True, help="Rosetta contract YAML path"
@@ -803,15 +984,35 @@ def main():
         default=None,
         help="Path to saved RobotActionProcessor config directory",
     )
+    parser.add_argument(
+        "--task-config",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a task config YAML (e.g. configs/task/tossing.yaml). The "
+            "'task_name' field is used in the unified dataset naming convention."
+        ),
+    )
+    parser.add_argument(
+        "--user-name",
+        type=str,
+        default=None,
+        help=(
+            "User name used in the unified dataset naming convention "
+            "(default: current system user, or 'unknown' when it cannot "
+            "be resolved)."
+        ),
+    )
 
     args = parser.parse_args()
 
-    repo_id = args.repo_id or args.raw_dir.name
+    task = _read_task_name(args.task_config) if args.task_config else None
+    user_name = args.user_name or _default_user_name()
 
     try:
         port_bags(
             raw_dir=args.raw_dir,
-            repo_id=repo_id,
+            repo_id=args.repo_id,
             contract_path=args.contract,
             root=args.root,
             push_to_hub=args.push_to_hub,
@@ -820,6 +1021,8 @@ def main():
             vcodec=args.vcodec,
             observation_processor_path=args.observation_processor,
             action_processor_path=args.action_processor,
+            task=task,
+            user_name=user_name,
         )
     except KeyboardInterrupt:
         logging.info("\nInterrupted by user")

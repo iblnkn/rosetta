@@ -232,8 +232,12 @@ def decode_ros_image(
 
 @register_decoder("sensor_msgs/msg/Image", dtype="video")
 def _dec_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """Decode sensor_msgs/Image to HWC uint8 RGB."""
-    return decode_ros_image(msg, spec.image_encoding, spec.image_resize)
+    """Decode sensor_msgs/Image to HWC uint8 RGB.
+
+    Note: contract ``image.shape`` only declares the dataset feature shape.
+    Actual crop/resize is handled by the observation processor pipeline.
+    """
+    return decode_ros_image(msg, spec.image_encoding, resize_hw=None)
 
 
 @register_decoder("sensor_msgs/msg/CompressedImage", dtype="video")
@@ -251,8 +255,8 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     else:
         img = np.array(Image.open(io.BytesIO(msg.data)).convert("RGB"))
 
-    if spec.image_resize:
-        img = _nearest_resize(img, spec.image_resize[0], spec.image_resize[1])
+    # Note: contract ``image.shape`` only declares the dataset feature shape.
+    # Actual crop/resize is handled by the observation processor pipeline.
 
     return img.astype(np.uint8)
 
@@ -428,6 +432,41 @@ def _dec_point_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
     return np.asarray(
         [float(dot_get(msg, name)) for name in spec.names], dtype=np.float64
+    )
+
+
+# =============================================================================
+# PoseStamped Decoder
+# =============================================================================
+
+
+@register_decoder("geometry_msgs/msg/PoseStamped", dtype="float64")
+def _dec_pose_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+    """Decode geometry_msgs/PoseStamped.
+
+    Same selector syntax as the PoseStamped encoder - the stamped wrapper is
+    transparent, so encode/decode share one names convention.
+    With selector names: extracts specified dotted paths from the inner pose
+      e.g. ['position.x', 'orientation.w']
+    Without names: returns [position(3), orientation_quat(4)]
+    """
+    if not spec.names:
+        return np.array(
+            [
+                msg.pose.position.x,
+                msg.pose.position.y,
+                msg.pose.position.z,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z,
+                msg.pose.orientation.w,
+            ],
+            dtype=np.float64,
+        )
+
+    return np.asarray(
+        [float(dot_get(msg.pose, name)) for name in spec.names],
+        dtype=np.float64,
     )
 
 

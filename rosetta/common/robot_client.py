@@ -9,6 +9,7 @@ Monkey-patches ``RobotClient`` to:
 * Adjust ``control_loop_observation`` must-go logic for threshold-based refill.
 """
 
+import collections
 import pickle  # nosec
 import threading
 import time
@@ -23,12 +24,18 @@ from lerobot.async_inference.robot_client import RobotClient
 from lerobot.async_inference.helpers import (
     RawObservation,
     TimedAction,
-    TimedObservation,
 )
 from lerobot.robots import openarm_follower  # noqa: F401  — register plugin
 from lerobot.transport import (
     services_pb2,  # type: ignore
 )
+
+from rosetta.common import chunk_debug
+from rosetta.common.obs_history import TimedObservationWithHistory
+
+# Rolling obs-history window length on the client. Must be >= any deployed
+# policy's n_obs_steps. The server trims to policy.config.n_obs_steps.
+_OBS_HISTORY_MAXLEN = 4
 
 # ---------------------------------------------------------------------------
 # 1. Patch RobotClient.__init__ — add _observation_pending event
@@ -40,6 +47,18 @@ def _patched_init(self, config):
     _original_init(self, config)
     # Prevent sending observations back-to-back while waiting for actions
     self._observation_pending = threading.Event()
+    # Rolling window of raw observations captured at control rate (30 Hz).
+    # Sent along with each observation so the server can rebuild a 33 ms-spaced
+    # n_obs_steps history instead of relying on its stale inter-chunk deque.
+    self._obs_history: collections.deque[RawObservation] = collections.deque(
+        maxlen=_OBS_HISTORY_MAXLEN
+    )
+    # Extra leading points to drop from each incoming chunk before merge (on top
+    # of the already-passed prefix). Set per-goal by the node; 0 = off.
+    self._drop_chunk_prefix = 0
+    # Per-goal merge-event dump writer (chunk_debug.MergeDumpWriter); attached
+    # by the node when its merge_dump_dir param is set. None = off.
+    self._merge_dump = None
 
 
 RobotClient.__init__ = _patched_init
@@ -72,12 +91,37 @@ def _patched_aggregate_action_queues(
             if action.get_timestep() > latest_action
         }
 
-        # Filter incoming actions to only future timesteps
+        # Filter incoming actions to future timesteps. Beyond the already-passed
+        # prefix (timestep <= latest_action), drop an extra `k` leading points so
+        # the queue keeps only the more-settled tail of each fresh chunk.
+        k = max(0, getattr(self, "_drop_chunk_prefix", 0))
+        cutoff = latest_action + k
         incoming_by_timestep = {
             action.get_timestep(): action
             for action in incoming_actions
-            if action.get_timestep() > latest_action
+            if action.get_timestep() > cutoff
         }
+
+        # Debug: how many leading chunk points were dropped before merge. With
+        # k == 0 these are only the already-passed prefix (timestep <=
+        # latest_action, executed during the inference/network delay); with
+        # k > 0 the first `k` future points are also dropped intentionally.
+        dropped = len(incoming_actions) - len(incoming_by_timestep)
+        if incoming_actions:
+            first_ts = incoming_actions[0].get_timestep()
+            last_ts = incoming_actions[-1].get_timestep()
+            self.logger.info(
+                f"Chunk merge: dropped {dropped}/{len(incoming_actions)} "
+                f"leading points (prefix_k={k}) | incoming timesteps "
+                f"{first_ts}:{last_ts} | latest_action={latest_action} | "
+                f"cutoff={cutoff} | kept {len(incoming_by_timestep)}"
+            )
+            if not incoming_by_timestep:
+                self.logger.warning(
+                    f"drop_chunk_prefix={k} dropped the ENTIRE incoming chunk "
+                    f"(timesteps {first_ts}:{last_ts} <= cutoff {cutoff}); "
+                    "the action queue may starve. Lower drop_chunk_prefix."
+                )
 
         # Start with existing queue items
         merged: dict[int, TimedAction] = dict(current_action_queue)
@@ -88,10 +132,24 @@ def _patched_aggregate_action_queues(
                 merged[ts] = TimedAction(
                     timestamp=new_action.get_timestamp(),
                     timestep=ts,
-                    action=aggregate_fn(merged[ts].get_action(), new_action.get_action()),
+                    action=aggregate_fn(
+                        merged[ts].get_action(), new_action.get_action()
+                    ),
                 )
             else:
                 merged[ts] = new_action
+
+        # Debug: dump existing/incoming/merged per-timestep for offline merge
+        # inspection (the node attaches a per-goal writer when merge_dump_dir
+        # is set; None = off).
+        if self._merge_dump:
+            self._merge_dump.dump(
+                latest_action,
+                current_action_queue,
+                incoming_by_timestep,
+                merged,
+                incoming_actions,
+            )
 
         # Rebuild queue in timestep order
         future_action_queue = Queue()
@@ -136,6 +194,10 @@ def _patched_receive_actions(self, verbose: bool = False):
             timed_actions = pickle.loads(actions_chunk.data)  # nosec
             deserialize_time = time.perf_counter() - deserialize_start
 
+            # Debug: echo the freshly generated chunk (pre-merge) if the node
+            # attached a publisher (publish_debug_chunk param).
+            chunk_debug.emit_generated_chunk(self, timed_actions)
+
             # Log device type of received actions
             if len(timed_actions) > 0:
                 received_device = timed_actions[0].get_action().device.type
@@ -146,7 +208,9 @@ def _patched_receive_actions(self, verbose: bool = False):
             if client_device != "cpu":
                 for timed_action in timed_actions:
                     if timed_action.get_action().device.type != client_device:
-                        timed_action.action = timed_action.get_action().to(client_device)
+                        timed_action.action = timed_action.get_action().to(
+                            client_device
+                        )
                 self.logger.debug(f"Converted actions to device: {client_device}")
             else:
                 self.logger.debug(f"Actions kept on device: {client_device}")
@@ -169,7 +233,9 @@ def _patched_receive_actions(self, verbose: bool = False):
                 incoming_timesteps = [a.get_timestep() for a in timed_actions]
 
                 first_action_timestep = timed_actions[0].get_timestep()
-                server_to_client_latency = (receive_time - timed_actions[0].get_timestamp()) * 1000
+                server_to_client_latency = (
+                    receive_time - timed_actions[0].get_timestamp()
+                ) * 1000
 
                 self.logger.info(
                     f"Received action chunk for step #{first_action_timestep} | "
@@ -280,21 +346,29 @@ RobotClient._ready_to_send_observation = _patched_ready_to_send_observation
 # ---------------------------------------------------------------------------
 
 
-def _patched_control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
+def _patched_control_loop_observation(
+    self, task: str, verbose: bool = False
+) -> RawObservation:
     try:
         # Get serialized observation bytes from the function
         start_time = time.perf_counter()
 
-        raw_observation: RawObservation = self.robot.get_observation()
-        raw_observation["task"] = task
+        # Reuse the obs captured this tick by control_loop so the "current"
+        # obs and the history tail are the same snapshot.
+        assert self._obs_history, (
+            "_obs_history is empty; control_loop_observation was called "
+            "before control_loop captured this tick."
+        )
+        raw_observation = self._obs_history[-1]
 
         with self.latest_action_lock:
             latest_action = self.latest_action
 
-        observation = TimedObservation(
+        observation = TimedObservationWithHistory(
             timestamp=time.time(),
             observation=raw_observation,
             timestep=max(latest_action, 0),
+            history=list(self._obs_history),  # oldest first; current obs last
         )
 
         obs_capture_time = time.perf_counter() - start_time
@@ -310,8 +384,12 @@ def _patched_control_loop_observation(self, task: str, verbose: bool = False) ->
                 if self.action_chunk_size > 0
                 else -1.0
             )
-            at_threshold = (not queue_empty) and (queue_ratio <= self._chunk_size_threshold)
-            observation.must_go = (self.must_go.is_set() and queue_empty) or at_threshold
+            at_threshold = (not queue_empty) and (
+                queue_ratio <= self._chunk_size_threshold
+            )
+            observation.must_go = (
+                self.must_go.is_set() and queue_empty
+            ) or at_threshold
 
         self._observation_pending.set()  # block further observations until actions arrive
         try:
@@ -320,14 +398,18 @@ def _patched_control_loop_observation(self, task: str, verbose: bool = False) ->
             self._observation_pending.clear()
             raise
 
-        self.logger.debug(f"QUEUE SIZE: {current_queue_size} (Must go: {observation.must_go})")
+        self.logger.debug(
+            f"QUEUE SIZE: {current_queue_size} (Must go: {observation.must_go})"
+        )
         if observation.must_go:
             # must-go event will be set again after receiving actions
             self.must_go.clear()
 
         if verbose:
             # Calculate comprehensive FPS metrics
-            fps_metrics = self.fps_tracker.calculate_fps_metrics(observation.get_timestamp())
+            fps_metrics = self.fps_tracker.calculate_fps_metrics(
+                observation.get_timestamp()
+            )
 
             self.logger.info(
                 f"Obs #{observation.get_timestep()} | "
@@ -364,6 +446,18 @@ def _patched_control_loop(self, task: str, verbose: bool = False):
 
     while self.running:
         control_loop_start = time.perf_counter()
+
+        # Capture one observation per tick into the rolling history buffer.
+        # This preserves the 33 ms spacing that the diffusion policy was
+        # trained with. Cheap: underlying ROS subscriptions already run at
+        # 30 Hz, get_observation() just assembles the latest cached messages.
+        tick_raw_obs = self.robot.get_observation()
+        tick_raw_obs["task"] = task
+        # Stamp for server-side spacing / freshness diagnostics. Not a
+        # contract feature, so raw_observation_to_observation drops it.
+        tick_raw_obs["_capture_time"] = time.time()
+        self._obs_history.append(tick_raw_obs)
+
         # Control loop: (1) Performing actions, when available
         if self.actions_available():
             _performed_action = self.control_loop_action(verbose)
@@ -372,9 +466,16 @@ def _patched_control_loop(self, task: str, verbose: bool = False):
         if self._ready_to_send_observation():
             _captured_observation = self.control_loop_observation(task, verbose)
 
-        self.logger.debug(f"Control loop (ms): {(time.perf_counter() - control_loop_start) * 1000:.2f}")
+        self.logger.debug(
+            f"Control loop (ms): {(time.perf_counter() - control_loop_start) * 1000:.2f}"
+        )
         # Dynamically adjust sleep time to maintain the desired control frequency
-        time.sleep(max(0, self.config.environment_dt - (time.perf_counter() - control_loop_start)))
+        time.sleep(
+            max(
+                0,
+                self.config.environment_dt - (time.perf_counter() - control_loop_start),
+            )
+        )
 
     return _captured_observation, _performed_action
 

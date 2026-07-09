@@ -168,6 +168,43 @@ def _enc_point_stamped(
 
 
 # =============================================================================
+# PoseStamped Encoder
+# =============================================================================
+
+
+@register_encoder("geometry_msgs/msg/PoseStamped")
+def _enc_pose_stamped(
+    action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | None = None
+) -> Any:
+    """Encode to geometry_msgs/PoseStamped.
+
+    Requires selector.names like ['position.x', 'orientation.w'].
+    Same selector syntax as Pose - the stamped wrapper is transparent.
+    """
+    if not spec.names:
+        raise ValueError(
+            "PoseStamped encoder requires selector.names "
+            "(e.g., ['position.x', 'position.y', 'position.z', "
+            "'orientation.x', 'orientation.y', 'orientation.z', "
+            "'orientation.w'])"
+        )
+
+    msg_cls = get_message("geometry_msgs/msg/PoseStamped")
+    msg = msg_cls()
+    _set_header_stamp(msg, stamp_ns)
+
+    arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
+
+    if len(spec.names) != len(arr):
+        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+
+    for i, path in enumerate(spec.names):
+        dot_set(msg.pose, path, arr[i])
+
+    return msg
+
+
+# =============================================================================
 # Scalar Encoders
 # =============================================================================
 

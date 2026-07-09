@@ -24,18 +24,61 @@ PyTorch tensors and keys containing "image"), these steps work directly
 on the numpy uint8 (H, W, C) images that Rosetta produces.
 """
 
+import json
+import tempfile
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 import cv2
 import numpy as np
-
-from lerobot.processor.pipeline import (
-    ObservationProcessorStep,
-    ProcessorStepRegistry,
-)
-
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
+from lerobot.processor.pipeline import (ObservationProcessorStep,
+                                        ProcessorStepRegistry,
+                                        RobotProcessorPipeline)
+
+OBSERVATION_PROCESSOR_CONFIG_FILENAME = "robot_observation_processor.json"
+
+
+def build_observation_processor(
+    spec: dict[str, Any],
+    *,
+    to_transition: Callable | None = None,
+    to_output: Callable | None = None,
+) -> RobotProcessorPipeline:
+    """Build a RobotProcessorPipeline from an in-memory processor spec.
+
+    Mirrors ``RobotProcessorPipeline.from_pretrained`` for the case where the
+    pipeline definition is inlined in a unified contract (the ``processor``
+    block) rather than stored as a ``robot_observation_processor.json`` dir.
+    The spec is materialised to a temp file and loaded through the normal
+    ``from_pretrained`` path, so registry resolution, override/format
+    validation, and converter defaults are identical to the on-disk path.
+
+    Args:
+        spec: ``{"steps": [{"registry_name": ..., "config": {...}}, ...]}``.
+        to_transition / to_output: optional transition converters, forwarded
+            to ``from_pretrained`` (defaults match the on-disk path).
+    """
+    if not isinstance(spec, dict) or "steps" not in spec:
+        raise ValueError(
+            "Observation processor spec must be a mapping with a 'steps' list; "
+            f"got {type(spec).__name__}"
+        )
+
+    payload = dict(spec)
+    payload.setdefault("name", "RobotObservationProcessor")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        (Path(tmp_dir) / OBSERVATION_PROCESSOR_CONFIG_FILENAME).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        return RobotProcessorPipeline.from_pretrained(
+            tmp_dir,
+            config_filename=OBSERVATION_PROCESSOR_CONFIG_FILENAME,
+            to_transition=to_transition,
+            to_output=to_output,
+        )
 
 
 @ProcessorStepRegistry.register("numpy_image_crop_resize")

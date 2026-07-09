@@ -29,19 +29,11 @@ from typing import TYPE_CHECKING, Any, Iterable, TypeVar
 
 import numpy as np
 
+from .contract import (DEPTH_ENCODINGS, ActionSpec, ActionStreamSpec,
+                       AlignSpec, Contract, ContractValidationError,
+                       ObservationSpec, ObservationStreamSpec, ResamplePolicy,
+                       StreamSpec)
 from .converters import DTYPES, ENCODERS, get_decoder_dtype
-from .contract import (
-    ActionSpec,
-    ActionStreamSpec,
-    AlignSpec,
-    Contract,
-    ContractValidationError,
-    DEPTH_ENCODINGS,
-    ObservationSpec,
-    ObservationStreamSpec,
-    ResamplePolicy,
-    StreamSpec,
-)
 
 if TYPE_CHECKING:
     pass  # All types imported above
@@ -65,10 +57,14 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
         raise ValueError(f"Spec '{spec.key}' has no dtype")
 
     if dtype in ("video", "image"):
-        if not spec.image_resize:
-            raise ValueError(f"Image spec '{spec.key}' must have image_resize")
-        h, w = spec.image_resize
-        return {"dtype": "video", "shape": (h, w, 3), "names": ["height", "width", "channels"]}
+        if not spec.image_shape:
+            raise ValueError(f"Image spec '{spec.key}' must have image_shape")
+        h, w = spec.image_shape
+        return {
+            "dtype": "video",
+            "shape": (h, w, 3),
+            "names": ["height", "width", "channels"],
+        }
 
     if dtype == "string":
         return {"dtype": "string", "shape": (1,), "names": None}
@@ -77,6 +73,133 @@ def build_feature(spec: ObservationStreamSpec | ActionStreamSpec) -> dict[str, A
     n = len(spec.names) if spec.names else 1
     names = list(spec.names) if spec.names else None
     return {"dtype": dtype, "shape": (n,), "names": names}
+
+
+def build_features(specs: Iterable[StreamSpec]) -> dict[str, dict[str, Any]]:
+    """Build the LeRobot feature dict for a list of contract stream specs.
+
+    Specs sharing the same ``key`` are aggregated: numeric vectors concatenate
+    their namespaced names (in spec order); images/strings take the first spec.
+    This is the single source of the contract -> dataset-feature mapping, reused
+    by ``port_bags`` (dataset writing) and the contract validators (so a config's
+    derived layout is identical to what porting produces). Frame-boundary markers
+    (``is_first``/``is_last``/``is_terminal``) are added by the dataset writer,
+    not here, since they are not contract-derived.
+    """
+    by_key: dict[str, list[StreamSpec]] = {}
+    for spec in specs:
+        by_key.setdefault(spec.key, []).append(spec)
+
+    features: dict[str, dict[str, Any]] = {}
+    for key, key_specs in by_key.items():
+        first = key_specs[0]
+        dtype = DTYPES[first.msg_type]
+
+        if dtype in ("video", "image", "string"):
+            # No aggregation for images/strings.
+            features[key] = build_feature(first)
+        else:
+            # Numeric: aggregate names from all specs sharing this key.
+            all_names: list[str] = []
+            for spec in key_specs:
+                all_names.extend(get_namespaced_names(spec))
+            n = len(all_names) or 1
+            features[key] = {
+                "dtype": dtype,
+                "shape": (n,),
+                "names": all_names if all_names else None,
+            }
+
+    return features
+
+
+def _aggregate_namespaced_names(
+    items: list[tuple[str, str, list[str]]]
+) -> dict[str, list[str]]:
+    """Aggregate selector names per key, namespaced exactly as the dataset
+    writer does it (shared :func:`_topic_namespace_map` policy): namespaces
+    derive from multi-topic keys but are applied globally **by topic**, so a
+    single-topic key whose topic also feeds a multi-topic key is prefixed
+    here just as it is in the written dataset. ``items`` is a list of
+    ``(key, topic, names)`` tuples.
+    """
+    by_key: dict[str, list[tuple[str, list[str]]]] = {}
+    for key, topic, names in items:
+        by_key.setdefault(key, []).append((topic, names))
+
+    ns_map = _topic_namespace_map(
+        [[topic for topic, _ in group] for group in by_key.values()]
+    )
+
+    out: dict[str, list[str]] = {}
+    for key, group in by_key.items():
+        agg: list[str] = []
+        for topic, names in group:
+            ns = ns_map.get(topic, "")
+            agg.extend(f"{ns}.{n}" if ns else n for n in names)
+        out[key] = agg
+    return out
+
+
+def contract_interface(contract: Contract) -> dict[str, Any]:
+    """ROS-free extraction of a contract's data interface.
+
+    Unlike ``build_features(iter_specs(...))`` this does **not** resolve dtypes
+    (which requires the ROS decoder registry / rclpy), so it is usable in the
+    training environment and CI where ROS is absent. It returns enough to
+    validate a contract against a LeRobot ``dataset.meta`` or a checkpoint
+    ``config.json``: image keys+shapes and the aggregated, namespaced vector
+    names (hence dims) for the state/action keys.
+
+    Returns a mapping::
+
+        {
+          "robot_type": str,
+          "fps": int,
+          "images": {"<obs key>": [H, W], ...},
+          "state":   {"<obs key>": {"names": [...], "dim": N}, ...},
+          "actions": {"<action key>": {"names": [...], "dim": N}, ...},
+        }
+    """
+    images: dict[str, list[int]] = {}
+    numeric_items: list[tuple[str, str, list[str]]] = []
+    for o in contract.observations:
+        if o.key.startswith("observation.images."):
+            shape = (o.image or {}).get("shape") or (o.image or {}).get("resize")
+            if not shape or len(shape) != 2:
+                raise ContractValidationError(
+                    f"Image observation '{o.key}' must specify image.shape [height, width]"
+                )
+            images[o.key] = [int(shape[0]), int(shape[1])]
+        else:
+            numeric_items.append(
+                (o.key, o.topic, list((o.selector or {}).get("names", [])))
+            )
+
+    action_items = [
+        (a.key, a.publish_topic, list((a.selector or {}).get("names", [])))
+        for a in contract.actions
+    ]
+
+    # dim mirrors build_features' `len(names) or 1`: the dataset writer
+    # stores a nameless numeric stream as shape (1,), so the validators
+    # must expect 1, not 0.
+    state = {
+        k: {"names": v, "dim": len(v) or 1}
+        for k, v in _aggregate_namespaced_names(numeric_items).items()
+    }
+    actions = {
+        k: {"names": v, "dim": len(v) or 1}
+        for k, v in _aggregate_namespaced_names(action_items).items()
+    }
+
+    return {
+        "robot_type": contract.robot_type,
+        "fps": contract.fps,
+        "images": images,
+        "state": state,
+        "actions": actions,
+    }
 
 
 # =============================================================================
@@ -96,7 +219,7 @@ def zeros_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
         - Vectors: (N,) with dtype from spec
     """
     if spec.is_image:
-        h, w = spec.image_resize
+        h, w = spec.image_shape
         return np.zeros((h, w, spec.image_channels), dtype=np.uint8)
 
     dtype_map = {
@@ -156,17 +279,21 @@ class StreamBuffer:
         with self._lock:
             if self.last_ts is None:
                 return None
-            
+
             # Handle clock resets (e.g., simulation restart)
             # If buffered timestamp is in the future, clock was reset - clear stale data
             if self.last_ts > tick_ns:
                 self._clear_unsafe()  # Already holding lock
                 return None
-            
+
             if self.policy == ResamplePolicy.DROP.value:
-                return self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
+                return (
+                    self.last_val if (self.last_ts > tick_ns - self.step_ns) else None
+                )
             if self.policy == ResamplePolicy.ASOF.value:
-                return self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
+                return (
+                    self.last_val if (tick_ns - self.last_ts <= self.tol_ns) else None
+                )
             return self.last_val  # hold is default
 
     def _clear_unsafe(self) -> None:
@@ -255,6 +382,38 @@ def _derive_namespaces(topics: list[str]) -> dict[str, str]:
     return {t: ".".join([p for p in t.split("/") if p]) for t in topics}
 
 
+def _topic_namespace_map(groups: list[list[str]]) -> dict[str, str]:
+    """Build the global ``topic -> namespace`` map the dataset writer applies.
+
+    ``groups`` holds each key's topic list. Only multi-topic groups derive
+    namespaces, but the merged map is applied **by topic** to every spec —
+    so a topic that also feeds a single-topic key is prefixed there too.
+    This is the single source of the namespacing policy, shared by the
+    dataset writer (:func:`_apply_namespaces`) and the ROS-free validator
+    path (:func:`_aggregate_namespaced_names`); the two must agree or the
+    validators flag drift on datasets their own contract produced.
+
+    A topic appearing in two multi-topic groups whose derivations disagree
+    would make the merged map depend on key order (the old silent-overwrite
+    behavior); that ambiguity is rejected instead.
+    """
+    out: dict[str, str] = {}
+    for topics in groups:
+        if len(topics) <= 1:
+            continue
+        derived = _derive_namespaces(topics)
+        for topic, ns in derived.items():
+            if topic in out and out[topic] != ns:
+                raise ContractValidationError(
+                    f"Topic '{topic}' is aggregated under multiple keys with "
+                    f"conflicting derived namespaces ('{out[topic]}' vs "
+                    f"'{ns}'); dataset feature names would depend on key "
+                    f"order. Rename the topics or keys to disambiguate."
+                )
+        out.update(derived)
+    return out
+
+
 def get_namespaced_names(spec: StreamSpec) -> list[str]:
     """Get selector names with namespace prefix applied."""
     if spec.namespace:
@@ -289,17 +448,18 @@ def _apply_namespaces(
         key = key_getter(original)
         by_key.setdefault(key, []).append((topic, kwargs, original))
 
-    # Compute namespaces for multi-topic groups
-    topic_to_namespace: dict[str, str] = {}
     for key, group in by_key.items():
-        if len(group) > 1:
-            if forbid_image_aggregation and group[0][1].get("is_image"):
-                raise ContractValidationError(
-                    f"Cannot aggregate multiple image topics under key '{key}'. "
-                    f"Each image must have a unique key."
-                )
-            topics = [topic for topic, _, _ in group]
-            topic_to_namespace.update(_derive_namespaces(topics))
+        if len(group) > 1 and forbid_image_aggregation and group[0][1].get("is_image"):
+            raise ContractValidationError(
+                f"Cannot aggregate multiple image topics under key '{key}'. "
+                f"Each image must have a unique key."
+            )
+
+    # Namespaces derive from multi-topic groups but apply globally by topic
+    # (shared policy with the validator path — see _topic_namespace_map).
+    topic_to_namespace = _topic_namespace_map(
+        [[topic for topic, _, _ in group] for group in by_key.values()]
+    )
 
     # Yield specs with namespace
     for topic, kwargs, _ in items:
@@ -331,17 +491,20 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             )
 
         # Parse image config
-        resize = None
+        img_shape = None
         encoding = "bgr8"
         if o.image:
-            r = o.image.get("resize")
+            # "shape" is the canonical key; "resize" is accepted for backward compat
+            r = o.image.get("shape") or o.image.get("resize")
             if r and len(r) == 2:
-                resize = (int(r[0]), int(r[1]))
+                img_shape = (int(r[0]), int(r[1]))
             if "encoding" in o.image:
                 encoding = str(o.image["encoding"]).lower()
 
-        if is_image and resize is None:
-            raise ContractValidationError(f"Image observation '{o.key}' must specify image.resize")
+        if is_image and img_shape is None:
+            raise ContractValidationError(
+                f"Image observation '{o.key}' must specify image.shape [height, width]"
+            )
 
         channels = _validate_image_encoding(encoding)
         if o.image and "channels" in o.image:
@@ -373,7 +536,7 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             names=names,
             fps=contract.fps,
             is_image=is_image,
-            image_resize=resize,
+            image_shape=img_shape,
             image_encoding=encoding,
             image_channels=channels,
             resample_policy=al.strategy,
@@ -466,7 +629,6 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
     yield from _apply_namespaces(items, lambda o: "action", ActionStreamSpec)
 
 
-
 def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
     """Yield specs from extended categories (rewards, signals, info, complementary_data)."""
     extended = [
@@ -488,7 +650,7 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
                 names=names,
                 fps=contract.fps,
                 is_image=False,
-                image_resize=None,
+                image_shape=None,
                 image_encoding="",
                 image_channels=0,
                 resample_policy=al.strategy,
@@ -502,7 +664,9 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
             )
 
 
-def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
+def iter_specs(
+    contract: Contract,
+) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
     """Yield all stream specs (observations, actions, extended)."""
     yield from iter_observation_specs(contract)
     yield from iter_action_specs(contract)
@@ -545,7 +709,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             names=names,
             fps=contract.fps,
             is_image=False,
-            image_resize=None,
+            image_shape=None,
             image_encoding="",
             image_channels=0,
             resample_policy=al.strategy,
