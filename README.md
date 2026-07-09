@@ -163,54 +163,60 @@ lerobot-train \
 
 ```bash
 # Terminal 1: Start the client
-ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=contract.yaml \
-    pretrained_name_or_path:=my-org/my-policy
+ros2 launch rosetta rosetta_client_launch.py contract_path:=contract.yaml
 ```
 
 ```bash
-# Terminal 2: Run the policy
+# Terminal 2: Run the policy — the model is selected per goal, not at launch
 ros2 action send_goal /rosetta_client/run_policy \
-    rosetta_interfaces/action/RunPolicy "{prompt: 'pick up red block'}"
+    rosetta_interfaces/action/RunPolicy \
+    "{prompt: 'pick up red block', pretrained_name_or_path: 'my-org/my-policy', policy_type: 'act'}"
 ```
 
 ### Inference on Emily in Isaac Sim
 
 > DO NOT launch the sns_autonomy!
+>
+> Note: use the unified contracts in `sns_robot_learning/configs/rosetta_contracts/`
+> (`emily.yaml`, `emily_left_arm.yaml`, `emily_right_arm.yaml`). The legacy
+> single-role contracts under `rosetta_contracts/inference/` are frozen
+> reference material and not deployable.
 
-Launch the Rosetta client with the appropriate contract and pretrained policy checkpoint:
-> Note: the legacy single-role contracts under `rosetta_contracts/inference/` are frozen
-> reference material; prefer the unified contracts in
-> `sns_robot_learning/configs/rosetta_contracts/` for new deployments.
+Launch the Rosetta client. The default params file
+(`sns_robot_learning/params/rosetta_client.yaml`) already points at the policy
+registry, and `contract_path` may be omitted entirely — each registry entry
+carries its own contract and the node rebuilds its topic bridge at goal time:
 
-* ACT
-  ```bash
-  ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily.yaml \
-    pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
-    policy_type:=act
-  # isaac
-  ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac.yaml \
-    pretrained_name_or_path:=src/policies/emily/pickplace_sim_act/checkpoints/last/pretrained_model \
-    policy_type:=act
-  ```
-* Diffusion Policy
-  ```bash
-  ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily.yaml \
-    pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
-    policy_type:=diffusion
-  # isaac
-  ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/root/ws_rl/src/sns_robot_learning/rosetta_contracts/inference/emily_isaac.yaml \
-    pretrained_name_or_path:=src/policies/emily/pickplace_sim_dp/checkpoints/last/pretrained_model \
-    policy_type:=diffusion
-  ```
-* Start inference:
-  ```
-  ros2 action send_goal /rosetta_client/run_policy     rosetta_interfaces/action/RunPolicy "{prompt: ''}"
-  ```
+```bash
+ros2 launch rosetta rosetta_client_launch.py
+# or pin a contract at launch:
+ros2 launch rosetta rosetta_client_launch.py \
+    contract_path:=/root/ws_rl/src/sns_robot_learning/configs/rosetta_contracts/emily.yaml
+```
+
+The model is **not** a launch argument — it is selected per `RunPolicy` goal.
+Either by registry name (recommended; see
+`sns_robot_learning/params/policy_registry.yaml`):
+
+```bash
+ros2 action send_goal /rosetta_client/run_policy \
+    rosetta_interfaces/action/RunPolicy \
+    "{prompt: 'pick and place', policy_name: 'my_registry_entry'}" --feedback
+```
+
+or by explicit checkpoint path (overrides the registry):
+
+```bash
+ros2 action send_goal /rosetta_client/run_policy \
+    rosetta_interfaces/action/RunPolicy \
+    "{prompt: 'pick and place',
+      pretrained_name_or_path: '/root/ws_rl/src/models/<run>/checkpoints/last/pretrained_model',
+      policy_type: 'sns_diffusion'}" --feedback
+```
+
+`--feedback` streams `active_policy_name` and `active_pretrained` so you can
+confirm the right model loaded. See `sns_robot_learning/README.md` for
+registry authoring details.
 
 
 ---
@@ -539,17 +545,28 @@ huggingface-cli upload my-org/my-policy \
 
 The `rosetta_client_node` is a convenience node that wraps LeRobot's inference pipeline in ROS2 actions. It lets you start and stop policy execution via `ros2 action send_goal`, with feedback on inference progress. It can optionally launch a local LeRobot gRPC policy server as a subprocess, or connect to a remote one.
 
+The model is selected **per `RunPolicy` goal**, not at launch: each goal can name a policy-registry entry (`policy_name`) or supply `pretrained_name_or_path` / `policy_type` explicitly (explicit goal fields take precedence over the registry). This lets one launched node serve multiple tasks without relaunching. The local gRPC server starts empty; the model is cold-loaded on each goal.
+
 Launch Client:
 
 ```bash
 ros2 launch rosetta rosetta_client_launch.py contract_path:=/path/to/contract.yaml
 ```
 
-Run policy:
+Run policy — by registry name:
 
 ```bash
 ros2 action send_goal /rosetta_client/run_policy \
-    rosetta_interfaces/action/RunPolicy "{prompt: 'task description'}"
+    rosetta_interfaces/action/RunPolicy \
+    "{prompt: 'task description', policy_name: 'my_registry_entry'}" --feedback
+```
+
+or by explicit model path:
+
+```bash
+ros2 action send_goal /rosetta_client/run_policy \
+    rosetta_interfaces/action/RunPolicy \
+    "{prompt: 'task description', pretrained_name_or_path: 'my-org/my-policy', policy_type: 'act'}" --feedback
 ```
 
 **Remote inference:** When `launch_local_server` is `false`, the node connects to a LeRobot gRPC policy server at `server_address`. This server is a standard LeRobot component with no ROS2 dependency. It can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server.
@@ -562,7 +579,7 @@ overridden per policy by a registry entry; `contract_path`,
 | Parameter                 | Default                   | Description                                                                                                       |
 |---------------------------|---------------------------|-------------------------------------------------------------------------------------------------------------------|
 | `contract_path`           | *(empty)*                 | Path to contract YAML; empty = the policy-registry entry must supply one                                          |
-| `pretrained_name_or_path` | *(see params file)*       | HuggingFace model ID or local path                                                                                |
+| `pretrained_name_or_path` | *(empty)*                 | Fallback model when neither the goal nor a registry entry supplies one; normally left empty (select per goal)     |
 | `policy_registry_path`    | *(empty)*                 | Path to policy registry YAML (per-policy overrides)                                                               |
 | `server_address`          | `127.0.0.1:8080`          | Policy server address                                                                                             |
 | `policy_type`             | `act`                     | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc.                                                   |
@@ -583,16 +600,22 @@ overridden per policy by a registry entry; `contract_path`,
 | `configure`               | `true`                    | Auto-configure on startup                                                                                         |
 | `activate`                | `true`                    | Auto-activate on startup                                                                                          |
 
-*\*`obs_similarity_atol`: The policy server filters observations that are "too similar" (L2 norm of state difference < threshold). The default threshold (1.0) assumes joint states change significantly between frames. Many robots have smaller movements, causing most observations to be skipped. Set to `-1.0` to disable filtering.*
+*\*`obs_similarity_atol`: The policy server filters observations that are "too similar" (L2 norm of state difference < threshold). The default threshold (1.0) assumes joint states change significantly between frames. Many robots have smaller movements, causing most observations to be skipped. Set to `-1.0` to disable filtering — the default params file (`sns_robot_learning/params/rosetta_client.yaml`) ships with `-1.0`.*
 
-**Example:**
+**Registry entry example** (`sns_robot_learning/params/policy_registry.yaml`; `pretrained_name_or_path` and `policy_type` are required, the rest optional):
 
-```bash
-# Run with a pretrained model
-ros2 launch rosetta rosetta_client_launch.py \
-    contract_path:=/path/to/contract.yaml \
-    pretrained_name_or_path:=my-org/my-policy
+```yaml
+policies:
+  my_registry_entry:
+    pretrained_name_or_path: /root/ws_rl/src/models/<run>/checkpoints/last/pretrained_model
+    policy_type: sns_diffusion
+    actions_per_chunk: 64
+    chunk_size_threshold: 0.5
+    aggregate_fn_name: latest_only
+    contract_path: /root/ws_rl/src/sns_robot_learning/configs/rosetta_contracts/emily.yaml
 ```
+
+Entries are validated at configure time (local paths must exist and contain `config.json`; HF repo IDs must match `namespace/repo_name`). See `sns_robot_learning/README.md` for full registry authoring details.
 
 **This node is not the only way to deploy.** You can run inference using LeRobot's standard CLI tools directly with the Rosetta robot plugin:
 
