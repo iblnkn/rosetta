@@ -444,8 +444,10 @@ def _dec_point_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 def _dec_pose_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     """Decode geometry_msgs/PoseStamped.
 
-    With selector names: extracts specified dotted paths from the message
-      e.g. ['pose.position.x', 'pose.orientation.w']
+    Same selector syntax as the PoseStamped encoder - the stamped wrapper is
+    transparent, so encode/decode share one names convention.
+    With selector names: extracts specified dotted paths from the inner pose
+      e.g. ['position.x', 'orientation.w']
     Without names: returns [position(3), orientation_quat(4)]
     """
     if not spec.names:
@@ -463,7 +465,7 @@ def _dec_pose_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
         )
 
     return np.asarray(
-        [float(dot_get(msg, name)) for name in spec.names],
+        [float(dot_get(msg.pose, name)) for name in spec.names],
         dtype=np.float64,
     )
 
