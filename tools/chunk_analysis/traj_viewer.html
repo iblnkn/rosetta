@@ -109,10 +109,12 @@ function draw(){
       const dropCol='#ff3b3b';              // dropped prefix = red
       const nd=c.ndrop||0;                 // leading dropped (already-passed) points
       const lw=scrub?2.4:1.8, rdot=scrub?2.8:2.1;
-      // kept portion (index nd..end): green line, filled green dots
+      // kept portion (index nd..end): green line, filled green dots. Starts AT
+      // the first kept point; the dropped->kept bridge segment belongs to the
+      // red dashed prefix alone, so the boundary is unambiguous.
       ctx.globalAlpha = scrub?1.0:0.95; ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=lw;
       ctx.beginPath();
-      for(let i=Math.max(0,nd-1);i<c.t.length;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]); (i===Math.max(0,nd-1))?ctx.moveTo(xx,yy):ctx.lineTo(xx,yy);}
+      for(let i=nd;i<c.t.length;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]); (i===nd)?ctx.moveTo(xx,yy):ctx.lineTo(xx,yy);}
       ctx.stroke();
       for(let i=nd;i<c.t.length;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]);
         if(xx<PADL-2||xx>PADL+plotW+2)continue;
