@@ -1,0 +1,218 @@
+<title>Merge timeline (timestep axis)</title>
+<style>
+  body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+  header{padding:10px 16px;background:#171a21;border-bottom:1px solid #262b36}
+  h1{font-size:15px;margin:0 0 4px}
+  .sub{font-size:12px;color:#9aa4b2}
+  #controls{padding:8px 16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px;background:#131620;border-bottom:1px solid #262b36}
+  #controls label{cursor:pointer;user-select:none}
+  button{background:#222838;color:#e6e6e6;border:1px solid #38415a;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:12px}
+  button:hover{background:#2c3650}
+  #wrap{padding:8px 4px}
+  canvas{display:block;width:100%;background:#0f1115;cursor:crosshair}
+  .legend{font-size:11px;color:#9aa4b2;padding:2px 16px 10px}
+  .sw{display:inline-block;width:22px;height:3px;vertical-align:middle;margin:0 4px 0 12px}
+</style>
+<header>
+  <h1>Chunks on the merge-timestep grid &mdash; <span id="ttl">merge run</span></h1>
+  <div class="sub">x-axis = <strong>integer timestep</strong> (the grid the merge uses). black = realized executed command (from merged queue) &nbsp;|&nbsp; color = each chunk anchored at t_observation; <span style='color:#9aa4b2'>gray dashed/hollow = dropped already-passed prefix</span>. Drag to zoom x, double-click to reset, scroll to zoom. Toggle <strong>Merge scrubber</strong> to isolate the chunks live in the queue at one instant (slider or &larr;/&rarr;, Shift = faster).</div>
+</header>
+<div id="controls">
+  <strong>Joints:</strong>
+  <span id="jtoggles"></span>
+  <button id="reset">Reset zoom</button>
+  <button id="all">All joints</button>
+  <label style="margin-left:14px"><input type=checkbox id="scrubchk"> <strong>Merge scrubber</strong></label>
+  <span id="scrubbox" style="display:none">
+    timestep = <input type=range id="scrubsl" min="0" max="100" step="0.01" value="0" style="vertical-align:middle;width:320px">
+    <span id="scrubread" style="font-variant-numeric:tabular-nums"></span>
+  </span>
+</div>
+<div class="legend">
+  <span class="sw" style="background:#000;border:1px solid #888"></span>actual command
+  <span class="sw" style="background:#22c55e"></span>chunk (kept) &nbsp; <span class="sw" style="background:repeating-linear-gradient(90deg,#ff3b3b 0 3px,transparent 3px 6px)"></span>dropped prefix &nbsp; <span class="sw" style="background:#22d3ee"></span>observed state (/joint_states)
+</div>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+const DATA = null;
+</script>
+<script>
+const J = DATA.joints, NJ = J.length;
+document.getElementById('ttl').textContent = DATA.title || 'merge run';
+// viridis-ish colormap
+function viridis(t){
+  const stops=[[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+  t=Math.max(0,Math.min(1,t)); const x=t*(stops.length-1); const i=Math.floor(x); const f=x-i;
+  const a=stops[i], b=stops[Math.min(i+1,stops.length-1)];
+  return `rgb(${a[0]+(b[0]-a[0])*f|0},${a[1]+(b[1]-a[1])*f|0},${a[2]+(b[2]-a[2])*f|0})`;
+}
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let enabled=J.map(()=>true);
+// cmd_t is sorted by the exporter (drawing relies on it too) — last element
+// is the max; spreading >65k args into Math.max throws RangeError.
+let xmin=0, xmax=DATA.cmd_t[DATA.cmd_t.length-1];
+const fullXmin=xmin, fullXmax=xmax;
+let scrub=false, scrubT=fullXmin;
+
+// per-joint y-range over all data
+const yr=J.map((_,j)=>{
+  let lo=1e9,hi=-1e9;
+  for(const p of DATA.cmd_p){lo=Math.min(lo,p[j]);hi=Math.max(hi,p[j]);}
+  for(const c of DATA.chunks)for(const p of c.p){lo=Math.min(lo,p[j]);hi=Math.max(hi,p[j]);}
+  if(DATA.obs_p)for(const p of DATA.obs_p){lo=Math.min(lo,p[j]);hi=Math.max(hi,p[j]);}
+  const pad=(hi-lo)*0.08||0.01; return [lo-pad,hi+pad];
+});
+
+function layout(){
+  const vis=enabled.map((e,i)=>e?i:-1).filter(i=>i>=0);
+  const W=cv.clientWidth, rowH=Math.max(120,Math.min(220,(window.innerHeight-160)/Math.max(1,vis.length)));
+  const H=Math.max(window.innerHeight-160, rowH*vis.length);
+  const dpr=window.devicePixelRatio||1;
+  cv.width=W*dpr; cv.height=H*dpr; cv.style.height=H+'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  return {W,H,vis,rowH};
+}
+const PADL=58,PADR=14,PADT=10,PADB=24;
+let L;
+function draw(){
+  L=layout(); const {W,H,vis,rowH}=L;
+  ctx.clearRect(0,0,W,H);
+  const plotW=W-PADL-PADR;
+  vis.forEach((j,ri)=>{
+    const y0=ri*rowH+PADT, ph=rowH-PADT-PADB;
+    const [ylo,yhi]=yr[j];
+    const X=t=>PADL+(t-xmin)/(xmax-xmin)*plotW;
+    const Y=v=>y0+(yhi-v)/(yhi-ylo)*ph;
+    // frame
+    ctx.strokeStyle='#2a3040'; ctx.lineWidth=1; ctx.strokeRect(PADL,y0,plotW,ph);
+    // grid + y labels
+    ctx.fillStyle='#7c8696'; ctx.font='10px sans-serif'; ctx.textAlign='right';
+    for(let g=0;g<=4;g++){const v=ylo+(yhi-ylo)*g/4; const yy=Y(v);
+      ctx.strokeStyle='#1b2030'; ctx.beginPath();ctx.moveTo(PADL,yy);ctx.lineTo(PADL+plotW,yy);ctx.stroke();
+      ctx.fillText(v.toFixed(3),PADL-4,yy+3);}
+    // x grid
+    ctx.textAlign='center';
+    const span=xmax-xmin; const step=niceStep(span/8);
+    for(let t=Math.ceil(xmin/step)*step;t<=xmax;t+=step){const xx=X(t);
+      ctx.strokeStyle='#1b2030';ctx.beginPath();ctx.moveTo(xx,y0);ctx.lineTo(xx,y0+ph);ctx.stroke();
+      if(ri===vis.length-1)ctx.fillText(t.toFixed(2),xx,y0+ph+14);}
+    // chunks (brighter, dot+line). In scrubber mode only draw chunks whose
+    // span covers scrubT (the ones live in the queue at that instant).
+    DATA.chunks.forEach((c,k)=>{
+      if(c.t[c.t.length-1]<xmin||c.t[0]>xmax)return;
+      // live-in-queue starts at the first KEPT point: the dropped prefix
+      // (already-passed timesteps) was never in the queue.
+      const ndc=c.ndrop||0;
+      const covers = ndc<c.t.length && c.t[ndc]<=scrubT && c.t[c.t.length-1]>=scrubT;
+      if(scrub && !covers)return;
+      const col='#22c55e';                 // kept chunk = green
+      const dropCol='#ff3b3b';              // dropped prefix = red
+      const nd=c.ndrop||0;                 // leading dropped (already-passed) points
+      const lw=scrub?2.4:1.8, rdot=scrub?2.8:2.1;
+      // kept portion (index nd..end): green line, filled green dots
+      ctx.globalAlpha = scrub?1.0:0.95; ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=lw;
+      ctx.beginPath();
+      for(let i=Math.max(0,nd-1);i<c.t.length;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]); (i===Math.max(0,nd-1))?ctx.moveTo(xx,yy):ctx.lineTo(xx,yy);}
+      ctx.stroke();
+      for(let i=nd;i<c.t.length;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]);
+        if(xx<PADL-2||xx>PADL+plotW+2)continue;
+        ctx.beginPath();ctx.arc(xx,yy,rdot,0,6.283);ctx.fill();}
+      // dropped prefix (index 0..nd): red dashed line, filled red dots
+      if(nd>0){
+        ctx.strokeStyle=dropCol; ctx.fillStyle=dropCol; ctx.globalAlpha=0.9; ctx.lineWidth=lw; ctx.setLineDash([3,3]);
+        ctx.beginPath();
+        for(let i=0;i<=Math.min(nd,c.t.length-1);i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]); i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);}
+        ctx.stroke(); ctx.setLineDash([]);
+        for(let i=0;i<nd;i++){const xx=X(c.t[i]),yy=Y(c.p[i][j]);
+          if(xx<PADL-2||xx>PADL+plotW+2)continue;
+          ctx.beginPath();ctx.arc(xx,yy,rdot,0,6.283);ctx.fill();}
+      }
+    });
+    ctx.globalAlpha=1;
+    // scrubber "now" line
+    if(scrub && scrubT>=xmin && scrubT<=xmax){
+      const xx=X(scrubT);
+      ctx.strokeStyle='#ff5d6c'; ctx.lineWidth=1.2; ctx.setLineDash([4,3]);
+      ctx.beginPath();ctx.moveTo(xx,y0);ctx.lineTo(xx,y0+ph);ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // observed state (/joint_states), if present: cyan line
+    if(DATA.obs_t){
+      ctx.strokeStyle='#22d3ee'; ctx.lineWidth=1.4; ctx.globalAlpha=0.95; ctx.beginPath();
+      let st=false;
+      for(let i=0;i<DATA.obs_t.length;i++){const t=DATA.obs_t[i];
+        if(t<xmin-step||t>xmax+step)continue;
+        const xx=X(t),yy=Y(DATA.obs_p[i][j]); st?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);st=true;}
+      ctx.stroke(); ctx.globalAlpha=1;
+    }
+    // actual cmd
+    ctx.strokeStyle='#ffffff'; ctx.lineWidth=1.6; ctx.beginPath();
+    let started=false;
+    for(let i=0;i<DATA.cmd_t.length;i++){const t=DATA.cmd_t[i];
+      if(t<xmin-step||t>xmax+step)continue;
+      const xx=X(t),yy=Y(DATA.cmd_p[i][j]); started?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);started=true;}
+    ctx.stroke();
+    // joint label
+    ctx.fillStyle='#cfd6e0';ctx.font='bold 12px sans-serif';ctx.textAlign='left';
+    ctx.fillText(J[j],PADL+6,y0+14);
+  });
+  drawSel();
+}
+function niceStep(s){const p=Math.pow(10,Math.floor(Math.log10(s)));const n=s/p;
+  return (n<1.5?1:n<3?2:n<7?5:10)*p;}
+
+// ---- zoom interaction ----
+let dragging=false,dx0=0,dx1=0;
+function evX(e){const r=cv.getBoundingClientRect();return e.clientX-r.left;}
+cv.addEventListener('mousedown',e=>{dragging=true;dx0=dx1=evX(e);draw();});
+cv.addEventListener('mousemove',e=>{if(dragging){dx1=evX(e);draw();}});
+window.addEventListener('mouseup',()=>{
+  if(dragging&&Math.abs(dx1-dx0)>6){
+    const {W}=L,plotW=W-PADL-PADR;
+    const a=Math.min(dx0,dx1),b=Math.max(dx0,dx1);
+    const t=x=>xmin+(x-PADL)/plotW*(xmax-xmin);
+    const na=t(a),nb=t(b); xmin=na;xmax=nb;
+  }
+  dragging=false;draw();
+});
+cv.addEventListener('dblclick',()=>{xmin=fullXmin;xmax=fullXmax;draw();});
+cv.addEventListener('wheel',e=>{e.preventDefault();
+  const {W}=L,plotW=W-PADL-PADR; const r=cv.getBoundingClientRect();
+  const tc=xmin+(e.clientX-r.left-PADL)/plotW*(xmax-xmin);
+  const f=e.deltaY<0?0.85:1.18; xmin=tc-(tc-xmin)*f; xmax=tc+(xmax-tc)*f;
+  draw();
+},{passive:false});
+function drawSel(){if(dragging&&Math.abs(dx1-dx0)>2){const a=Math.min(dx0,dx1),b=Math.max(dx0,dx1);
+  ctx.fillStyle='rgba(120,160,255,0.15)';ctx.fillRect(a,0,b-a,cv.clientHeight);
+  ctx.strokeStyle='rgba(120,160,255,0.6)';ctx.strokeRect(a,0,b-a,cv.clientHeight);}}
+
+// ---- controls ----
+const jt=document.getElementById('jtoggles');
+J.forEach((name,i)=>{const l=document.createElement('label');
+  l.innerHTML=`<input type=checkbox checked data-j=${i}> ${name}`;jt.appendChild(l);});
+jt.addEventListener('change',e=>{const j=+e.target.dataset.j;enabled[j]=e.target.checked;draw();});
+document.getElementById('reset').onclick=()=>{xmin=fullXmin;xmax=fullXmax;draw();};
+document.getElementById('all').onclick=()=>{enabled=J.map(()=>true);
+  document.querySelectorAll('#jtoggles input').forEach(c=>c.checked=true);draw();};
+// ---- merge scrubber ----
+const scrubchk=document.getElementById('scrubchk');
+const scrubbox=document.getElementById('scrubbox');
+const scrubsl=document.getElementById('scrubsl');
+const scrubread=document.getElementById('scrubread');
+scrubsl.min=fullXmin; scrubsl.max=fullXmax; scrubsl.value=fullXmin;
+function liveCount(){let n=0;for(const c of DATA.chunks){
+  const nd=c.ndrop||0;
+  if(nd<c.t.length&&c.t[nd]<=scrubT&&c.t[c.t.length-1]>=scrubT)n++;}return n;}
+function updReadout(){scrubread.textContent=`ts ${scrubT.toFixed(0)} — ${liveCount()} chunk(s) live in queue`;}
+scrubchk.addEventListener('change',()=>{scrub=scrubchk.checked;
+  scrubbox.style.display=scrub?'inline':'none'; if(scrub)updReadout(); draw();});
+scrubsl.addEventListener('input',()=>{scrubT=parseFloat(scrubsl.value);updReadout();draw();});
+window.addEventListener('keydown',e=>{if(!scrub)return;
+  const step=(fullXmax-fullXmin)/2000;
+  if(e.key==='ArrowRight'){scrubT=Math.min(fullXmax,scrubT+ (e.shiftKey?step*20:step));}
+  else if(e.key==='ArrowLeft'){scrubT=Math.max(fullXmin,scrubT-(e.shiftKey?step*20:step));}
+  else return;
+  e.preventDefault();scrubsl.value=scrubT;updReadout();draw();});
+window.addEventListener('resize',draw);
+draw();
+</script>
