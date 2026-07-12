@@ -17,6 +17,10 @@ jobs:
       ROS_REPO: main
       ROSDEP_SKIP_KEYS: ament_python
       UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main github:iblnkn/rosetta#dev"
+      # lerobot is PyPI-only (not a ROS/rosdep package) — colcon build doesn't
+      # resolve a package's own install_requires the way rosdep resolves
+      # package.xml, so nothing installs it without this hook.
+      BEFORE_BUILD_TARGET_WORKSPACE: "pip install lerobot"
     steps:
       - uses: actions/checkout@v4
       - uses: ros-industrial/industrial_ci@master

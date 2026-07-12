@@ -25,9 +25,10 @@ from pathlib import Path
 
 import pytest
 import rclpy
+from sensor_msgs.msg import JointState
+
 from lerobot_teleoperator_rosetta.config_rosetta_teleop import RosettaTeleopConfig
 from lerobot_teleoperator_rosetta.rosetta_teleop import RosettaTeleop
-from sensor_msgs.msg import JointState
 
 CONTRACT_YAML = """
 robot_type: test
