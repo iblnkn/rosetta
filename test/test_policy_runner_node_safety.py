@@ -27,16 +27,8 @@ Regressions pinned:
 import threading
 
 import pytest
-import rclpy
 from rclpy.action import GoalResponse
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
-
-
-@pytest.fixture(scope="module")
-def rclpy_ctx():
-    rclpy.init()
-    yield
-    rclpy.try_shutdown()
 
 
 @pytest.fixture

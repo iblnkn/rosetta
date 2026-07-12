@@ -60,13 +60,6 @@ def _act(key, names, topic):
     )
 
 
-@pytest.fixture
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
-
-
 def _spin_until(executor, predicate, timeout_s=5.0):
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -76,7 +69,7 @@ def _spin_until(executor, predicate, timeout_s=5.0):
     return False
 
 
-def test_two_specs_same_topic_both_sampled(ros_context):
+def test_two_specs_same_topic_both_sampled(rclpy_ctx):
     """README kind example: two selectors on one topic concatenate in the frame."""
     specs = [
         _obs("observation.state", ["position.j1", "position.j2"], "/js"),
@@ -111,7 +104,7 @@ def test_two_specs_same_topic_both_sampled(ros_context):
         pub_node.destroy_node()
 
 
-def test_shared_action_key_routes_slices_per_spec(ros_context):
+def test_shared_action_key_routes_slices_per_spec(rclpy_ctx):
     """Two action specs sharing 'action' publish their own slice to their topic."""
     specs = [
         _act("action", ["position.j1", "position.j2"], "/arm_cmd"),
@@ -151,7 +144,7 @@ def test_shared_action_key_routes_slices_per_spec(ros_context):
         sub_node.destroy_node()
 
 
-def test_publish_frame_rejects_wrong_length(ros_context):
+def test_publish_frame_rejects_wrong_length(rclpy_ctx):
     specs = [
         _act("action", ["position.j1", "position.j2"], "/arm_cmd"),
         _act("action", ["position.grip"], "/grip_cmd"),

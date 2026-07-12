@@ -34,7 +34,6 @@ import launch_testing.actions
 import launch_testing.asserts
 import numpy as np
 import pytest
-import rclpy
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
 from sensor_msgs.msg import JointState  # noqa: F401
@@ -90,14 +89,6 @@ def _obs(key, names, topic):
 
 
 class TestBridgeAgainstLiveGraph(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        rclpy.init()
-
-    @classmethod
-    def tearDownClass(cls):
-        rclpy.shutdown()
-
     def test_shared_key_frame_from_external_publisher(self):
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.lifecycle import LifecycleNode

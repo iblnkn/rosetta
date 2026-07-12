@@ -28,7 +28,6 @@ Regressions pinned:
 from types import SimpleNamespace
 
 import pytest
-import rclpy
 from rclpy.action import GoalResponse
 from rosetta.robots.ros2.nodes.rosetta_hil_manager_node import RosettaHilManagerNode
 
@@ -47,13 +46,6 @@ EVENTS_SPEC = SimpleNamespace(
 
 def _joy(intervention=0, terminate=0, rerecord=0, success=0, failure=0):
     return SimpleNamespace(buttons=[intervention, terminate, rerecord, success, failure])
-
-
-@pytest.fixture(scope="module")
-def rclpy_ctx():
-    rclpy.init()
-    yield
-    rclpy.try_shutdown()
 
 
 @pytest.fixture
