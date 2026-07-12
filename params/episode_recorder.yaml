@@ -8,11 +8,18 @@
 
 episode_recorder:
   ros__parameters:
-    # Where to store recorded bag files
-    bag_base_dir: "/workspaces/rosetta_ws/datasets/bags"
+    # Where to store recorded bag files. Relative paths resolve against the
+    # current working directory (like `ros2 bag record`), so launching from
+    # the workspace root records into <ws>/datasets/bags.
+    bag_base_dir: "datasets/bags"
 
     # Rosbag storage format: "mcap" (recommended) or "sqlite3"
     storage_id: "mcap"
+
+    # Record every topic on the graph (like `ros2 bag record -a`), not just
+    # contract topics. Contract topics are always required; set false to
+    # record only what the contract declares. Trim with exclude_topics.
+    record_all: true
 
     # Default max episode duration in seconds (can be overridden per-episode)
     # 0 (or negative) = record until stopped, no time limit

@@ -17,107 +17,110 @@
 import warnings
 
 import pytest
-
-import rosetta.ros2.bag_frames  # noqa: F401  register decoders
-from rosetta.core.contract import (
+import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register decoders
+from rosetta.contract.errors import ContractValidationError
+from rosetta.contract.schema import (
+    Align,
+    Channel,
     Contract,
-    ContractValidationError,
-    ObservationSpec,
+    FrameEntry,
+    Source,
     _validate_kind,
 )
-from rosetta.core.contract_utils import iter_observation_specs
+from rosetta.contract.specs import iter_observation_specs
 
 
 def _contract(obs):
     return Contract(
-        robot_type='r', fps=30, observations=obs, actions=[], tasks=[],
-        recording={}, adjunct=[], rewards=[], signals=[], info=[],
+        robot_type="r",
+        robot_interface="ros2",
+        fps=30,
+        observations=obs,
+        actions=[],
+        tasks=[],
+        adjunct=[],
+        rewards=[],
+        signals=[],
+        info=[],
         complementary_data=[],
     )
 
 
-# _validate_kind returns (representation, absolute)
+# _validate_kind returns the representation
 
-def test_default_is_continuous_absolute():
-    assert _validate_kind(None, ['a', 'b'], 'ctx') == ('continuous', True)
+
+def test_default_is_continuous():
+    assert _validate_kind(None, ["a", "b"], "ctx") == "continuous"
 
 
 def test_invalid_kind_errors():
     with pytest.raises(ContractValidationError):
-        _validate_kind('rotation_matrix', ['a'], 'ctx')
+        _validate_kind("rotation_matrix", ["a"], "ctx")
 
 
 def test_dim_count_enforced():
-    assert _validate_kind('quaternion', ['x', 'y', 'z', 'w'], 'ctx') == ('quaternion', True)
-    assert _validate_kind('euler_rpy', ['r', 'p', 'y'], 'ctx') == ('euler_rpy', True)
-    assert _validate_kind('rotation_6d', list('abcdef'), 'ctx') == ('rotation_6d', True)
+    assert _validate_kind("quaternion", ["x", "y", "z", "w"], "ctx") == "quaternion"
+    assert _validate_kind("euler_rpy", ["r", "p", "y"], "ctx") == "euler_rpy"
+    assert _validate_kind("rotation_6d", list("abcdef"), "ctx") == "rotation_6d"
     with pytest.raises(ContractValidationError):
-        _validate_kind('quaternion', ['x', 'y', 'z'], 'ctx')  # 3 != 4
+        _validate_kind("quaternion", ["x", "y", "z"], "ctx")  # 3 != 4
     with pytest.raises(ContractValidationError):
-        _validate_kind('euler_rpy', ['x', 'y', 'z', 'w'], 'ctx')  # 4 != 3
+        _validate_kind("euler_rpy", ["x", "y", "z", "w"], "ctx")  # 4 != 3
 
 
 def test_binary_and_continuous_any_dim():
-    assert _validate_kind('binary', ['g'], 'ctx') == ('binary', True)
-    assert _validate_kind('continuous', list('abcdefghij'), 'ctx') == ('continuous', True)
-
-
-def test_frame_axis_absolute_vs_delta():
-    # a lone frame tag gives continuous plus that frame
-    assert _validate_kind('delta', ['a', 'b'], 'ctx') == ('continuous', False)
-    assert _validate_kind('absolute', ['a'], 'ctx') == ('continuous', True)
-    # compound: representation plus frame, in any order
-    assert _validate_kind(['quaternion', 'delta'], ['x', 'y', 'z', 'w'], 'ctx') == ('quaternion', False)
-    assert _validate_kind(['delta', 'binary'], ['g'], 'ctx') == ('binary', False)
-    assert _validate_kind(['continuous', 'absolute'], ['a'], 'ctx') == ('continuous', True)
-
-
-def test_compound_kind_errors():
-    with pytest.raises(ContractValidationError):  # two representations
-        _validate_kind(['quaternion', 'binary'], ['x', 'y', 'z', 'w'], 'ctx')
-    with pytest.raises(ContractValidationError):  # two frames
-        _validate_kind(['absolute', 'delta'], ['a'], 'ctx')
-    with pytest.raises(ContractValidationError):  # unknown tag
-        _validate_kind(['quaternion', 'bogus'], ['x', 'y', 'z', 'w'], 'ctx')
+    assert _validate_kind("binary", ["g"], "ctx") == "binary"
+    assert _validate_kind("continuous", list("abcdefghij"), "ctx") == "continuous"
 
 
 def test_rotation_smell_warns_when_untagged():
     with pytest.warns(UserWarning):
-        _validate_kind('continuous', ['orientation.x', 'orientation.y', 'orientation.z', 'orientation.w'], 'ctx')
+        _validate_kind("continuous", ["orientation.x", "orientation.y", "orientation.z", "orientation.w"], "ctx")
     with pytest.warns(UserWarning):
-        _validate_kind(None, ['pose.quat_w'], 'ctx')
+        _validate_kind(None, ["pose.quat_w"], "ctx")
 
 
 def test_no_warn_for_plain_joints():
     with warnings.catch_warnings():
-        warnings.simplefilter('error')  # any warning becomes a failure
-        _validate_kind('continuous', ['position.j1', 'position.j2', 'position.j3'], 'ctx')
+        warnings.simplefilter("error")  # any warning becomes a failure
+        _validate_kind("continuous", ["position.j1", "position.j2", "position.j3"], "ctx")
 
 
 def test_no_warn_when_tagged_quaternion():
     with warnings.catch_warnings():
-        warnings.simplefilter('error')
-        _validate_kind('quaternion', ['orientation.x', 'orientation.y', 'orientation.z', 'orientation.w'], 'ctx')
+        warnings.simplefilter("error")
+        _validate_kind("quaternion", ["orientation.x", "orientation.y", "orientation.z", "orientation.w"], "ctx")
 
 
 # propagation to resolved StreamSpec
 
+
 def test_kind_propagates_to_stream_spec():
-    obs = ObservationSpec(
-        key='observation.state', topic='/imu', type='sensor_msgs/msg/Imu',
-        select=['orientation.x', 'orientation.y', 'orientation.z', 'orientation.w'],
-        kind='quaternion', absolute=False,
+    entry = FrameEntry(
+        key="observation.state",
+        sources=(
+            Source(
+                channel=Channel(topic="/imu", type="sensor_msgs/msg/Imu"),
+                align=Align("hold", "receive"),
+                select=["orientation.x", "orientation.y", "orientation.z", "orientation.w"],
+                kind="quaternion",
+            ),
+        ),
     )
-    specs = list(iter_observation_specs(_contract([obs])))
-    assert specs[0].kind == 'quaternion'
-    assert specs[0].absolute is False
+    specs = list(iter_observation_specs(_contract([entry])))
+    assert specs[0].source.kind == "quaternion"
 
 
 def test_default_kind_on_stream_spec():
-    obs = ObservationSpec(
-        key='observation.state', topic='/joints', type='sensor_msgs/msg/JointState',
-        select=['position.j1', 'position.j2'],
+    entry = FrameEntry(
+        key="observation.state",
+        sources=(
+            Source(
+                channel=Channel(topic="/joints", type="sensor_msgs/msg/JointState"),
+                align=Align("hold", "receive"),
+                select=["position.j1", "position.j2"],
+            ),
+        ),
     )
-    specs = list(iter_observation_specs(_contract([obs])))
-    assert specs[0].kind == 'continuous'
-    assert specs[0].absolute is True
+    specs = list(iter_observation_specs(_contract([entry])))
+    assert specs[0].source.kind == "continuous"

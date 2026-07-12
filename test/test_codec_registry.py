@@ -18,9 +18,8 @@ Pure (no ROS): registration and discovery just populate dicts.
 """
 
 import pytest
-
-import rosetta.core.converters as conv
-from rosetta.core.converters import (
+import rosetta.frames.codecs as conv
+from rosetta.frames.codecs import (
     DECODERS,
     DTYPES,
     ENCODERS,
@@ -28,7 +27,7 @@ from rosetta.core.converters import (
     register_encoder,
 )
 
-_T = '_test_msgs/msg/Foo'
+_T = "_test_msgs/msg/Foo"
 
 
 def _clear(type_str):
@@ -42,19 +41,19 @@ def _clear(type_str):
 
 def test_duplicate_decoder_without_override_raises():
     try:
-        register_decoder(_T, dtype='float64')(lambda msg, spec: None)
-        with pytest.raises(ValueError, match='already registered'):
-            register_decoder(_T, dtype='float64')(lambda msg, spec: None)
+        register_decoder(_T, dtype="float64")(lambda msg, spec: None)
+        with pytest.raises(ValueError, match="already registered"):
+            register_decoder(_T, dtype="float64")(lambda msg, spec: None)
     finally:
         _clear(_T)
 
 
 def test_decoder_override_replaces():
     try:
-        register_decoder(_T, dtype='float64')(lambda msg, spec: 'first')
-        register_decoder(_T, dtype='float32', override=True)(lambda msg, spec: 'second')
-        assert DECODERS[_T](None, None) == 'second'
-        assert DTYPES[_T] == 'float32'  # dtype updated too
+        register_decoder(_T, dtype="float64")(lambda msg, spec: "first")
+        register_decoder(_T, dtype="float32", override=True)(lambda msg, spec: "second")
+        assert DECODERS[_T](None, None) == "second"
+        assert DTYPES[_T] == "float32"  # dtype updated too
     finally:
         _clear(_T)
 
@@ -62,7 +61,7 @@ def test_decoder_override_replaces():
 def test_duplicate_encoder_without_override_raises():
     try:
         register_encoder(_T)(lambda vec, spec, stamp=None: None)
-        with pytest.raises(ValueError, match='already registered'):
+        with pytest.raises(ValueError, match="already registered"):
             register_encoder(_T)(lambda vec, spec, stamp=None: None)
     finally:
         _clear(_T)
@@ -70,9 +69,9 @@ def test_duplicate_encoder_without_override_raises():
 
 def test_encoder_override_replaces():
     try:
-        register_encoder(_T)(lambda vec, spec, stamp=None: 'first')
-        register_encoder(_T, override=True)(lambda vec, spec, stamp=None: 'second')
-        assert ENCODERS[_T](None, None) == 'second'
+        register_encoder(_T)(lambda vec, spec, stamp=None: "first")
+        register_encoder(_T, override=True)(lambda vec, spec, stamp=None: "second")
+        assert ENCODERS[_T](None, None) == "second"
     finally:
         _clear(_T)
 
@@ -82,14 +81,14 @@ def test_encoder_override_replaces():
 
 def test_discover_codecs_loads_entry_point_plugins(monkeypatch):
     class _FakeEP:
-        name = 'demo'
-        value = 'fake.mod'
+        name = "demo"
+        value = "fake.mod"
 
         def load(self):
-            register_decoder(_T, dtype='float64')(lambda msg, spec: None)
+            register_decoder(_T, dtype="float64")(lambda msg, spec: None)
 
     conv._codecs_discovered = False
-    monkeypatch.setattr(conv._ilm, 'entry_points', lambda group=None: [_FakeEP()])
+    monkeypatch.setattr(conv._ilm, "entry_points", lambda group=None: [_FakeEP()])
     try:
         conv.discover_codecs()
         assert _T in DECODERS  # plugin codec resolvable by msg_type
@@ -101,9 +100,7 @@ def test_discover_codecs_loads_entry_point_plugins(monkeypatch):
 def test_discover_codecs_runs_once(monkeypatch):
     calls = []
     conv._codecs_discovered = False
-    monkeypatch.setattr(
-        conv._ilm, 'entry_points', lambda group=None: calls.append(1) or []
-    )
+    monkeypatch.setattr(conv._ilm, "entry_points", lambda group=None: calls.append(1) or [])
     try:
         conv.discover_codecs()
         conv.discover_codecs()
@@ -114,16 +111,16 @@ def test_discover_codecs_runs_once(monkeypatch):
 
 def test_discover_codecs_raises_on_broken_plugin(monkeypatch):
     class _BadEP:
-        name = 'bad'
-        value = 'bad.mod'
+        name = "bad"
+        value = "bad.mod"
 
         def load(self):
-            raise ImportError('boom')
+            raise ImportError("boom")
 
     conv._codecs_discovered = False
-    monkeypatch.setattr(conv._ilm, 'entry_points', lambda group=None: [_BadEP()])
+    monkeypatch.setattr(conv._ilm, "entry_points", lambda group=None: [_BadEP()])
     try:
-        with pytest.raises(ValueError, match='codec plugin'):
+        with pytest.raises(ValueError, match="codec plugin"):
             conv.discover_codecs()
     finally:
         conv._codecs_discovered = False

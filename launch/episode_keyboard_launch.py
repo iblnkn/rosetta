@@ -28,7 +28,7 @@ Keys:
   q            Quit
 
 Usage:
-    # Default — connects to /episode_recorder/*
+    # Default — connects to /episode_recorder/* (the recorder's node-private services)
     ros2 launch rosetta episode_keyboard_launch.py
 
     # Custom recorder namespace
@@ -45,26 +45,30 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            'recorder_ns',
-            default_value='/episode_recorder',
-            description='Namespace of the episode recorder node (services are resolved under it)',
-        ),
-        DeclareLaunchArgument(
-            'default_prompt',
-            default_value='',
-            description='Initial task prompt used when starting recordings',
-        ),
-        Node(
-            package='rosetta',
-            executable='episode_keyboard_node',
-            name='episode_keyboard',
-            output='screen',
-            emulate_tty=True,
-            parameters=[{
-                'recorder_ns': LaunchConfiguration('recorder_ns'),
-                'default_prompt': LaunchConfiguration('default_prompt'),
-            }],
-        ),
-    ])
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "recorder_ns",
+                default_value="/episode_recorder",
+                description="Namespace of the episode recorder node (services are resolved under it)",
+            ),
+            DeclareLaunchArgument(
+                "default_prompt",
+                default_value="",
+                description="Initial task prompt used when starting recordings",
+            ),
+            Node(
+                package="rosetta",
+                executable="episode_keyboard_node",
+                name="episode_keyboard",
+                output="screen",
+                emulate_tty=True,
+                parameters=[
+                    {
+                        "recorder_ns": LaunchConfiguration("recorder_ns"),
+                        "default_prompt": LaunchConfiguration("default_prompt"),
+                    }
+                ],
+            ),
+        ]
+    )

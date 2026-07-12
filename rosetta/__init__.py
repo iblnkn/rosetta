@@ -13,60 +13,45 @@
 # limitations under the License.
 
 """
-rosetta: ROS 2 to LeRobot bridge.
+Rosetta: translation between pub/sub robots and policy-learning frameworks.
 
-This package provides common utilities (contract parsing, encoders/decoders)
-and ROS2 nodes (episode_recorder, rosetta_client).
+Robots are messy; policies want structure. A **contract**
+(:mod:`rosetta.contract` — one YAML per robot) declares how the robot's
+pub/sub topics become clean fixed-rate **frames**
+(:mod:`rosetta.frames` — ``{contract_key: np.ndarray | str}``) and back.
+The **robot side** (:mod:`rosetta.robots`) adapts each pub/sub ecosystem
+onto that frame stream — ROS2 today; ROS1, zenoh, MQTT tomorrow. The
+**policy side** (:mod:`rosetta.policies`) adapts each learning framework
+(LeRobot, vla_foundry, starvla, ...) to consume it, for dataset writing and
+live policy execution. Either side swaps out without touching the other,
+because both speak only frames.
 
-For LeRobot integration, the functionality is split into separate packages:
-- lerobot_robot_rosetta: Robot plugin (auto-discovered by LeRobot)
-- lerobot_teleoperator_rosetta: Teleoperator plugin (auto-discovered by LeRobot)
-- rosetta_rl: RL training components (RosettaRobotEnv, actor/learner)
+The same frame machinery runs live inference and offline bag conversion, so
+training data matches inference input sample-for-sample by construction.
 
-Usage (Robot - via plugin package):
-    from lerobot_robot_rosetta import Rosetta, RosettaConfig
+Framework adapters live in their own packages and register via entry points
+(see :mod:`rosetta.policies`): ``lerobot_robot_rosetta``,
+``lerobot_teleoperator_rosetta``, ``vla_foundry_rosetta``,
+``starvla_rosetta``.
 
-    config = RosettaConfig(config_path="contract.yaml")
-    robot = Rosetta(config)
-    robot.connect()
+Usage::
 
-Usage (Teleoperator - via plugin package):
-    from lerobot_teleoperator_rosetta import RosettaTeleop, RosettaTeleopConfig
-
-    config = RosettaTeleopConfig(config_path="contract.yaml")
-    teleop = RosettaTeleop(config)
-    teleop.connect()
-
-Usage (RL Training - via rl package):
-    from rosetta_rl import setup_rosetta_training
-
-    env, teleop, env_proc, act_proc = setup_rosetta_training(
-        "contract.yaml", device="cuda", use_gripper=True
-    )
-
-Usage (Core utilities):
-    from rosetta.core.contract import load_contract, Contract
+    from rosetta import Contract, load_contract, iter_observation_specs
 """
 
-# Re-export core utilities
-from .core.contract import (
+from .contract.schema import Contract, load_contract
+from .contract.specs import (
     ActionStreamSpec,
-    Contract,
-    load_contract,
     ObservationStreamSpec,
-    ResetMode,
-    ResetSpec,
+    iter_action_specs,
+    iter_observation_specs,
 )
-from .core.contract_utils import iter_action_specs, iter_observation_specs
 
 __all__ = [
-    # Contract utilities
-    'Contract',
-    'load_contract',
-    'ObservationStreamSpec',
-    'ActionStreamSpec',
-    'ResetSpec',
-    'ResetMode',
-    'iter_observation_specs',
-    'iter_action_specs',
+    "ActionStreamSpec",
+    "Contract",
+    "ObservationStreamSpec",
+    "iter_action_specs",
+    "iter_observation_specs",
+    "load_contract",
 ]

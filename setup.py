@@ -1,5 +1,5 @@
-from glob import glob
 import os
+from glob import glob
 
 from setuptools import find_packages, setup
 
@@ -8,49 +8,50 @@ from setuptools import find_packages, setup
 #   - lerobot_robot_rosetta: Robot plugin
 #   - lerobot_teleoperator_rosetta: Teleoperator plugin
 #   - rosetta_rl: RL training components
-package_name = 'rosetta'
+package_name = "rosetta"
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version="0.1.0",
     packages=find_packages(),
     data_files=[
         # Install marker file in the package index
-        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         # Include our package.xml file
-        (os.path.join('share', package_name), ['package.xml']),
+        (os.path.join("share", package_name), ["package.xml"]),
         # Include all launch files
-        (os.path.join('share', package_name, 'launch'), glob('launch/*_launch.py')),
+        (os.path.join("share", package_name, "launch"), glob("launch/*_launch.py")),
         # Include all contract files
-        (os.path.join('share', package_name, 'contracts'), glob('contracts/*.yaml')),
+        (os.path.join("share", package_name, "contracts"), glob("contracts/*.yaml")),
         # Include all parameter files
-        (os.path.join('share', package_name, 'params'), glob('params/*.yaml')),
+        (os.path.join("share", package_name, "params"), glob("params/*.yaml")),
     ],
-    install_requires=['setuptools', 'numpy', 'pyyaml', 'rclpy'],
+    install_requires=["setuptools", "numpy", "pyyaml", "rclpy"],
     entry_points={
-        'console_scripts': [
-            'episode_recorder_node = rosetta.ros2.nodes.episode_recorder_node:main',
-            'episode_keyboard_node = rosetta.ros2.nodes.episode_keyboard_node:main',
-            'rosetta_hil_manager_node = rosetta.ros2.nodes.rosetta_hil_manager_node:main',
-            'rosetta_client_node = rosetta.ros2.nodes.rosetta_client_node:main',
-            'rosetta_port = rosetta.ros2.port:main',
+        "console_scripts": [
+            "episode_recorder_node = rosetta.robots.ros2.nodes.episode_recorder_node:main",
+            "episode_keyboard_node = rosetta.robots.ros2.nodes.episode_keyboard_node:main",
+            "rosetta_hil_manager_node = rosetta.robots.ros2.nodes.rosetta_hil_manager_node:main",
+            "policy_runner_node = rosetta.robots.ros2.nodes.policy_runner_node:main",
+            "rosetta_port = rosetta.robots.ros2.offline.port:main",
         ],
     },
+    extras_require={"test": ["pytest"]},
     zip_safe=True,
-    author='Isaac Blankenau',
-    author_email='isaac.blankenau@gmail.com',
-    maintainer='Isaac Blankenau',
-    maintainer_email='isaac.blankenau@gmail.com',
-    keywords=['ros2', 'lerobot', 'robotics', 'rosetta'],
+    author="Isaac Blankenau",
+    author_email="isaac.blankenau@gmail.com",
+    maintainer="Isaac Blankenau",
+    maintainer_email="isaac.blankenau@gmail.com",
+    keywords=["ros2", "lerobot", "robotics", "rosetta"],
     classifiers=[
-        'Intended Audience :: Developers',
-        'Programming Language :: Python',
-        'Topic :: Software Development',
-        'Topic :: Scientific/Engineering',
+        "Intended Audience :: Developers",
+        "Programming Language :: Python",
+        "Topic :: Software Development",
+        "Topic :: Scientific/Engineering",
     ],
     description=(
-        'Rosetta: ROS 2 utilities, common contract handling,'
-        ' and nodes for LeRobot integration.'
+        "Rosetta: contract-driven translation between pub/sub robots (ROS2)"
+        " and policy-learning frameworks (LeRobot, ...)."
     ),
-    license='Apache-2.0',
+    license="Apache-2.0",
 )

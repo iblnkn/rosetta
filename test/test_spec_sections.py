@@ -17,34 +17,55 @@ extended sections (reward, signal, info, complementary_data) that the porter's
 iter_specs also yields. This keeps RL and record-only columns out of
 observation.state."""
 
-import rosetta.ros2.bag_frames  # noqa: F401  register codecs
-from rosetta.core.contract import ActionSpec, Contract, ObservationSpec
-from rosetta.core.contract_utils import (
+import pytest
+import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
+from rosetta.contract.errors import ContractValidationError
+from rosetta.contract.schema import Align, Channel, Contract, FrameEntry, Source
+from rosetta.contract.specs import (
     iter_action_specs,
     iter_observation_specs,
+    iter_reward_as_action_specs,
     iter_specs,
 )
 
+HOLD = Align("hold", "receive")
 
-def _contract_with_reward():
-    obs = ObservationSpec(
-        key='observation.state', topic='/joints', type='sensor_msgs/msg/JointState',
-        select=['position.j1', 'position.j2'],
+
+def _entry(key, topic, msg_type, select=None, **channel_kw):
+    return FrameEntry(
+        key=key,
+        sources=(
+            Source(
+                channel=Channel(topic=topic, type=msg_type, **channel_kw),
+                align=HOLD,
+                select=select,
+            ),
+        ),
     )
-    act = ActionSpec(
-        key='action', topic='/cmd', type='sensor_msgs/msg/JointState',
-        select=['position.j1', 'position.j2'],
-    )
-    # A reward whose key classifies as state ('next.reward' is not image or action).
-    rew = ObservationSpec(
-        key='next.reward', topic='/reward', type='std_msgs/msg/Float32',
-        select=['data'], dtype='float32',
-    )
+
+
+def _contract(observations=(), actions=(), rewards=()):
     return Contract(
-        robot_type='r', fps=30, observations=[obs], actions=[act], tasks=[],
-        recording={}, adjunct=[], rewards=[rew], signals=[], info=[],
+        robot_type="r",
+        robot_interface="ros2",
+        fps=30,
+        observations=list(observations),
+        actions=list(actions),
+        tasks=[],
+        adjunct=[],
+        rewards=list(rewards),
+        signals=[],
+        info=[],
         complementary_data=[],
     )
+
+
+def _contract_with_reward():
+    obs = _entry("observation.state", "/joints", "sensor_msgs/msg/JointState", ["position.j1", "position.j2"])
+    act = _entry("action", "/cmd", "sensor_msgs/msg/JointState", ["position.j1", "position.j2"])
+    # A reward whose key classifies as state ('next.reward' is not image or action).
+    rew = _entry("next.reward", "/reward", "std_msgs/msg/Float32", ["data"], dtype="float32")
+    return _contract([obs], [act], [rew])
 
 
 def test_reward_leaks_into_iter_specs_but_not_obs_action():
@@ -52,6 +73,32 @@ def test_reward_leaks_into_iter_specs_but_not_obs_action():
     all_keys = {s.key for s in iter_specs(c)}
     oa_keys = {s.key for s in iter_observation_specs(c)} | {s.key for s in iter_action_specs(c)}
 
-    assert 'next.reward' in all_keys          # the porter's iter_specs carries it
-    assert 'next.reward' not in oa_keys        # but the VLA writers (obs+action) don't
-    assert oa_keys == {'observation.state', 'action'}
+    assert "next.reward" in all_keys  # the porter's iter_specs carries it
+    assert "next.reward" not in oa_keys  # but the VLA writers (obs+action) don't
+    assert oa_keys == {"observation.state", "action"}
+
+
+def test_reward_as_action_requires_registered_encoder_even_with_decoder():
+    """Regression: the encoder check was gated on `decoder is None`, so a
+    reward with a custom decoder and an unregistered type passed contract
+    load and crashed at first publish (rewards always publish through the
+    built-in encoder registry; custom encoders are not supported there)."""
+    rew = _entry(
+        "next.reward",
+        "/reward",
+        "my_msgs/msg/NoEncoder",
+        ["data"],
+        dtype="float32",
+        decoder="my_pkg.decoders:decode_reward",
+    )
+    c = _contract(rewards=[rew])
+    with pytest.raises(ContractValidationError, match="No encoder registered"):
+        list(iter_reward_as_action_specs(c))
+
+
+def test_reward_as_action_registered_type_passes():
+    c = _contract_with_reward()  # std_msgs/msg/Float32 has a registered encoder
+    specs = list(iter_reward_as_action_specs(c))
+    assert len(specs) == 1
+    assert specs[0].key == "action"
+    assert specs[0].dtype == "float32"  # explicit dtype honored

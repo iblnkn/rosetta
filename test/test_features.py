@@ -19,9 +19,7 @@ zero-fill with the same shape as a real decoded frame and the declared feature.
 """
 
 import numpy as np
-import pytest
-
-from rosetta.core.contract_utils import (
+from rosetta.frames.layout import (
     DECODED_IMAGE_CHANNELS,
     build_feature,
     zeros_for_spec,
@@ -32,12 +30,11 @@ class _ImageSpec:
     """Duck-typed stand-in for an ObservationStreamSpec image stream."""
 
     is_image = True
-    dtype = 'video'
+    dtype = "video"
 
-    def __init__(self, key, resize, channels):
+    def __init__(self, key, resize):
         self.key = key
         self.image_resize = resize
-        self.image_channels = channels
         self.names = None
 
 
@@ -55,23 +52,20 @@ def test_decoded_image_channels_is_three():
     assert DECODED_IMAGE_CHANNELS == 3
 
 
-@pytest.mark.parametrize('channels', [1, 3, 4])
-def test_feature_and_zeros_agree_for_images(channels):
-    # build_feature and zeros_for_spec must agree regardless of the source
-    # encoding's channel count, because the decoder always outputs 3 channels.
-    spec = _ImageSpec('observation.images.cam', (64, 48), channels)
+def test_feature_and_zeros_agree_for_images():
+    spec = _ImageSpec("observation.images.cam", (64, 48))
     feat = build_feature(spec)
     zeros = zeros_for_spec(spec)
-    assert feat['shape'] == (64, 48, 3)
+    assert feat["shape"] == (64, 48, 3)
     assert zeros.shape == (64, 48, 3)
     assert zeros.dtype == np.uint8
 
 
 def test_vector_feature_and_zeros_agree():
-    spec = _VectorSpec('observation.state', 'float32', ['a', 'b', 'c'])
+    spec = _VectorSpec("observation.state", "float32", ["a", "b", "c"])
     feat = build_feature(spec)
     zeros = zeros_for_spec(spec)
-    assert feat['shape'] == (3,)
-    assert feat['dtype'] == 'float32'
+    assert feat["shape"] == (3,)
+    assert feat["dtype"] == "float32"
     assert zeros.shape == (3,)
     assert zeros.dtype == np.float32

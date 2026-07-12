@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p> -->
 
-**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots.
+**Rosetta** sits between pub/sub robots and policy-learning frameworks: one contract per robot turns messy ROS2 topics into the clean fixed-rate frames that frameworks like [LeRobot](https://github.com/huggingface/lerobot) consume — for recording, training, and live inference.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@
   - [Minimal Example](#minimal-example)
   - [Observations](#observations)
   - [Actions](#actions)
-  - [Ops](#ops)
+  - [Operators](#operators)
   - [Teleop](#teleop)
   - [Tasks, Rewards, and Signals](#tasks-rewards-and-signals)
   - [Adjunct Topics](#adjunct-topics)
@@ -47,13 +47,21 @@
 <details>
 <summary><strong>Recent Changes</strong></summary>
 
+- **Online/offline split (breaking):** `rosetta.robots.ros2.port` and `rosetta.robots.ros2.bag_frames` moved to `rosetta.robots.ros2.offline.{port,bag_frames}`; everything else in `rosetta.robots.ros2` (decoders/encoders, `topic_bridge`, nodes) is the live path. The `rosetta_port` console script and its CLI are unchanged.
+- **Spec composition (breaking):** runtime specs now carry `source: Source` — the exact declaration they were resolved from — and the flat passthrough fields are gone: `spec.topic` → `spec.source.channel.topic`, `spec.msg_type` → `spec.source.channel.type`, `spec.align` → `spec.source.align`, `spec.qos` → `spec.source.channel.qos`, `spec.decoder`/`spec.encoder` → `spec.source.channel.*`, `spec.safety_behavior` → `spec.source.channel.safety`, `spec.kind` → `spec.source.kind`. Computed fields (`key`, `names`, `fps`, `dtype`, `namespace`, `operators`, `is_image`, `image_resize`) stay flat. A forgotten copy is no longer expressible, so the field-set parity guard is retired (the test now pins computed derivations + the identity guarantee). Behavior fix: reward-as-action specs now honor a `kind` declared on a reward channel (the flat design silently dropped it to `continuous`).
+- **Frame I/O rename (breaking):** "stream" now means exactly one thing — the decoded, timelined sample sequence of a single channel *before* alignment (the `StreamSpec`/`StreamBuffer` sense, matching Rerun semantics). The post-align robot surface is not a stream (it's bidirectional), so it was renamed: `rosetta.frames.streams` → `rosetta.frames.protocols`, `FrameStream` → `FrameIO` (a `FrameIO` is both a `FrameSource` and a `FrameSink`, like Python's `TextIO`); `PolicyRunner.run()`'s first parameter is now `frames: FrameIO`. `FrameSource`/`FrameSink` are unchanged.
+- **Contract naming split (breaking):** "Spec" now means exactly one thing — a resolved runtime stream spec. The `StreamSpec` family (`StreamSpec`, `ObservationStreamSpec`, `ActionStreamSpec`) moved from `rosetta.contract.schema` to `rosetta.contract.specs` (import from there, or from the top-level `rosetta`); the declaration-side dataclasses in `contract/schema.py` dropped the suffix to mirror their YAML stanzas — `ChannelSpec` → `Channel`, `AlignSpec` → `Align`, `SourceSpec` → `Source`, `TaskSpec` → `Task`, `TeleopSpec` → `Teleop`, `TeleopEventsSpec` → `TeleopEventMap` (not `TeleopEvents`: that name is lerobot's event enum). `FrameEntry`, `Contract`, enums, and the contract YAML are unchanged.
+- **Operators rename (breaking):** `rosetta/contract/ops.py` → `rosetta/contract/operators.py`; "op" is now "operator" everywhere — `Op` → `Operator`, `OpContext` → `OperatorContext`, `register_op` → `register_operator`, `build_op` → `build_operator`, `OP_REGISTRY` → `OPERATOR_REGISTRY`, and the plugin entry-point group `rosetta.ops` → `rosetta.operators`. Resolved specs carry `operators` (was `ops`). The contract YAML is unchanged (`apply:` lists and operator names stay as they were).
+- **Contract format v2 (breaking):** sections are now mappings keyed by frame key (v1's flat entry lists no longer load); each entry is a `channel: {topic, type, qos, ...}` block plus a **mandatory** `align: {strategy, timeline}` (`tolerance_ms` with `asof`), then `select`/`apply`/`kind`. A list value under one key declares ordered sources (concatenation for observations, action splitting). `serve: {safety}` moved to `channel.safety`; `stamp: receive|header` became open timeline names (`timeline: receive|header`) chosen per source — including actions, replacing the deleted global `timestamp_source`. New required top-level fields: `robot_interface: ros2` and `fps`. Validation replaces fallback: unknown keys anywhere, a missing align, or a timeline the channel's message type cannot provide (e.g. `header` on `std_msgs`) are load-time errors, and a header-timeline message arriving unstamped is dropped at ingest instead of silently falling back to receive time. Top-level `x-*` keys are ignored (YAML anchor holders, e.g. shared QoS). `clamp` accepts `{min, max}`. See `contracts/stone.yaml` for the annotated tour.
+- **Restructure (breaking):** the package tree now states the architecture — `rosetta.core` split into `rosetta.contract` (`contract.py` → `contract/schema.py`, `contract_utils.py` → `contract/specs.py`, plus `ops.py`, `errors.py`) and `rosetta.frames` (`converters.py` → `frames/codecs.py`, `frame_layout.py` → `frames/layout.py`, `resample.py` → `frames/resample.py`, naming helpers → `frames/naming.py`); `rosetta.ros2` → `rosetta.robots.ros2`; `rosetta.backends.protocols` → `rosetta.policies`. New `rosetta.frames.streams` defines `FrameSource`/`FrameSink`/`FrameStream` — `PolicyRunner.run()` now takes a `FrameStream` instead of a `TopicBridge`, so framework adapters no longer import rclpy. Entry-point groups (`rosetta.dataset_writers`, `rosetta.policy_runners`) are unchanged.
+- **Node rename (breaking):** `rosetta_client_node` → `policy_runner_node` (class `PolicyRunnerNode`, default node name `policy_runner`, launch `policy_runner_launch.py`, params `policy_runner.yaml`); its `backend` parameter is now `framework`, and `rosetta_port`'s `--backend` flag is now `--framework`
 - **Contract:** `name` → `robot_type`, `rate_hz` → `fps`
 - **Nodes:** `PolicyBridge` → `rosetta_client_node`, `EpisodeRecorderServer` → `episode_recorder_node`
-- **Actions:** `/run_policy` → `/rosetta_client/run_policy`, `/record_episode` → `/episode_recorder/record_episode`
+- **Actions:** relative names (`run_policy`, `record_episode`) prefixed by the launch-file namespace — `/run_policy` and `/record_episode` in the default launches; `/robot_policy/run_policy` and `/reward_classifier/run_policy` in the HIL launch
 - **Launch:** `turtlebot_policy_bridge.launch.py` → `rosetta_client_launch.py`, `turtlebot_recorder_server.launch.py` → `episode_recorder_launch.py`
-- **Conversion:** `bag_to_lerobot.py` → `port_bags.py` (now processes directories, supports sharding)
+- **Conversion:** `bag_to_lerobot.py` → `rosetta.robots.ros2.port` (the `rosetta_port` console script) (now processes directories, supports sharding)
 - **Inference:** Policy loading moved to LeRobot's async gRPC server
-- **New:** `lerobot_teleoperator_rosetta` (experimental), `rosetta_rl` (coming soon)
+- **New:** `lerobot_teleoperator_rosetta` (experimental)
 
 </details>
 
@@ -77,23 +85,25 @@
 ```yaml
 # my_contract.yaml
 robot_type: my_robot
+robot_interface: ros2
 fps: 30
 
 observations:
-  - key: observation.state
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
 
-  - key: observation.images.cam
-    topic: /camera/image_raw/compressed
-    type: sensor_msgs/msg/CompressedImage
+  observation.images.cam:
+    channel: {topic: /camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
     apply: [resize: [480, 640]]
 
 actions:
-  - key: action
-    topic: /cmd
-    type: sensor_msgs/msg/JointState
+  action:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
 ```
 
@@ -114,7 +124,7 @@ ros2 run rosetta episode_keyboard_node
 **3. Convert** bags to LeRobot dataset:
 
 ```bash
-python -m rosetta.port_bags \
+python -m rosetta.robots.ros2.offline.port \
     --raw-dir ./datasets/bags \
     --contract my_contract.yaml \
     --repo-id my-org/my-dataset \
@@ -134,16 +144,18 @@ lerobot-train \
 
 ```bash
 # Terminal 1: Start the client
-ros2 launch rosetta rosetta_client_launch.py \
+ros2 launch rosetta policy_runner_launch.py \
     contract_path:=contract.yaml \
     pretrained_name_or_path:=my-org/my-policy
 ```
 
 ```bash
 # Terminal 2: Run the policy
-ros2 action send_goal /rosetta_client/run_policy \
+ros2 action send_goal /run_policy \
     rosetta_interfaces/action/RunPolicy "{prompt: 'pick up red block'}"
 ```
+
+(The action is served under the relative name `run_policy`; a launch-file namespace prefixes it, e.g. `/robot_policy/run_policy` in the HIL launch.)
 
 ---
 
@@ -155,11 +167,27 @@ ros2 action send_goal /rosetta_client/run_policy \
 
 ### What is Rosetta?
 
-Rosetta is a set of ROS2 packages and tools to bring state-of-the-art robot learning capabilites to the ROS 2 community. Specifically, Rosetta leverages LeRobot for training and inference.
+Robots are messy; policies want structure. A **contract** (one YAML per robot) declares how the robot's pub/sub topics become clean fixed-rate **frames** — and back. The **robot side** (`rosetta.robots`) adapts each pub/sub ecosystem onto that frame stream (ROS2 today). The **policy side** (`rosetta.policies`) adapts each learning framework (LeRobot, vla_foundry, starvla, ...) to consume it, for dataset writing and live policy execution. Either side swaps out without touching the other, because both speak only frames.
+
+The same frame machinery (`rosetta.frames`) runs live inference and offline bag conversion, so training data matches inference input sample-for-sample by construction.
 
 ## Architecture
 
-Rosetta consists of five packages that implement LeRobot's official interfaces:
+Inside the `rosetta` package, the tree tells the story:
+
+```
+rosetta/
+├── contract/    # the declaration: one YAML per robot (schema, specs, operators)
+├── frames/      # the interlingua: layout, resampling, codecs, stream protocols
+├── robots/      # robot side: pub/sub ecosystems (ros2/ today)
+└── policies/    # policy side: DatasetWriter + PolicyRunner seams, entry-point loading
+```
+
+The data-path vocabulary is three words, in pipeline order: a **channel** is a declared endpoint in the robot interface's dialect (`schema.Channel`); a **stream** is the decoded, timelined sample sequence of one channel *before* alignment (`StreamSpec` describes it, `StreamBuffer` lands it on the clock); a **frame** is one synchronized sample of every contract key per clock tick, *after* alignment (`FrameIO` — a `FrameSource` + `FrameSink` — is the bidirectional frame surface a `PolicyRunner` drives).
+
+Inside `contract/`, the split is *say vs. do*: `schema.py` is what the contract **says** — the typed document model of the YAML (`Channel`, `Align`, `Source`, `FrameEntry`, `Contract`), validation, and `load_contract()`. `specs.py` is what the runtime **consumes** — the resolved stream specifications (`StreamSpec` family) produced by the `iter_*_specs` pass. A spec is composed, not copied: it carries `source` (the exact declaration `Source` it was resolved from — read `spec.source.channel.topic`, `spec.source.align`, `spec.source.kind` through it) plus the computed fields the YAML never states (`names`, `dtype`, `namespace`, `operators`, image geometry). Downstream code takes `list[StreamSpec]` and never re-reads the document; "spec" always means one of these resolved runtime objects, and a declaration fact can never silently go missing from one — there is no copy step to forget.
+
+The workspace consists of several packages; framework adapters register into `rosetta.policies` entry points:
 
 | Package | Purpose |
 |---------|---------|
@@ -167,16 +195,15 @@ Rosetta consists of five packages that implement LeRobot's official interfaces:
 | [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS2 action/service definitions |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
-| `rosetta_rl` | HIL-SERL reinforcement learning (coming soon) |
 
 ```
 rosetta/
 ├── launch/
 │   ├── episode_recorder_launch.py
-│   └── rosetta_client_launch.py
+│   └── policy_runner_launch.py
 └── params/
     ├── episode_recorder.yaml    # Default config for Episode Recorder
-    └── rosetta_client.yaml      # Default config for Rosetta Client
+    └── policy_runner.yaml      # Default config for the policy runner
 ```
 
 ### LeRobot Plugin Architecture
@@ -194,7 +221,7 @@ The `lerobot_robot_rosetta` and `lerobot_teleoperator_rosetta` packages implemen
 - Hardware drivers exist elsewhere in the ROS2 graph
 - The contract YAML defines topic-to-feature mapping
 
-**Important:** Because `lerobot_robot_rosetta` creates a ROS2 lifecycle node internally, **your system needs ROS2 installed** to use it, even when invoking it through LeRobot's standard CLI tools. When `rosetta_client_node` launches inference, the chain is: `rosetta_client_node` (ROS2 node) → LeRobot `RobotClient` → `lerobot_robot_rosetta` (also a ROS2 node) → your robot's ROS2 topics. Both the convenience node and the robot plugin are ROS2 nodes running in the same ROS2 graph.
+**Important:** Because `lerobot_robot_rosetta` creates a ROS2 lifecycle node internally, **your system needs ROS2 installed** to use it, even when invoking it through LeRobot's standard CLI tools. When `policy_runner_node` launches inference, the chain is: `policy_runner_node` (ROS2 node) → LeRobot `RobotClient` → `lerobot_robot_rosetta` (also a ROS2 node) → your robot's ROS2 topics. Both the convenience node and the robot plugin are ROS2 nodes running in the same ROS2 graph.
 
 This means any ROS2 robot can use LeRobot's tools. Define a contract and use `--robot.type=rosetta`.
 
@@ -210,12 +237,14 @@ LeRobot's `connect()` / `disconnect()` map to ROS2 lifecycle transitions:
 
 ### Policy Inference
 
-The `rosetta_client_node` delegates inference to LeRobot's async gRPC policy server (`lerobot.async_inference.policy_server`). This server is a standard LeRobot component with no ROS2 dependency and can run on any machine with LeRobot and a GPU. Benefits:
+The `policy_runner_node` delegates inference to a gRPC policy server (`lerobot_robot_rosetta.policy_server`, a thin preload/cache wrapper over LeRobot's `lerobot.async_inference.policy_server`). The server has no ROS2 dependency and can run on any machine with LeRobot and a GPU. Benefits:
 
 - Better GPU memory management
 - Support for all LeRobot policy types without code changes
 - Consistent behavior between training and deployment
 - Can run on a remote machine, letting a resource-constrained robot offload inference over the network
+
+When `launch_local_server` is `true`, the server is started — and the model fully loaded — at node **configure** time, so the first `run_policy` goal costs the same as any other. The configure transition blocks until the model is up (bounded by `server_startup_timeout_sec`), GPU memory is held from startup, and later goals reuse the loaded model instead of re-reading the checkpoint on every handshake.
 
 ### rosetta_ws Workspace
 
@@ -239,40 +268,48 @@ The contract defines the translation between ROS 2 topics and the keys LeRobot e
 
 On the ROS2 side, data lives in typed messages on named topics with rich structure (headers, arrays, nested fields). On the LeRobot side, data lives in flat dictionaries with dot-separated string keys and numpy/tensor values. The contract maps one to the other, handling type conversion, field extraction, timestamp alignment, and resampling.
 
-Here's how a concrete contract entry translates a ROS2 topic to a LeRobot feature:
+Every frame-clock entry reads as one pipeline — `channel (provides) → align (chooses a timeline; mandatory) → select → apply → the mapping key`:
 
 ```yaml
-- key: observation.state
-  topic: /follower_arm/joint_states
-  type: sensor_msgs/msg/JointState
+observation.state:
+  channel: {topic: /follower_arm/joint_states, type: sensor_msgs/msg/JointState}
+  align: {strategy: hold, timeline: header}
   select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
            position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
 ```
 
 At each timestep, this:
-1. **Subscribes** to `/follower_arm/joint_states` (a `JointState` message)
-2. **Extracts** the named fields using dot notation (`position.shoulder_pan` → `msg.position[msg.name.index("shoulder_pan")]`)
-3. **Assembles** a numpy array: `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]` (dtype `float64`)
-4. **Stores** it under the key `observation.state` in the LeRobot dataset
+1. **Subscribes** to `/follower_arm/joint_states` (a `JointState` message) — the channel block is exactly what a different pub/sub ecosystem would replace
+2. **Aligns** the stream onto the frame clock using the message's `header` timeline (holding the latest value)
+3. **Extracts** the named fields using dot notation (`position.shoulder_pan` → `msg.position[msg.name.index("shoulder_pan")]`)
+4. **Assembles** a numpy array: `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]` (dtype `float64`)
+5. **Stores** it under the key `observation.state` in the LeRobot dataset
 
-**Multi-topic concatenation**: Multiple contract entries can map to the **same key**. Their values are concatenated in declaration order. This lets you combine data from separate ROS2 topics into a single feature vector:
+**Multi-source concatenation**: a **list** value under one key declares ordered sources whose values concatenate into a single feature vector:
 
 ```yaml
 observations:
-  # These two entries share the same key; values are concatenated
-  - key: observation.state
-    topic: /arm/joint_states
-    type: sensor_msgs/msg/JointState
-    select: [position.j1, position.j2, position.j3]
-
-  - key: observation.state
-    topic: /gripper/state
-    type: std_msgs/msg/Float32
-    # Result: observation.state = [j1, j2, j3, gripper] (4D vector)
+  observation.state:
+    - channel: {topic: /arm/joint_states, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: header}
+      select: [position.j1, position.j2, position.j3]
+    - channel: {topic: /gripper/state, type: std_msgs/msg/Float32}
+      align: {strategy: hold, timeline: receive}
+      # Result: observation.state = [j1, j2, j3, gripper] (4D vector)
 ```
-This is important because, as shown in [Policy Feature Compatibility](#policy-feature-compatibility), all of the available core policies depend on explicit names for most keys. If you have multiple ros2 topics you would like to use for observation, the most straightforward way to achieve this is to include both topics with the same key name.
+This is important because, as shown in [Policy Feature Compatibility](#policy-feature-compatibility), all of the available core policies depend on explicit names for most keys. If you have multiple ros2 topics you would like to use for observation, the most straightforward way to achieve this is to declare them as ordered sources of one key.
+
+The same topic may also appear in several sources (e.g. position and orientation slices of one pose topic) — each source keeps its own selector and buffer.
+
+Multi-source keys are validated at load (`ContractValidationError` otherwise):
+
+- every source of a multi-source key must have a `select` (concatenation needs static dims to lay out the combined vector);
+- all sources of a key must resolve to the **same** dtype (set `dtype:` in the channel explicitly to align them);
+- images and strings cannot share a key; give each its own key.
 
 For images, each image key must be unique; image features cannot be concatenated.
+
+Layout is purely by declaration order — there is no separate ordering key (e.g. `position: 2`). Order is already the one thing a YAML list gives you for free, and it's fully expressive: any position for any source, reordered with a one-line diff. An explicit ordering field would just duplicate that ordering in a second place with no new capability, only a new way for the two to drift out of sync.
 
 A minimal contract typically only needs `observations` and `actions`. See the full [Contract Reference](#contract-reference) for all options, and the [LeRobot Data Model Reference](#lerobot-data-model-reference) for how keys, features, and policies interact.
 
@@ -328,7 +365,7 @@ Launch arguments for `episode_keyboard_launch.py`:
 For scripted or automated workflows, trigger recording directly via the action interface:
 
 ```bash
-ros2 action send_goal /episode_recorder/record_episode \
+ros2 action send_goal /record_episode \
     rosetta_interfaces/action/RecordEpisode "{prompt: 'task description'}"
 ```
 
@@ -343,7 +380,7 @@ ros2 service call /episode_recorder/cancel_recording std_srvs/srv/Trigger
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `contract_path` | `contracts/so_101.yaml` | Path to contract YAML |
-| `bag_base_dir` | `/workspaces/rosetta_ws/datasets/bags` | Directory for rosbag output |
+| `bag_base_dir` | `datasets/bags` | Rosbag output dir; relative paths resolve against the launch cwd (like `ros2 bag record`) |
 | `storage_id` | `mcap` | Rosbag format: `mcap` (recommended) or `sqlite3` |
 | `default_max_duration` | `300.0` | Max episode duration in seconds |
 | `feedback_rate_hz` | `2.0` | Recording feedback publish rate |
@@ -380,14 +417,14 @@ Rosetta records demonstrations to [rosbag2](https://github.com/ros2/rosbag2) fil
 
 ## Converting Bags to Datasets
 
-`port_bags.py` converts rosbag2 files to LeRobot datasets using the contract for key mapping, timestamp alignment, resampling, and dtype conversion. It applies the same `StreamBuffer` resampling logic used during live inference, ensuring your offline dataset matches what the robot would see at runtime.
+The porter (`rosetta_port`, i.e. `python -m rosetta.robots.ros2.offline.port`) converts rosbag2 files to LeRobot datasets using the contract for key mapping, timestamp alignment, resampling, and dtype conversion. It applies the same `StreamBuffer` resampling logic used during live inference, ensuring your offline dataset matches what the robot would see at runtime.
 
-While you could write your own conversion script using the primitives in `rosetta.core` (contract loader, stream buffers) and `rosetta.ros2` (decoders), `port_bags.py` handles the full pipeline: reading bags, applying the contract, encoding video, building the LeRobot dataset structure, and optionally pushing to the Hub. Because the raw bag preserves all data without transformation, you can re-run `port_bags.py` with an updated contract (changing keys, adjusting `fps`, adding or removing features) without re-recording.
+While you could write your own conversion script using the primitives in `rosetta.contract` / `rosetta.frames` (contract loader, stream buffers) and `rosetta.robots.ros2` (decoders), the porter handles the full pipeline: reading bags, applying the contract, encoding video, building the LeRobot dataset structure, and optionally pushing to the Hub. Because the raw bag preserves all data without transformation, you can re-run the porter with an updated contract (changing keys, adjusting `fps`, adding or removing features) without re-recording.
 
 
 ### Relationship to LeRobot
 
-`port_bags.py` mirrors the interface of LeRobot's example porters (like `port_droid.py`):
+The porter mirrors the interface of LeRobot's example porters (like `port_droid.py`):
 
 ```bash
 # LeRobot's port_droid.py
@@ -396,8 +433,8 @@ python examples/port_datasets/port_droid.py \
     --repo-id my_org/droid \
     --push-to-hub
 
-# Rosetta's port_bags.py (same pattern + contract)
-python -m rosetta.port_bags \
+# Rosetta's rosetta.robots.ros2.offline.port (same pattern + contract)
+python -m rosetta.robots.ros2.offline.port \
     --raw-dir ./datasets/bags \
     --contract contract.yaml \
     --repo-id my_org/my_dataset \
@@ -415,14 +452,14 @@ python -m rosetta.port_bags \
 ### Basic Usage
 
 ```bash
-python -m rosetta.port_bags \
+python -m rosetta.robots.ros2.offline.port \
     --raw-dir ./datasets/bags \
     --contract ./contract.yaml \
     --repo-id my_dataset \
     --root ./datasets/lerobot
 ```
 
- For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `port_bags.py` for `port_droid.py` in the examples.
+ For additional information on large-scale conversions, parallel processing, and SLURM cluster workflows, see the **[LeRobot Porting Datasets Guide](https://huggingface.co/docs/lerobot/en/porting_datasets_v3)** and substitute `rosetta_port` for `port_droid.py` in the examples.
 
 
 
@@ -503,22 +540,29 @@ huggingface-cli upload my-org/my-policy \
 
 ## Deploying Policies
 
-The `rosetta_client_node` is a convenience node that wraps LeRobot's inference pipeline in ROS2 actions. It lets you start and stop policy execution via `ros2 action send_goal`, with feedback on inference progress. It can optionally launch a local LeRobot gRPC policy server as a subprocess, or connect to a remote one.
+The `policy_runner_node` is a convenience node that wraps LeRobot's inference pipeline in ROS2 actions. It lets you start and stop policy execution via `ros2 action send_goal`, with feedback on inference progress. It can optionally launch a local LeRobot gRPC policy server as a subprocess, or connect to a remote one.
 
 Launch Client:
 
 ```bash
-ros2 launch rosetta rosetta_client_launch.py contract_path:=/path/to/contract.yaml
+ros2 launch rosetta policy_runner_launch.py contract_path:=/path/to/contract.yaml
 ```
 
 Run policy:
 
 ```bash
-ros2 action send_goal /rosetta_client/run_policy \
+ros2 action send_goal /run_policy \
     rosetta_interfaces/action/RunPolicy "{prompt: 'task description'}"
 ```
 
-**Remote inference:** When `launch_local_server` is `false`, the node connects to a LeRobot gRPC policy server at `server_address`. This server is a standard LeRobot component with no ROS2 dependency. It can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server.
+**Remote inference:** When `launch_local_server` is `false`, the node connects to a gRPC policy server at `server_address`. The server has no ROS2 dependency and can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server. To pre-warm the remote server so even the first goal skips the model load:
+
+```bash
+python -m lerobot_robot_rosetta.policy_server --host=0.0.0.0 --port=8080 \
+    --policy-type=act --pretrained-name-or-path=my-org/my-policy --policy-device=cuda
+```
+
+(Stock `lerobot.async_inference.policy_server` also works, but reloads the checkpoint on every goal.)
 
 **Parameters** (all available as launch arguments):
 
@@ -533,7 +577,8 @@ ros2 action send_goal /rosetta_client/run_policy \
 | `chunk_size_threshold` | `0.95` | When to request new chunk (0.0-1.0) |
 | `aggregate_fn_name` | `weighted_average` | Chunk aggregation: `weighted_average`, `latest_only`, `average`, `conservative` |
 | `feedback_rate_hz` | `2.0` | Execution feedback publish rate |
-| `launch_local_server` | `true` | Auto-start policy server subprocess |
+| `launch_local_server` | `true` | Auto-start policy server subprocess (at configure, with model preload) |
+| `server_startup_timeout_sec` | `120.0` | Max wait for the server to come up (covers model preload; raise for cold HF downloads) |
 | `obs_similarity_atol` | `-1.0` | Observation filtering tolerance (-1.0 to disable)* |
 | `log_level` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `configure` | `true` | Auto-configure on startup |
@@ -545,7 +590,7 @@ ros2 action send_goal /rosetta_client/run_policy \
 
 ```bash
 # Run with a pretrained model
-ros2 launch rosetta rosetta_client_launch.py \
+ros2 launch rosetta policy_runner_launch.py \
     contract_path:=/path/to/contract.yaml \
     pretrained_name_or_path:=my-org/my-policy
 ```
@@ -553,11 +598,16 @@ ros2 launch rosetta rosetta_client_launch.py \
 **This node is not the only way to deploy.** You can run inference using LeRobot's standard CLI tools directly with the Rosetta robot plugin:
 
 ```bash
-# Standard LeRobot deployment, no rosetta_client_node needed
+# Standard LeRobot deployment, no policy_runner_node needed
 lerobot-record --robot.type=rosetta --robot.config_path=contract.yaml
 ```
 
-See [Imitation Learning on Real Robots](https://huggingface.co/docs/lerobot/il_robots) for LeRobot's native deployment workflow. The `rosetta_client_node` adds ROS2 action-based lifecycle management on top of this, which is convenient if your workflow is already ROS2-centric.
+The `lerobot_robot_rosetta` / `lerobot_teleoperator_rosetta` distributions
+follow LeRobot's third-party plugin naming convention (`lerobot_robot_*`,
+`lerobot_teleoperator_*`), so LeRobot CLIs and the async robot client
+auto-discover them when installed — no manual import or registration step.
+
+See [Imitation Learning on Real Robots](https://huggingface.co/docs/lerobot/il_robots) for LeRobot's native deployment workflow. The `policy_runner_node` adds ROS2 action-based lifecycle management on top of this, which is convenient if your workflow is already ROS2-centric.
 
 ---
 
@@ -580,73 +630,106 @@ Not every section needs to be filled for every robot. A minimal contract only ne
 
 ```yaml
 robot_type: my_robot
+robot_interface: ros2
 fps: 30
 
 observations:
-  - key: observation.state
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
 
 actions:
-  - key: action
-    topic: /joint_commands
-    type: sensor_msgs/msg/JointState
+  action:
+    channel: {topic: /joint_commands, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
 ```
+
+`robot_type`, `robot_interface` (only `ros2` today), and `fps` are required.
+Top-level keys starting with `x-` are ignored — use them to hold shared YAML
+anchors (e.g. an `x-qos:` block of reusable QoS profiles; see
+`contracts/stone.yaml`).
 
 ### Observations
 
 ```yaml
 observations:
   # State vector (with all optional fields shown)
-  - key: observation.state
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
-    select: [position.j1, velocity.j1]
-    apply: [rad2deg]    # optional op pipeline (see Ops)
+  observation.state:
+    channel:
+      topic: /joint_states
+      type: sensor_msgs/msg/JointState
+      qos: {reliability: best_effort, depth: 10}
+      dtype: float64            # optional; defaults to the codec's native dtype
     align:
-      strategy: hold    # hold (default), asof, drop
-      stamp: header     # header (default), receive
-    qos:
-      reliability: best_effort
-      depth: 10
+      strategy: hold            # hold | asof | drop — mandatory, no default
+      timeline: header          # a timeline the channel provides — mandatory
+    select: [position.j1, velocity.j1]
+    apply: [rad2deg]            # optional operator pipeline (see Operators)
+```
 
-  # Camera (resize is an op in the apply pipeline)
-  - key: observation.images.camera
-    topic: /camera/image_raw/compressed
-    type: sensor_msgs/msg/CompressedImage
+Data on a channel can carry several timestamps at once; the robot interface
+produces them as named **timelines** and `align.timeline` selects one by
+name. Every ros2 channel provides `receive` (arrival time at the node); a
+message type carrying a std_msgs `Header` also provides `header` (sensor
+time — more accurate, but requires publishers to stamp correctly and hosts
+to be time-synced). Naming a timeline the channel cannot provide is a
+load-time error, and a header-timeline message that arrives unstamped is
+dropped at ingest — never silently re-timed.
+
+`align.strategy` picks how samples land on the frame clock: `hold` carries
+the last value forward, `asof` holds only within `tolerance_ms` (required,
+and only valid, with `asof`), `drop` gaps out anything older than one frame.
+
+```yaml
+
+  # Camera (resize is an operator in the apply pipeline; encoding hints live in the channel)
+  observation.images.camera:
+    channel: {topic: /camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
     apply: [resize: [224, 224]]  # [height, width]
 ```
 
-Multiple topics can share the same `key`. Values are concatenated (see [The Contract](#the-contract)).
+A list value under one key declares ordered sources whose values are
+concatenated (see [The Contract](#the-contract)).
 
 ### Actions
 
 ```yaml
 actions:
-  - key: action
-    topic: /joint_commands
-    type: sensor_msgs/msg/JointState
-    qos: {reliability: reliable, depth: 10}
+  action:
+    channel:
+      topic: /joint_commands
+      type: sensor_msgs/msg/JointState
+      qos: {reliability: reliable, depth: 10}
+      safety: hold              # none (default) | hold | zeros
+    align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
-    apply: [rad2deg]          # only serveable ops allowed on actions
-    serve:
-      safety: hold            # none, hold, zeros (default zeros)
+    apply: [rad2deg]            # only serveable operators allowed on actions
 ```
+
+`channel.safety` is the stop behavior published by the watchdog and on
+deactivate. The default is `none` because a fabricated zero command is only a
+safe stop under velocity control — under position control (the common case)
+it commands a slam to the zero pose. Opt in explicitly per channel: `zeros`
+for velocity-controlled robots (e.g. a Twist base), `hold` where re-sending
+the last command is safe.
+
+Actions read the same pipeline right-to-left: recording decodes from the
+channel, serving encodes to it. A list value splits one action vector across
+channels in order (see `contracts/stone.yaml`), each with its own safety
+behavior and align.
 
 ### Field kinds (`kind`)
 
 `kind` is an optional tag on an observation or action spec that describes what
-the value means. LeRobot ignores it. The vla_foundry / starVLA
-use it to pick per-group normalization, rotation handling, and window padding.
-The defaults leave every existing contract unchanged.
+the value's representation is. LeRobot ignores it. The vla_foundry / starVLA
+adapters use it to pick per-group normalization and rotation handling. The
+default leaves every existing contract unchanged.
 
-`kind` has two axes, a representation and a frame. It may be a single token or a
-list (`kind: quaternion`, `kind: delta`, `kind: [quaternion, delta]`,
-`kind: [continuous, absolute]`):
-
-**Representation** (default `continuous`):
+`kind` is a single token (default `continuous`):
 
 | value | dims | meaning |
 |---|---|---|
@@ -657,10 +740,6 @@ list (`kind: quaternion`, `kind: delta`, `kind: [quaternion, delta]`,
 | `rotation_6d` | 6 | 6-D continuous rotation |
 | `binary` | any | discrete on/off (e.g. gripper) |
 
-**Frame** (default `absolute`): `absolute` or `delta`, whether values are
-world-frame or relative. starVLA uses it for window padding (`first_last` vs
-`zero`) and relative-rotation handling. At most one tag per axis (validated).
-
 **Keys stay canonical.** Don't encode the type in the key. `action.binary`
 becomes a separate LeRobot feature and breaks policies that read `action`.
 Keep the canonical key and split a mixed vector into one spec per kind. The
@@ -669,31 +748,30 @@ specs share the key and concatenate into one flat feature, each with its own
 
 ```yaml
 observations:
-  - key: observation.state          # canonical key; one flat vector to LeRobot
-    topic: /ee_pose
-    type: geometry_msgs/msg/PoseStamped
-    select: [pose.position.x, pose.position.y, pose.position.z]
-    # kind: continuous (default)
-  - key: observation.state          # same key -> concatenated after the above
-    topic: /ee_pose
-    type: geometry_msgs/msg/PoseStamped
-    select: [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
-    kind: quaternion
-  - key: observation.state
-    topic: /gripper
-    type: sensor_msgs/msg/JointState
-    select: [position.gripper]
-    kind: binary
+  observation.state:                # canonical key; one flat vector to LeRobot
+    - channel: {topic: /ee_pose, type: geometry_msgs/msg/PoseStamped}
+      align: {strategy: hold, timeline: header}
+      select: [pose.position.x, pose.position.y, pose.position.z]
+      # kind: continuous (default)
+    - channel: {topic: /ee_pose, type: geometry_msgs/msg/PoseStamped}
+      align: {strategy: hold, timeline: header}
+      select: [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+      kind: quaternion
+    - channel: {topic: /gripper, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: header}
+      select: [position.gripper]
+      kind: binary
 ```
 
+`kind` is per-source, so a mixed vector carries one tag per slice.
 Validation runs at contract load: the dim count must match the `kind`
 (`quaternion` is 4, etc.), and an untagged `x/y/z/w` run warns ("looks like a
 quaternion, set `kind: quaternion`") so a rotation isn't silently min-max'd.
 
 ### Backend notes (LeRobot / vla_foundry / starVLA)
 
-One contract drives all three backends. Only `kind`/`absolute` are VLA-specific
-(LeRobot ignores them). A few differences matter:
+One contract drives all three frameworks. Only `kind` is VLA-specific
+(LeRobot ignores it). A few differences matter:
 
 - **Training is framework-native for all three.** Rosetta produces the dataset
   and hosts deploy. You train with each framework's own tools: LeRobot with
@@ -717,11 +795,12 @@ One contract drives all three backends. Only `kind`/`absolute` are VLA-specific
 
 Rosetta aims to make what a policy trains on match what it sees live. Offline
 conversion (`bag_frames`) and online inference (`topic_bridge`) run the same
-`StreamBuffer` resampling, `aggregate_frame`, and op pipeline from the same
-contract, so decode, `select`, `apply` ops, alignment, and key aggregation match
-across all three backends.
+`StreamBuffer` resampling, `aggregate_frame`, and operator pipeline from the
+same contract, so decode, `select`, `apply` operators, alignment, and key
+aggregation match
+across all three frameworks.
 
-Downstream, per backend:
+Downstream, per framework:
 
 - **LeRobot.** Normalization is policy-internal, with the same dataset stats at
   train and infer time. The only residual is the video codec (mp4 dataset vs raw
@@ -737,14 +816,18 @@ Downstream, per backend:
   Vision+language-only models send no state and are unaffected. Also keep the
   runner's `image_width/height` equal to the model's training `obs_image_size`.
 
-### Ops
+### Operators
 
-`apply` is an ordered op pipeline run after `select` (field projection) and
-before `align` (resampling). On the **record/decode** path ops run front-to-back
-via their forward direction; on the **serve/encode** path (policy command → ROS)
-they run back-to-front via their inverse.
+`apply` is an ordered operator pipeline run after `select` (field projection).
+On the **record/decode** path operators run front-to-back via their forward
+direction;
+on the **serve/encode** path (policy command → ROS) they run back-to-front
+via their inverse. (Select/apply are pure per-message transforms, so they
+commute with alignment — the runtime applies them once per message at
+ingest, which is observationally identical to the contract's
+channel → align → select → apply reading.)
 
-Each op declares an **invertibility tier** that governs where it may run:
+Each operator declares an **invertibility tier** that governs where it may run:
 
 | Tier | Meaning | On actions? | Round-trip gate |
 |------|---------|:-----------:|:---------------:|
@@ -752,64 +835,65 @@ Each op declares an **invertibility tier** that governs where it may run:
 | `BIDIRECTIONAL` | runs both ways but lossy (it applies a bound) | allowed | — |
 | `BIJECTIVE` | inverse exactly undoes forward | allowed | verified at load |
 
-An action's `apply` may only contain serveable ops (`BIDIRECTIONAL` or
-`BIJECTIVE`). A `FORWARD_ONLY` op on an action is rejected at contract load. A
-`BIJECTIVE` op is round-trip verified at load: it will not load unless
+An action's `apply` may only contain serveable operators (`BIDIRECTIONAL` or
+`BIJECTIVE`). A `FORWARD_ONLY` operator on an action is rejected at contract
+load. A `BIJECTIVE` operator is round-trip verified at load: it will not load
+unless
 `inverse(forward(x)) == x`, so a wrong inverse fails at load instead of
 corrupting actions silently.
 
-| Op | Form | Tier | Notes |
+| Operator | Form | Tier | Notes |
 |----|------|------|-------|
 | `rad2deg` | `rad2deg` | `BIJECTIVE` | radians (ROS) ↔ degrees (dataset) |
-| `clamp` | `clamp: [lo, hi]` | `BIDIRECTIONAL` | clip element-wise to `[lo, hi]`; on actions this bounds the outgoing command (lossy, so not bijective) |
+| `clamp` | `clamp: {min: lo, max: hi}` (or `[lo, hi]`) | `BIDIRECTIONAL` | clip element-wise; on actions this bounds the outgoing command (lossy, so not bijective) |
 | `resize` | `resize: [h, w]` | `FORWARD_ONLY` | nearest-neighbor image resize; observation only |
 
 ```yaml
-apply: [rad2deg, clamp: [-180, 180]]   # convert then bound
-apply: [resize: [224, 224]]            # image resize (observations only)
+apply: [rad2deg, clamp: {min: -180, max: 180}]   # convert then bound
+apply: [resize: [224, 224]]                      # image resize (observations only)
 ```
 
-Add a built-in capability by registering a new op in `rosetta/core/ops.py`; the
-contract schema does not change:
+Add a built-in capability by registering a new operator in
+`rosetta/contract/operators.py`; the contract schema does not change:
 
 ```python
-from rosetta.core.ops import register_op, Op, Invertibility
+from rosetta.contract.operators import register_operator, Operator, Invertibility
 
-@register_op("my_op", kind=Invertibility.BIJECTIVE)
-class MyOp(Op):
+@register_operator("my_op", kind=Invertibility.BIJECTIVE)
+class MyOperator(Operator):
     def forward(self, arr): ...
     def inverse(self, arr): ...   # round-trip verified at contract load
 ```
 
-**Bring your own op as a plugin**, no fork needed. Package your op and advertise
-it under the `rosetta.ops` entry-point group. Rosetta discovers and imports it at
-contract load, so the contract references it by name only (no module paths in the
-YAML):
+**Bring your own operator as a plugin**, no fork needed. Package your operator
+and advertise it under the `rosetta.operators` entry-point group. Rosetta
+discovers and imports it at contract load, so the contract references it by
+name only (no module paths in the YAML):
 
 ```toml
 # in your plugin's pyproject.toml
-[project.entry-points."rosetta.ops"]
-my_ops = "my_pkg.my_ops"   # imported once; its @register_op calls run
+[project.entry-points."rosetta.operators"]
+my_operators = "my_pkg.my_operators"   # imported once; its @register_operator calls run
 ```
 ```yaml
-apply: [my_op]             # resolves to the plugin's registered op
+apply: [my_op]             # resolves to the plugin's registered operator
 ```
 
 ### Teleop
 
-For human-in-the-loop recording with a leader arm or other input device:
+For human-in-the-loop recording with a leader arm or other input device.
+Teleop uses fixed **role** sections — `input`, `events`, `feedback` — instead
+of frame keys:
 
 ```yaml
 teleop:
-  inputs:
-    - key: teleop_input
-      topic: /leader_arm/joint_states
-      type: sensor_msgs/msg/JointState
-      select: [position.j1, position.j2]
+  input:                  # same entry shape as an observation
+    channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
+    select: [position.j1, position.j2]
 
-  events:
-    topic: /joy
-    type: sensor_msgs/msg/Joy
+  events:                 # edge-triggered; no align — events are not resampled
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
     select:               # event_name -> button/axis path
       is_intervention: buttons.5
       success: buttons.0
@@ -818,33 +902,41 @@ teleop:
       failure: buttons.1
 ```
 
+An optional `feedback` role (action-shaped, e.g. force feedback to the leader
+arm) is demonstrated in `contracts/stone.yaml`. Feedback channels never
+declare `safety` (a teleop device gets no fabricated commands — declaring it
+is a load error).
+
 ### Tasks, Rewards, and Signals
 
 These sections are optional. Use them when your workflow requires task prompts from ROS2 topics, RL reward signals, or episode termination signals.
 
 ```yaml
 tasks:
-  - key: task
-    topic: /task_prompt
-    type: std_msgs/msg/String
+  task:                       # not on the frame clock — no align
+    channel: {topic: /task_prompt, type: std_msgs/msg/String}
 
 rewards:
-  - key: next.reward
-    topic: /reward
-    type: std_msgs/msg/Float64
-    dtype: float64
+  next.reward:                # extended sections: dtype is mandatory
+    channel: {topic: /reward, type: std_msgs/msg/Float64, dtype: float64}
+    align: {strategy: hold, timeline: receive}
 
 signals:
-  - key: next.done
-    topic: /episode_done
-    type: std_msgs/msg/Bool
+  next.done:
+    channel: {topic: /episode_done, type: std_msgs/msg/Bool, dtype: bool}
+    align: {strategy: hold, timeline: receive}
 
-  - key: next.truncated
-    topic: /episode_truncated
-    type: std_msgs/msg/Bool
+  next.truncated:
+    channel: {topic: /episode_truncated, type: std_msgs/msg/Bool, dtype: bool}
+    align: {strategy: hold, timeline: receive}
 ```
 
-For VLA policies, the `task` string can also be provided via the `prompt` argument when recording or running a policy, so you don't need a ROS2 topic for it.
+The extended sections (`rewards`, `signals`, `info`, `complementary_data`)
+are ordinary frame entries with three extra rules: `dtype` is mandatory, they
+are never images, and they are record-only (written to bags and datasets,
+never fed to a policy at inference).
+
+Task labels are **per-frame**: during conversion, each frame's `task` is the latest string received on a task topic at or before that frame (hold semantics), so the task can change mid-episode and LeRobot stores a per-frame `task_index` accordingly. Frames before the first task message — or recordings with no task topic at all — fall back to the `prompt` argument passed when recording, so you don't need a ROS2 topic for single-task episodes. At inference, the task comes from the `RunPolicy` goal.
 
 ### Topic Recording
 
@@ -866,7 +958,7 @@ Node(
 
 Only `/rosout`, `/parameter_events`, and the recorder's own service topics are excluded automatically.
 
-To disable auto-recording and only record contract-declared topics, set `record_all: false` in the contract.
+To disable auto-recording and only record contract-declared topics, set the recorder's `record_all` parameter to `false` (in `params/episode_recorder.yaml` or per-launch).
 
 ### Adjunct Topics
 
@@ -874,17 +966,12 @@ Adjunct topics are recorded to the bag file but have no LeRobot feature mapping.
 
 ```yaml
 adjunct:
-  - topic: /tf
-    type: tf2_msgs/msg/TFMessage
-
-  - topic: /diagnostics
-    type: diagnostic_msgs/msg/DiagnosticArray
-
-  - topic: /imu/raw
-    type: sensor_msgs/msg/Imu
+  - channel: {topic: /tf, type: tf2_msgs/msg/TFMessage}
+  - channel: {topic: /diagnostics, type: diagnostic_msgs/msg/DiagnosticArray}
+  - channel: {topic: /imu/raw, type: sensor_msgs/msg/Imu}
 ```
 
-Because the bag preserves this data, you can always add a contract mapping for these topics later and re-run `port_bags.py` without re-recording.
+Because the bag preserves this data, you can always add a contract mapping for these topics later and re-run the porter without re-recording.
 
 ### Select Syntax
 
@@ -903,9 +990,27 @@ select: [twist.twist.linear.x, pose.pose.position.z]
 
 | Strategy | Behavior |
 |----------|----------|
-| `hold` | Use most recent message, no matter how old (default) |
-| `asof` | Use most recent message only if within `tol_ms` tolerance window, otherwise return nothing (zero-filled). Useful for rejecting stale data |
-| `drop` | Use most recent message only if it arrived within the current step/frame window |
+| `hold` | Use most recent message, no matter how old |
+| `asof` | Use most recent message only if within the `tolerance_ms` window, otherwise a gap. Useful for rejecting stale data |
+| `drop` | Use most recent message only if it arrived within the current step/frame window, otherwise a gap |
+
+Every frame-clock entry declares one explicitly — there is no default.
+
+**What a gap looks like.** Before **warmup**, no frames are emitted at all:
+recording and inference start only once every *observation* stream has
+produced at least one sample (actions and extended sections may legitimately
+start late or publish sparsely). After warmup, a stream with no sample at a
+tick **zero-fills** at its static dim — a zero vector for numerics, a zero
+image, `""` for strings — so every frame always has the declared shape. This
+is deliberate and currently not configurable: live inference cannot skip a
+tick (the policy needs an observation every step; staleness is handled by
+missing-stream logging and the action safety watchdog, not by the frame
+shape), and offline, dropping frames would silently break the `fps` grid the
+dataset declares. Bag conversion and the live bridge share this behavior, so
+a gap looks identical in training data and at inference. Note that with
+`hold`, post-warmup gaps essentially never occur — zero-fill shows up with
+`asof`/`drop` and on sparse extended streams (e.g. a reward published once
+per episode holds after its first message, zero-filled before it).
 
 ### Supported Message Types
 
@@ -924,7 +1029,18 @@ select: [twist.twist.linear.x, pose.pose.position.z]
 | `std_msgs/msg/Bool` | Boolean |
 | `std_msgs/msg/Float64MultiArray` | Vector float64 |
 
-The dtype is auto-detected from the message type. You can override it with the `dtype` field in the contract, or use a custom decoder for non-standard types.
+**When to write `dtype`.** A stream's dtype resolves by precedence — explicit
+`channel.dtype` > `video` (image keys) > `float64` (custom decoders) > the
+codec registry's native dtype — so most entries never declare it. You write
+it in exactly three situations:
+
+1. **Custom decoder** — the registry can't know what your function returns
+   (without it, custom-decoded streams are assumed `float64`);
+2. **Multi-source keys** — all sources of one key must resolve to a single
+   dtype, and different codecs have different natives (e.g. turtlebot3 pins
+   `dtype: float64` on `/imu` and `/odom` to match the JointState codec);
+3. **Extended sections** (`rewards`/`signals`/`info`/`complementary_data`) —
+   mandatory, since record-only columns have no other type source.
 
 ### Custom Encoders/Decoders
 
@@ -942,7 +1058,7 @@ paths in the YAML:
 ```python
 # my_pkg/my_codecs.py
 import numpy as np
-from rosetta.core.converters import register_decoder, register_encoder
+from rosetta.frames.codecs import register_decoder, register_encoder
 
 @register_decoder("my_msgs/msg/MyCustomSensor", dtype="float64")
 def decode_my_sensor(msg, spec):
@@ -962,9 +1078,10 @@ my_codecs = "my_pkg.my_codecs"
 ```
 ```yaml
 observations:
-  - key: observation.state
-    topic: /my_sensor
-    type: my_msgs/msg/MyCustomSensor   # codec self-registered; no path needed
+  observation.state:
+    channel: {topic: /my_sensor,
+              type: my_msgs/msg/MyCustomSensor}  # codec self-registered; no path needed
+    align: {strategy: hold, timeline: receive}
 ```
 
 Registering a second codec for a type that already has one is an error, so two
@@ -985,11 +1102,13 @@ elsewhere:
 
 ```yaml
 actions:
-  - key: action
-    topic: /my_command
-    type: my_msgs/msg/MyCustomCommand
-    decoder: my_package.converters:decode_my_command  # module:function (reading bags)
-    encoder: my_package.converters:encode_my_command  # for publishing
+  action:
+    channel:
+      topic: /my_command
+      type: my_msgs/msg/MyCustomCommand
+      decoder: my_package.converters:decode_my_command  # module:function (reading bags)
+      encoder: my_package.converters:encode_my_command  # for publishing
+    align: {strategy: hold, timeline: receive}
 ```
 
 The module must be importable; paths are validated at contract load time.
@@ -1015,7 +1134,7 @@ def my_decoder(msg, spec) -> np.ndarray:
 
 ```python
 def my_encoder(values, spec, stamp_ns=None):
-    # values: numpy array of action values (ops in spec.apply have already been
+    # values: numpy array of action values (operators in spec.apply have already been
     #         run in the serve/inverse direction, e.g. clamp/deg2rad)
     # spec.names: list of selected field paths from the contract
     # stamp_ns: optional timestamp in nanoseconds
@@ -1028,8 +1147,8 @@ def my_encoder(values, spec, stamp_ns=None):
 
 | Field | Used By | Purpose |
 |-------|---------|---------|
-| `decoder` on observations | Runtime, `port_bags.py` | Decode incoming sensor data |
-| `decoder` on actions | `port_bags.py` | Read recorded actions from bags |
+| `decoder` on observations | Runtime, porter | Decode incoming sensor data |
+| `decoder` on actions | porter | Read recorded actions from bags |
 | `encoder` on actions | Runtime | Publish actions to ROS topics |
 
 ---
@@ -1283,20 +1402,21 @@ The keys you define in your Rosetta contract determine which policies you can tr
 
 ```yaml
 observations:
-  - key: observation.state          # Required by: SmolVLA, Wall-X
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
+  observation.state:                # Required by: SmolVLA, Wall-X
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [...]
 
-  - key: observation.images.top     # At least 1 image required by most policies
-    topic: /camera/image_raw/compressed
-    type: sensor_msgs/msg/CompressedImage
+  observation.images.top:           # At least 1 image required by most policies
+    channel: {topic: /camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
     apply: [resize: [480, 640]]
 
 actions:
-  - key: action                     # Required by all action policies
-    topic: /joint_commands
-    type: sensor_msgs/msg/JointState
+  action:                           # Required by all action policies
+    channel: {topic: /joint_commands, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
     select: [...]
 
 # For VLA policies, also provide a task prompt when recording:
@@ -1309,9 +1429,10 @@ actions:
 observations:
   # ... state and first camera as above ...
 
-  - key: observation.images.wrist.right
-    topic: /wrist_camera/image_raw/compressed
-    type: sensor_msgs/msg/CompressedImage
+  observation.images.wrist.right:
+    channel: {topic: /wrist_camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
 ```
 
