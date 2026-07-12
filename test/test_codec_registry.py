@@ -18,6 +18,7 @@ Pure (no ROS): registration and discovery just populate dicts.
 """
 
 import pytest
+
 import rosetta.frames.codecs as conv
 from rosetta.frames.codecs import (
     DECODERS,

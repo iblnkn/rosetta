@@ -16,6 +16,7 @@
 
 import numpy as np
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.operators import (
     OPERATOR_REGISTRY,

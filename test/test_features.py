@@ -19,6 +19,7 @@ zero-fill with the same shape as a real decoded frame and the declared feature.
 """
 
 import numpy as np
+
 from rosetta.frames.layout import (
     DECODED_IMAGE_CHANNELS,
     build_feature,

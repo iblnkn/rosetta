@@ -23,11 +23,12 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from sensor_msgs.msg import JointState
+
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
 from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.topic_bridge import TopicBridge
-from sensor_msgs.msg import JointState
 
 
 class _FakeLogger:

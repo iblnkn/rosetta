@@ -198,7 +198,9 @@ class PolicyRunnerNode(LifecycleNode):
             self.get_logger().warning(f"Failed to read dataset reference from {train_config_path}: {e}")
             return ""
 
-        contract_path = resolve_repo_file(dataset_root or dataset_repo_id, "meta/rosetta_contract.yaml", repo_type="dataset")
+        contract_path = resolve_repo_file(
+            dataset_root or dataset_repo_id, "meta/rosetta_contract.yaml", repo_type="dataset"
+        )
         return str(contract_path) if contract_path is not None else ""
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:

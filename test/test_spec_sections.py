@@ -18,6 +18,7 @@ iter_specs also yields. This keeps RL and record-only columns out of
 observation.state."""
 
 import pytest
+
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import Align, Channel, Contract, FrameEntry, Source

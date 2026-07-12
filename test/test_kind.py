@@ -17,6 +17,7 @@
 import warnings
 
 import pytest
+
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register decoders
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (

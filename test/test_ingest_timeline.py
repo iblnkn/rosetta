@@ -24,6 +24,7 @@ hold buffers for non-observations.
 import types
 
 import pytest
+
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.frames.resample import StreamBuffer

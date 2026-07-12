@@ -29,6 +29,7 @@ from types import SimpleNamespace
 
 import pytest
 from rclpy.action import GoalResponse
+
 from rosetta.robots.ros2.nodes.rosetta_hil_manager_node import RosettaHilManagerNode
 
 # events_spec.select maps event name -> Joy selector. Button layout:

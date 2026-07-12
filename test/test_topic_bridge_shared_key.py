@@ -26,10 +26,11 @@ import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
+from sensor_msgs.msg import JointState
+
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.robots.ros2.topic_bridge import TopicBridge
-from sensor_msgs.msg import JointState
 
 
 def _obs(key, names, topic):

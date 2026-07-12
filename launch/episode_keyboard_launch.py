@@ -38,10 +38,11 @@ Usage:
     ros2 launch rosetta episode_keyboard_launch.py default_prompt:="pick up the cube"
 """
 
-from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+from launch import LaunchDescription
 
 
 def generate_launch_description():
