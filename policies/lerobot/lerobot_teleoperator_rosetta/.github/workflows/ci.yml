@@ -10,8 +10,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    uses: iblnkn/rosetta_ws/.github/workflows/reusable-ros-ci.yml@dev
-    with:
-      package-name: lerobot_teleoperator_rosetta
-      upstream-repo-file: upstream.repos
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      ROSDEP_SKIP_KEYS: ament_python
+      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main github:iblnkn/rosetta#dev"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/dev/ruff.toml -o ruff.toml
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check .
