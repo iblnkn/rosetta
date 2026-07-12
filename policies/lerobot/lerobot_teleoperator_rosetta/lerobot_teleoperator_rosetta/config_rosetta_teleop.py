@@ -16,9 +16,8 @@
 from dataclasses import dataclass, field
 
 from lerobot.teleoperators.config import TeleoperatorConfig
-
-from rosetta.core.contract import Contract, load_contract
-from rosetta.core.contract_utils import iter_teleop_input_specs, iter_teleop_feedback_specs
+from rosetta.contract.schema import Contract, load_contract
+from rosetta.contract.specs import iter_teleop_feedback_specs, iter_teleop_input_specs
 
 
 @TeleoperatorConfig.register_subclass("rosetta_teleop")
@@ -27,9 +26,15 @@ class RosettaTeleopConfig(TeleoperatorConfig):
     config_path: str = ""
 
     _contract: Contract | None = field(default=None, init=False, repr=False)
+    _input_specs: list | None = field(default=None, init=False, repr=False)
+    _feedback_specs: list | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
-        super().__post_init__()
+        # TeleoperatorConfig (unlike RobotConfig) defines no __post_init__;
+        # guard so a future lerobot adding one still gets called.
+        parent_post_init = getattr(super(), "__post_init__", None)
+        if parent_post_init is not None:
+            parent_post_init()
         if not self.config_path:
             return
 
@@ -40,6 +45,11 @@ class RosettaTeleopConfig(TeleoperatorConfig):
 
         if self.id is None:
             self.id = f"{self._contract.robot_type}_teleop"
+
+        # Resolve once (like RosettaConfig): repeated property access must not
+        # re-run spec resolution or hand out fresh spec objects each call.
+        self._input_specs = list(iter_teleop_input_specs(self._contract))
+        self._feedback_specs = list(iter_teleop_feedback_specs(self._contract))
 
     @property
     def contract(self):
@@ -53,7 +63,9 @@ class RosettaTeleopConfig(TeleoperatorConfig):
 
     @property
     def input_specs(self):
-        return list(iter_teleop_input_specs(self.contract))
+        if self._input_specs is None:
+            raise ValueError("No contract loaded")
+        return self._input_specs
 
     @property
     def events_spec(self):
@@ -61,4 +73,6 @@ class RosettaTeleopConfig(TeleoperatorConfig):
 
     @property
     def feedback_specs(self):
-        return list(iter_teleop_feedback_specs(self.contract))
+        if self._feedback_specs is None:
+            raise ValueError("No contract loaded")
+        return self._feedback_specs
