@@ -22,51 +22,55 @@ and registered by LeRobot's register_third_party_plugins().
 """
 
 import os
-from setuptools import setup, find_packages
 
-package_name = 'lerobot_robot_rosetta'
+from setuptools import find_packages, setup
+
+package_name = "lerobot_robot_rosetta"
 
 setup(
     name=package_name,
-    version='0.1.0',
+    version="0.1.0",
     packages=find_packages(),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
-        (os.path.join('share', package_name), ['package.xml']),
+        ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
+        (os.path.join("share", package_name), ["package.xml"]),
     ],
     install_requires=[
-        'setuptools',
-        'numpy',
-        'lerobot',
-        'rclpy',
-        'rosetta',  # Depends on rosetta.core + rosetta.ros2
+        "setuptools",
+        "numpy",
+        "lerobot",
+        "rclpy",
+        "rosetta",  # Depends on rosetta.contract/frames + rosetta.robots.ros2
+        "grpcio",  # classifier_server.py
+        "torch",  # classifier_server.py
     ],
     entry_points={
-        # Rosetta backend leaves: resolved by name by the backend-agnostic
+        # Rosetta framework adapters: resolved by name by the framework-agnostic
         # node / porter so rosetta core never imports lerobot.
-        'rosetta.policy_runners': [
-            'lerobot = lerobot_robot_rosetta.policy_runner:LeRobotPolicyRunner',
+        "rosetta.policy_runners": [
+            "lerobot = lerobot_robot_rosetta.policy_runner:LeRobotPolicyRunner",
         ],
-        'rosetta.dataset_writers': [
-            'lerobot = lerobot_robot_rosetta.dataset_writer:LeRobotDatasetWriter',
+        "rosetta.dataset_writers": [
+            "lerobot = lerobot_robot_rosetta.dataset_writer:LeRobotDatasetWriter",
         ],
-        'console_scripts': [
-            'rosetta_classifier_server = lerobot_robot_rosetta.classifier_server:main',
+        "console_scripts": [
+            "rosetta_classifier_server = lerobot_robot_rosetta.classifier_server:main",
+            "rosetta_policy_server = lerobot_robot_rosetta.policy_server:main",
         ],
     },
+    extras_require={"test": ["pytest"]},
     zip_safe=True,
-    author='Isaac Blankenau',
-    author_email='isaac.blankenau@gmail.com',
-    maintainer='Isaac Blankenau',
-    maintainer_email='isaac.blankenau@gmail.com',
-    keywords=['ros2', 'lerobot', 'robotics', 'rosetta'],
+    author="Isaac Blankenau",
+    author_email="isaac.blankenau@gmail.com",
+    maintainer="Isaac Blankenau",
+    maintainer_email="isaac.blankenau@gmail.com",
+    keywords=["ros2", "lerobot", "robotics", "rosetta"],
     classifiers=[
-        'Intended Audience :: Developers',
-        'Programming Language :: Python',
-        'Topic :: Software Development',
-        'Topic :: Scientific/Engineering',
+        "Intended Audience :: Developers",
+        "Programming Language :: Python",
+        "Topic :: Software Development",
+        "Topic :: Scientific/Engineering",
     ],
-    description='LeRobot Robot plugin for Rosetta - bridges ROS2 topics to LeRobot Robot interface.',
-    license='Apache-2.0',
+    description="LeRobot Robot plugin for Rosetta - bridges ROS2 topics to LeRobot Robot interface.",
+    license="Apache-2.0",
 )

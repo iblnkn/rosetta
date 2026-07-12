@@ -16,10 +16,13 @@
 """
 LeRobot PolicyRunner.
 
-Wraps LeRobot's async inference stack. It lazily launches the gRPC policy_server
-subprocess, then drives a RobotClient whose control loop pulls observations from
-and pushes actions to the injected TopicBridge. LeRobot-specific parameters are
-declared and read here so the hosting node stays framework-agnostic.
+Wraps LeRobot's async inference stack. It launches the gRPC policy-server
+subprocess eagerly in setup() (node configure time) so the model is loaded
+before the first goal arrives, then per goal drives a RobotClient whose control
+loop pulls observations from and pushes actions to the injected frame I/O
+(the node-hosted TopicBridge).
+LeRobot-specific parameters are declared and read here so the hosting node
+stays framework-agnostic.
 """
 
 from __future__ import annotations
@@ -37,14 +40,13 @@ from typing import Optional
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from rcl_interfaces.msg import ParameterDescriptor
-
-from rosetta.backends.protocols import RunnerFeedback, RunnerResult
-from rosetta.core.contract import Contract
-from rosetta.ros2.topic_bridge import TopicBridge
+from rosetta.contract.schema import Contract
+from rosetta.frames.protocols import FrameIO
+from rosetta.policies import RunnerFeedback, RunnerResult
 
 from .config_rosetta import RosettaConfig
 
-SERVER_STARTUP_TIMEOUT_SEC = 30.0
+SERVER_STARTUP_TIMEOUT_SEC = 120.0  # default; covers model preload (see param)
 SERVER_STARTUP_POLL_SEC = 0.5
 SERVER_STOP_TIMEOUT_SEC = 5.0
 THREAD_JOIN_TIMEOUT_SEC = 2.0
@@ -56,11 +58,11 @@ class LeRobotPolicyRunner:
     def __init__(self) -> None:
         self._node = None
         self._contract: Optional[Contract] = None
-        self._contract_path: str = ''
+        self._contract_path: str = ""
         self._client: Optional[RobotClient] = None
         self._server_process: Optional[subprocess.Popen] = None
         self._server_log = None  # file handle for the server subprocess output
-        self._server_log_path: str = ''
+        self._server_log_path: str = ""
 
     # -------------------- Lifecycle --------------------
 
@@ -69,7 +71,16 @@ class LeRobotPolicyRunner:
         self._node = node
         self._contract = contract
         # contract_path is declared by the node and shared by all backends. Read it.
-        self._contract_path = node.get_parameter('contract_path').value
+        self._contract_path = node.get_parameter("contract_path").value
+
+        # Fail the lifecycle configure early: the live LeRobot stack cannot
+        # represent >1 numeric observation key or >1 action key (see
+        # ensure_live_observation_layout).
+        from rosetta.contract.specs import iter_action_specs, iter_observation_specs
+
+        from .rosetta import ensure_live_observation_layout
+
+        ensure_live_observation_layout(list(iter_observation_specs(contract)), list(iter_action_specs(contract)))
 
         declare = node.declare_parameter
 
@@ -81,17 +92,30 @@ class LeRobotPolicyRunner:
                     ParameterDescriptor(description=desc, read_only=read_only),
                 )
 
-        _p('pretrained_name_or_path', '', 'Path or HF repo ID of trained policy', True)
-        _p('server_address', '127.0.0.1:8080', 'Policy server address (host:port)', True)
-        _p('policy_type', 'act', 'Policy architecture (act, diffusion, ...)', True)
-        _p('policy_device', 'cuda', 'Device for policy inference (cuda, cpu)', True)
-        _p('actions_per_chunk', 50, 'Number of actions to request per chunk')
-        _p('chunk_size_threshold', 0.5, 'Queue threshold ratio to request new chunk (0.0-1.0)')
-        _p('aggregate_fn_name', 'weighted_average', 'Action aggregation function')
-        _p('launch_local_server', True, 'Launch local policy server subprocess', True)
-        _p('obs_similarity_atol', 1.0, 'L2 tolerance for obs similarity (-1.0 disables)')
-        _p('is_classifier', False, 'Use reward section as action output', True)
-        _p('sim_time_multiplier', 1.0, 'fps multiplier for slow sims (contract_fps * mult)')
+        _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
+        _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
+        _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
+        _p("policy_device", "cuda", "Device for policy inference (cuda, cpu)", True)
+        _p("actions_per_chunk", 50, "Number of actions to request per chunk")
+        _p("chunk_size_threshold", 0.5, "Queue threshold ratio to request new chunk (0.0-1.0)")
+        _p("aggregate_fn_name", "weighted_average", "Action aggregation function")
+        _p("launch_local_server", True, "Launch local policy server subprocess", True)
+        _p("obs_similarity_atol", 1.0, "L2 tolerance for obs similarity (-1.0 disables)")
+        _p("is_classifier", False, "Use reward section as action output", True)
+        _p("sim_time_multiplier", 1.0, "fps multiplier for slow sims (contract_fps * mult)")
+        _p(
+            "server_startup_timeout_sec",
+            SERVER_STARTUP_TIMEOUT_SEC,
+            "Max seconds to wait for the policy server to come up. Covers the "
+            "model preload; raise it if the first launch must download weights.",
+            True,
+        )
+
+        # Warm start: pay subprocess spawn + torch/CUDA init + model preload at
+        # configure time so the first goal costs the same as any other. A
+        # failure here propagates and fails the lifecycle configure transition.
+        if node.get_parameter("launch_local_server").value:
+            self._start_policy_server()
 
     def teardown(self) -> None:
         """Stop the policy server subprocess if running."""
@@ -101,21 +125,23 @@ class LeRobotPolicyRunner:
 
     def run(
         self,
-        bridge: TopicBridge,
+        frames: FrameIO,
         *,
         task: str,
         stop_event: threading.Event,
     ) -> RunnerResult:
         """Run policy inference until completion or stop_event is set."""
-        if self._node.get_parameter('launch_local_server').value:
+        # Self-heal: the server is started eagerly in setup(); this respawns it
+        # (with the same preload args — params are read-only) if it died.
+        if self._node.get_parameter("launch_local_server").value:
             self._start_policy_server()
 
         robot_config = RosettaConfig(
-            id='rosetta',
+            id="rosetta",
             config_path=self._contract_path,
-            is_classifier=self._node.get_parameter('is_classifier').value,
+            is_classifier=self._node.get_parameter("is_classifier").value,
         )
-        robot_config._external_bridge = bridge  # Inject pre-built bridge
+        robot_config._external_bridge = frames  # Inject the pre-built frame I/O
 
         config = self._build_client_config(robot_config, task)
         client = RobotClient(config)
@@ -123,16 +149,14 @@ class LeRobotPolicyRunner:
 
         if not client.start():
             self._client = None
-            return RunnerResult(False, 'Failed to connect to policy server')
+            return RunnerResult(False, "Failed to connect to policy server")
 
         receiver = threading.Thread(target=client.receive_actions, daemon=True)
         receiver.start()
 
         # Bridge the cooperative stop_event to LeRobot's shutdown_event.
         watcher_stop = threading.Event()
-        watcher = threading.Thread(
-            target=self._watch_stop, args=(stop_event, client, watcher_stop), daemon=True
-        )
+        watcher = threading.Thread(target=self._watch_stop, args=(stop_event, client, watcher_stop), daemon=True)
         watcher.start()
 
         try:
@@ -145,7 +169,7 @@ class LeRobotPolicyRunner:
 
         cancelled = stop_event.is_set()
         self._client = None
-        return RunnerResult(not cancelled, 'Cancelled' if cancelled else 'Completed')
+        return RunnerResult(not cancelled, "Cancelled" if cancelled else "Completed")
 
     def request_stop(self) -> None:
         """Interrupt an in-progress control loop."""
@@ -158,12 +182,12 @@ class LeRobotPolicyRunner:
         """Snapshot of action-queue depth and published-action count."""
         client = self._client
         if client is None:
-            return RunnerFeedback(0, 0, 'idle')
+            return RunnerFeedback(0, 0, "idle")
         with client.action_queue_lock:
             depth = client.action_queue.qsize()
         with client.latest_action_lock:
             published = max(0, client.latest_action)
-        return RunnerFeedback(depth, published, 'executing')
+        return RunnerFeedback(depth, published, "executing")
 
     # -------------------- Internals --------------------
 
@@ -179,43 +203,39 @@ class LeRobotPolicyRunner:
                 client.shutdown_event.set()
                 return
 
-    def _build_client_config(
-        self, robot_config: RosettaConfig, task: str
-    ) -> RobotClientConfig:
+    def _build_client_config(self, robot_config: RosettaConfig, task: str) -> RobotClientConfig:
         """Build RobotClientConfig from ROS2 parameters, with sim-time fps scaling."""
         node = self._node
         contract_fps = robot_config.fps
-        sim_multiplier = node.get_parameter('sim_time_multiplier').value
+        sim_multiplier = node.get_parameter("sim_time_multiplier").value
         control_loop_fps = int(contract_fps * sim_multiplier)
         if sim_multiplier != 1.0:
             node.get_logger().info(
-                f'Applied sim_time_multiplier={sim_multiplier:.2f}: '
-                f'contract fps={contract_fps}Hz -> control loop fps={control_loop_fps}Hz'
+                f"Applied sim_time_multiplier={sim_multiplier:.2f}: "
+                f"contract fps={contract_fps}Hz -> control loop fps={control_loop_fps}Hz"
             )
 
         config_kwargs = {
-            'robot': robot_config,
-            'server_address': node.get_parameter('server_address').value,
-            'policy_type': node.get_parameter('policy_type').value,
-            'pretrained_name_or_path': node.get_parameter('pretrained_name_or_path').value,
-            'policy_device': node.get_parameter('policy_device').value,
-            'task': task,
-            'fps': control_loop_fps,
-            'actions_per_chunk': node.get_parameter('actions_per_chunk').value,
-            'chunk_size_threshold': node.get_parameter('chunk_size_threshold').value,
-            'aggregate_fn_name': node.get_parameter('aggregate_fn_name').value,
+            "robot": robot_config,
+            "server_address": node.get_parameter("server_address").value,
+            "policy_type": node.get_parameter("policy_type").value,
+            "pretrained_name_or_path": node.get_parameter("pretrained_name_or_path").value,
+            "policy_device": node.get_parameter("policy_device").value,
+            "task": task,
+            "fps": control_loop_fps,
+            "actions_per_chunk": node.get_parameter("actions_per_chunk").value,
+            "chunk_size_threshold": node.get_parameter("chunk_size_threshold").value,
+            "aggregate_fn_name": node.get_parameter("aggregate_fn_name").value,
         }
 
         # obs_similarity_atol is optional in some LeRobot versions. Gate on availability.
-        atol_param = node.get_parameter('obs_similarity_atol').value
+        atol_param = node.get_parameter("obs_similarity_atol").value
         atol = None if atol_param < 0 else atol_param
         supported = {f.name for f in fields(RobotClientConfig)}
-        if 'obs_similarity_atol' in supported:
-            config_kwargs['obs_similarity_atol'] = atol
+        if "obs_similarity_atol" in supported:
+            config_kwargs["obs_similarity_atol"] = atol
         elif atol_param != 1.0:
-            node.get_logger().warning(
-                'obs_similarity_atol not supported in this LeRobot version; ignoring.'
-            )
+            node.get_logger().warning("obs_similarity_atol not supported in this LeRobot version; ignoring.")
 
         return RobotClientConfig(**config_kwargs)
 
@@ -225,57 +245,65 @@ class LeRobotPolicyRunner:
             return  # already running
 
         node = self._node
-        server_address = node.get_parameter('server_address').value
-        host, port = server_address.split(':')
+        server_address = node.get_parameter("server_address").value
+        host, port = server_address.split(":")
 
-        if node.get_parameter('is_classifier').value:
-            module = 'lerobot_robot_rosetta.classifier_server'
+        if node.get_parameter("is_classifier").value:
+            module = "lerobot_robot_rosetta.classifier_server"
         else:
-            module = 'lerobot.async_inference.policy_server'
+            module = "lerobot_robot_rosetta.policy_server"
+
+        cmd = [sys.executable, "-m", module, f"--host={host}", f"--port={port}"]
+        pretrained = node.get_parameter("pretrained_name_or_path").value
+        if pretrained:
+            cmd += [
+                f"--policy-type={node.get_parameter('policy_type').value}",
+                f"--pretrained-name-or-path={pretrained}",
+                f"--policy-device={node.get_parameter('policy_device').value}",
+            ]
+        else:
+            node.get_logger().warning(
+                "pretrained_name_or_path is empty; the policy server will load "
+                "the model on the first goal instead of at startup"
+            )
+        timeout = node.get_parameter("server_startup_timeout_sec").value
 
         # Capture stdout+stderr to a log file so startup failures are visible
         # (a pipe could deadlock if nobody drains it while the server runs).
-        log = tempfile.NamedTemporaryFile(
-            prefix='rosetta_policy_server_', suffix='.log', delete=False
-        )
+        log = tempfile.NamedTemporaryFile(prefix="rosetta_policy_server_", suffix=".log", delete=False)
         self._server_log = log
         self._server_log_path = log.name
         node.get_logger().info(
-            f'Launching {module} on {host}:{port} (log: {log.name})...'
+            f"Launching {module} on {host}:{port} "
+            f"(preload={pretrained or 'none'}, timeout={timeout}s, log: {log.name})..."
         )
-        cmd = [sys.executable, '-m', module, f'--host={host}', f'--port={port}']
-        self._server_process = subprocess.Popen(
-            cmd, env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT
-        )
+        self._server_process = subprocess.Popen(cmd, env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT)
 
         start_time = time.time()
-        while time.time() - start_time < SERVER_STARTUP_TIMEOUT_SEC:
+        while time.time() - start_time < timeout:
             if self._server_process.poll() is not None:
                 raise RuntimeError(
-                    f'Policy server exited with code {self._server_process.returncode}. '
-                    f'Last output:\n{self._read_log_tail()}'
+                    f"Policy server exited with code {self._server_process.returncode}. "
+                    f"Last output:\n{self._read_log_tail()}"
                 )
             try:
                 with socket.create_connection((host, int(port)), timeout=1.0):
-                    node.get_logger().info(f'Policy server ready on {host}:{port}')
+                    node.get_logger().info(f"Policy server ready on {host}:{port}")
                     return
             except (ConnectionRefusedError, socket.timeout, OSError):
                 time.sleep(SERVER_STARTUP_POLL_SEC)
 
-        raise RuntimeError(
-            f'Policy server failed to start within {SERVER_STARTUP_TIMEOUT_SEC}s. '
-            f'Last output:\n{self._read_log_tail()}'
-        )
+        raise RuntimeError(f"Policy server failed to start within {timeout}s. Last output:\n{self._read_log_tail()}")
 
     def _read_log_tail(self, max_bytes: int = 4000) -> str:
         """Tail of the server log, for diagnostics."""
         try:
-            with open(self._server_log_path, 'rb') as f:
+            with open(self._server_log_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 f.seek(max(0, f.tell() - max_bytes))
-                return f.read().decode('utf-8', 'replace')
+                return f.read().decode("utf-8", "replace")
         except OSError:
-            return '(no server log available)'
+            return "(no server log available)"
 
     def _stop_policy_server(self) -> None:
         """Terminate the policy server process if running."""
@@ -285,7 +313,7 @@ class LeRobotPolicyRunner:
             self._server_process = None
             return
         if self._node is not None:
-            self._node.get_logger().info('Stopping local policy server...')
+            self._node.get_logger().info("Stopping local policy server...")
         proc.terminate()
         try:
             proc.wait(timeout=SERVER_STOP_TIMEOUT_SEC)
@@ -295,7 +323,7 @@ class LeRobotPolicyRunner:
                 proc.wait(timeout=SERVER_STOP_TIMEOUT_SEC)
             except subprocess.TimeoutExpired:
                 if self._node is not None:
-                    self._node.get_logger().error('Policy server did not exit after kill().')
+                    self._node.get_logger().error("Policy server did not exit after kill().")
         self._close_server_log()
         self._server_process = None
 

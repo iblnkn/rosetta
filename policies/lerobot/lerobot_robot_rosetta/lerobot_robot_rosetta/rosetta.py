@@ -14,10 +14,10 @@
 # limitations under the License.
 
 """
-Rosetta: LeRobot Robot adapter over the backend-neutral TopicBridge.
+Rosetta: LeRobot Robot adapter over the framework-neutral TopicBridge.
 
 The ROS2 plumbing (subscriptions, lifecycle publishers, watchdog, resampling)
-lives in rosetta.ros2.topic_bridge. This module presents that bridge as a LeRobot
+lives in rosetta.robots.ros2.topic_bridge. This module presents that bridge as a LeRobot
 Robot. It translates between the frame dict ({contract_key: np.ndarray | str}) and
 LeRobot's flattened observation/action shape: images by short key, state and
 action as individual namespaced floats.
@@ -26,43 +26,94 @@ Two modes:
     - Standalone: creates a RosettaLifecycleNode internally (own node, executor,
       spin thread).
     - Injected: attaches to a pre-built TopicBridge on an external node (via
-      config._external_bridge). Used by rosetta_client_node so launch topic
+      config._external_bridge). Used by policy_runner_node so launch topic
       remappings apply.
 """
 
 from __future__ import annotations
 
-import threading
+import logging
+import time
 from functools import cached_property
 from typing import Optional
 
 import numpy as np
-import rclpy
-from rclpy.executors import SingleThreadedExecutor
-
 from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-
-from rosetta.core.contract_utils import get_namespaced_names
-from rosetta.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
-from rosetta.ros2.topic_bridge import TopicBridge
+from rosetta.frames.layout import FrameLayout
+from rosetta.robots.ros2.node_host import NodeHost
+from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta.robots.ros2.topic_bridge import TopicBridge
 
 from .config_rosetta import RosettaConfig
 
 # Internal timing constants
-SPIN_TIMEOUT_SEC = 0.01
-THREAD_JOIN_TIMEOUT_SEC = 1.0
+WARMUP_TIMEOUT_SEC = 5.0
+WARMUP_POLL_SEC = 0.02
+
+
+def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
+    """Reject contracts the live LeRobot stack silently mangles.
+
+    lerobot's hw_to_dataset_features collapses ALL numeric observation leaves
+    into a single ``observation.state`` feature (and all action leaves into
+    one ``action``), while rosetta's offline datasets keep one feature per
+    contract key (the layout LeRobot policies actually expect —
+    ``observation.environment_state`` is a distinct policy input). A policy
+    trained on the ported dataset would therefore receive missing, misshaped,
+    or misrouted inputs live. Fail loudly at connect/setup instead. Counting
+    KEYS (not specs) keeps multi-topic aggregation under one key working.
+    """
+    obs_layout = FrameLayout(list(observation_specs))
+    act_layout = FrameLayout(list(action_specs)) if action_specs else None
+    numeric_keys = [k for k in obs_layout.keys if obs_layout[k].category == "numeric"]
+    action_keys = list(act_layout.keys) if act_layout else []
+    problems = []
+    if len(numeric_keys) > 1:
+        problems.append(f"{len(numeric_keys)} numeric observation keys ({numeric_keys})")
+    if len(action_keys) > 1:
+        problems.append(f"{len(action_keys)} action keys ({action_keys})")
+
+    # Select-less numeric streams have no selector names, and the live stack
+    # derives its motor/feature names from selector names — so such a stream
+    # is silently dropped live while the offline dataset keeps it.
+    selectless = [
+        f"'{sl.spec.key}' (topic {sl.spec.source.channel.topic})"
+        for layout in (obs_layout, act_layout)
+        if layout is not None
+        for k in layout.keys
+        if layout[k].category == "numeric"
+        for sl in layout[k].slices
+        if not sl.spec.names
+    ]
+    if selectless:
+        problems.append(f"numeric streams without select: ({', '.join(selectless)})")
+    if problems:
+        raise ValueError(
+            f"Contract declares {' and '.join(problems)}, which the live "
+            f"LeRobot stack silently mangles: it collapses all numeric "
+            f"observations into a single 'observation.state' feature and all "
+            f"actions into a single 'action' feature (lerobot "
+            f"hw_to_dataset_features), and it derives motor names from "
+            f"selector names, dropping select-less numeric streams entirely — "
+            f"while rosetta datasets keep every key. A policy trained on the "
+            f"ported dataset would receive missing, misrouted, or misshaped "
+            f"inputs live. Merge numeric streams under one key per role "
+            f"(values concatenate in declaration order) and give every "
+            f"numeric stream a select:, or deploy with a backend that "
+            f"preserves per-key layout (vla_foundry, starvla)."
+        )
 
 
 class Rosetta(Robot):
-    """LeRobot Robot that adapts a backend-neutral TopicBridge.
+    """LeRobot Robot that adapts a framework-neutral TopicBridge.
 
     Two modes:
         - Standalone: creates an internal RosettaLifecycleNode with its own
           executor and spin thread. Used when launched independently.
         - Injected: attaches to a pre-built TopicBridge on an external node (via
-          config._external_bridge). Used by rosetta_client_node so launch topic
+          config._external_bridge). Used by policy_runner_node so launch topic
           remappings apply to observation/action topics.
     """
 
@@ -73,46 +124,55 @@ class Rosetta(Robot):
         super().__init__(config)
         self._config: RosettaConfig = config
 
-        # Standalone mode resources (None in injected mode)
-        self._node: Optional[RosettaLifecycleNode] = None
-        self._executor: Optional[SingleThreadedExecutor] = None
-        self._spin_thread: Optional[threading.Thread] = None
-        self._owns_rclpy = False
+        # Standalone mode resources (unused in injected mode)
+        self._host = NodeHost()
 
         # Injected mode: pre-built bridge from external node
-        self._external_bridge: Optional[TopicBridge] = getattr(
-            config, "_external_bridge", None
-        )
+        self._external_bridge: Optional[TopicBridge] = getattr(config, "_external_bridge", None)
         self._bridge: Optional[TopicBridge] = None
 
     # -------------------- LeRobot <-> frame-dict adapters --------------------
+    #
+    # All name/shape derivations come from the same FrameLayout the offline
+    # dataset writer uses (build_lerobot_features), so live and ported
+    # features agree by construction rather than by test.
+
+    @cached_property
+    def _obs_layout(self) -> FrameLayout:
+        return FrameLayout(list(self.config.observation_specs))
+
+    @cached_property
+    def _act_layout(self) -> FrameLayout:
+        return FrameLayout(list(self.config.action_specs))
 
     @cached_property
     def _obs_vector_names(self) -> dict[str, list[str]]:
-        """Non-image observation key -> ordered namespaced selector names."""
-        m: dict[str, list[str]] = {}
-        for spec in self.config.observation_specs:
-            if spec.is_image:
-                continue
-            m.setdefault(spec.key, []).extend(get_namespaced_names(spec))
-        return m
+        """Numeric observation key -> ordered namespaced selector names."""
+        feats = self._obs_layout.lerobot_features()
+        return {
+            key: list(feats[key]["names"] or [])
+            for key in self._obs_layout.keys
+            if self._obs_layout[key].category == "numeric"
+        }
 
     @cached_property
     def _obs_image_keys(self) -> dict[str, str]:
         """Image observation full key -> LeRobot short key."""
         return {
-            spec.key: spec.key.removeprefix("observation.images.")
-            for spec in self.config.observation_specs
-            if spec.is_image
+            key: key.removeprefix("observation.images.")
+            for key in self._obs_layout.keys
+            if self._obs_layout[key].category == "image"
         }
 
     @cached_property
     def _act_vector_names(self) -> dict[str, list[str]]:
         """Action key -> ordered namespaced selector names."""
-        m: dict[str, list[str]] = {}
-        for spec in self.config.action_specs:
-            m.setdefault(spec.key, []).extend(get_namespaced_names(spec))
-        return m
+        feats = self._act_layout.lerobot_features()
+        return {
+            key: list(feats[key]["names"] or [])
+            for key in self._act_layout.keys
+            if self._act_layout[key].category == "numeric"
+        }
 
     def _flatten_observation(self, frame: dict) -> RobotObservation:
         """Frame dict -> LeRobot observation (images by short key, state as floats)."""
@@ -136,26 +196,26 @@ class Rosetta(Robot):
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
-        """Feature spec: individual state values as float, images as (H, W, C) tuples."""
+        """Feature spec: individual state values as float, images as (H, W, C) tuples.
+
+        Image shapes come from FrameLayout.lerobot_features(), which declares the
+        DECODED shape (h, w, 3) — decoders always emit 3-channel RGB, so
+        declaring the source encoding's channel count (1 for mono8, 4 for
+        rgba8) mismatched every delivered frame.
+        """
         features: dict[str, type | tuple] = {}
-        for spec in self.config.observation_specs:
-            if spec.is_image:
-                key = spec.key.removeprefix("observation.images.")
-                h, w = spec.image_resize
-                features[key] = (h, w, spec.image_channels)
-            else:
-                for name in get_namespaced_names(spec):
-                    features[name] = float
+        feats = self._obs_layout.lerobot_features()
+        for key, short in self._obs_image_keys.items():
+            features[short] = tuple(feats[key]["shape"])
+        for names in self._obs_vector_names.values():
+            for name in names:
+                features[name] = float
         return features
 
     @cached_property
     def action_features(self) -> dict[str, type]:
         """Feature spec: individual action values as float."""
-        features: dict[str, type] = {}
-        for spec in self.config.action_specs:
-            for name in get_namespaced_names(spec):
-                features[name] = float
-        return features
+        return {name: float for names in self._act_vector_names.values() for name in names}
 
     # -------------------- Connection state --------------------
 
@@ -194,9 +254,15 @@ class Rosetta(Robot):
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
+        # Live LeRobot cannot represent >1 numeric observation key (or >1
+        # action key); fail loudly here instead of silently recording/serving
+        # lumped features.
+        ensure_live_observation_layout(self.config.observation_specs, self.config.action_specs)
+
         if self._external_bridge is not None:
             # Injected mode: bridge already set up and activated by external node
             self._bridge = self._external_bridge
+            self._wait_for_warmup(self._bridge)
             return
 
         # Standalone mode
@@ -208,55 +274,43 @@ class Rosetta(Robot):
             self._node.trigger_configure()
 
         self._node.trigger_activate()
+        self._wait_for_warmup(self._node.bridge)
+
+    def _wait_for_warmup(self, bridge: TopicBridge) -> None:
+        """Block until every observation stream has delivered a message.
+
+        The bag porter skips warmup ticks, so ported datasets never contain
+        a cold bridge's zero-filled frames; gate the live side on the same
+        predicate (bridge.warmed_up) so first frames agree. Fail open with a
+        warning after the timeout — the missing-stream zero-fill/watchdog
+        machinery covers a stream that stays silent.
+        """
+        deadline = time.monotonic() + WARMUP_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            if bridge.warmed_up:
+                return
+            time.sleep(WARMUP_POLL_SEC)
+        logging.warning(
+            "Observation streams not warmed up after %.1fs; first frames may "
+            "contain zero-fill (a ported dataset would have skipped them).",
+            WARMUP_TIMEOUT_SEC,
+        )
 
     def _create_node(self) -> None:
-        """Create the lifecycle node and start the spin thread."""
-        if not rclpy.ok():
-            rclpy.init()
-            self._owns_rclpy = True
-
-        self._node = RosettaLifecycleNode(
-            f"rosetta_{self.config.id}",
-            self.config.observation_specs,
-            self.config.action_specs,
-            self.config.fps,
+        """Create the lifecycle node and start the spin thread (NodeHost)."""
+        self._host.start(
+            lambda ctx: RosettaLifecycleNode(
+                f"rosetta_{self.config.id}",
+                self.config.observation_specs,
+                self.config.action_specs,
+                self.config.fps,
+                context=ctx,
+            )
         )
-        self._executor = SingleThreadedExecutor()
-        self._executor.add_node(self._node)
 
-        # Start spin thread before lifecycle transitions (needed for service calls)
-        self._spin_thread = threading.Thread(target=self._spin_loop, daemon=True)
-        self._spin_thread.start()
-
-    def _spin_loop(self) -> None:
-        """Spin the executor until node is destroyed."""
-        while self._executor is not None and self._node is not None:
-            try:
-                self._executor.spin_once(timeout_sec=SPIN_TIMEOUT_SEC)
-            except Exception:
-                if self._node is None:
-                    break
-                raise
-
-    def _destroy_node(self) -> None:
-        """Clean up node, executor, and spin thread."""
-        node = self._node
-        self._node = None  # signal spin loop to stop
-
-        if self._spin_thread is not None:
-            self._spin_thread.join(timeout=THREAD_JOIN_TIMEOUT_SEC)
-            self._spin_thread = None
-
-        if self._executor is not None:
-            self._executor.shutdown()
-            self._executor = None
-
-        if node is not None:
-            node.destroy_node()
-
-        if self._owns_rclpy:
-            rclpy.try_shutdown()
-            self._owns_rclpy = False
+    @property
+    def _node(self) -> Optional[RosettaLifecycleNode]:
+        return self._host.node
 
     def disconnect(self) -> None:
         """Deactivate and cleanup."""
@@ -280,7 +334,7 @@ class Rosetta(Robot):
         if self._node.is_configured:
             self._node.trigger_cleanup()
 
-        self._destroy_node()
+        self._host.stop()
 
     def reset(self) -> None:
         """Reset internal state tracking (e.g., between episodes)."""
@@ -314,11 +368,7 @@ class Rosetta(Robot):
         src = self._bridge if self._bridge is not None else self._node
         src.publish_frame(self._unflatten_action(action))
         # Echo back the values sent, as the namespaced floats LeRobot recorded.
-        return {
-            name: action[name]
-            for names in self._act_vector_names.values()
-            for name in names
-        }
+        return {name: action[name] for names in self._act_vector_names.values() for name in names}
 
     @property
     def config(self) -> RosettaConfig:

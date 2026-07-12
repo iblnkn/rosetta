@@ -70,7 +70,8 @@ Example contract (multiple topics aggregated to same key):
           names: [linear.x, angular.z]
 
     # Result: observation.state has names:
-    #   ["arm.position.j1", "arm.position.j2", "base.twist.twist.linear.x", "base.twist.twist.angular.z"]
+    #   ["arm.position.j1", "arm.position.j2",
+    #    "base.twist.twist.linear.x", "base.twist.twist.angular.z"]
     # Result: action has names:
     #   ["arm.position.j1", "arm.position.j2", "base.linear.x", "base.angular.z"]
 """
@@ -78,20 +79,15 @@ Example contract (multiple topics aggregated to same key):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from lerobot.robots.config import RobotConfig
-
-from rosetta.core.contract import (
-    Contract,
-    ObservationStreamSpec,
+from rosetta.contract.schema import Contract, load_contract
+from rosetta.contract.specs import (
     ActionStreamSpec,
-    load_contract,
-)
-from rosetta.core.contract_utils import (
-    iter_observation_specs,
+    ObservationStreamSpec,
     iter_action_specs,
+    iter_observation_specs,
     iter_reward_as_action_specs,
 )
 
@@ -147,8 +143,3 @@ class RosettaConfig(RobotConfig):
         if self._action_specs is None:
             raise ValueError("No contract loaded")
         return self._action_specs
-
-
-def load_rosetta_config(path: str | Path, fps: int | None = None) -> RosettaConfig:
-    """Load a RosettaConfig from YAML."""
-    return RosettaConfig(config_path=str(path), fps=fps)

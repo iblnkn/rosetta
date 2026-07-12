@@ -84,6 +84,22 @@ Implements the [Robot](https://github.com/huggingface/lerobot/blob/main/src/lero
 
 **Timestamp alignment**: Observations from multiple topics are aligned using StreamBuffers with configurable strategies (`hold`, `asof`, `drop`).
 
+## Inference Servers
+
+Two gRPC servers speak LeRobot's AsyncInference protocol (the `RobotClient` connects to either unchanged):
+
+- **`policy_server.py`** (`rosetta_policy_server`) — preload + cache wrapper over LeRobot's stock `lerobot.async_inference.policy_server`. The stock server reloads the checkpoint on every client handshake; this one loads it once and reuses it while the requested `(policy_type, pretrained_name_or_path, device)` is unchanged.
+- **`classifier_server.py`** (`rosetta_classifier_server`) — reward-classifier variant with the same preload/cache behavior.
+
+Both accept optional preload flags that load the model **before** the port is bound, so a socket-level readiness check implies the model is ready:
+
+```bash
+python -m lerobot_robot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
+    --policy-type=act --pretrained-name-or-path=my-org/my-policy --policy-device=cuda
+```
+
+`LeRobotPolicyRunner` starts the appropriate server with these flags at node configure time (`launch_local_server: true`), so the first `run_policy` goal is as fast as any other.
+
 ## License
 
 Apache-2.0

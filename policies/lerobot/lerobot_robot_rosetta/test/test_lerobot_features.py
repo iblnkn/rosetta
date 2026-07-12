@@ -16,14 +16,13 @@
 
 from pathlib import Path
 
-import rosetta.ros2.bag_frames  # noqa: F401  side-effect: register decoders/codecs
-from rosetta.core.contract import load_contract
-from rosetta.core.contract_utils import iter_action_specs, iter_observation_specs
-
+import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  side-effect: register decoders/codecs
 from lerobot_robot_rosetta.dataset_writer import build_lerobot_features
+from rosetta.contract.schema import load_contract
+from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 
 # src/action/lerobot_robot_rosetta/test/ -> parents[2] == src/action
-CONTRACTS = Path(__file__).resolve().parents[2] / 'rosetta' / 'contracts'
+CONTRACTS = Path(__file__).resolve().parents[2] / "rosetta" / "contracts"
 
 
 def _specs(name):
@@ -32,22 +31,63 @@ def _specs(name):
 
 
 def test_so101_features_schema():
-    c, specs = _specs('so_101.yaml')
+    _c, specs = _specs("so_101.yaml")
     feats = build_lerobot_features(specs)
 
     # state + action numeric vectors, three cameras, boundary markers.
-    assert feats['observation.state']['dtype'] in ('float32', 'float64')
-    assert feats['observation.state']['shape'] == (6,)
-    assert feats['action']['shape'] == (6,)
-    for cam in ('observation.images.right', 'observation.images.top', 'observation.images.wrist.right'):
-        assert feats[cam]['dtype'] in ('video', 'image')
-    for marker in ('is_first', 'is_last', 'is_terminal'):
-        assert feats[marker] == {'dtype': 'bool', 'shape': (1,), 'names': None}
+    assert feats["observation.state"]["dtype"] in ("float32", "float64")
+    assert feats["observation.state"]["shape"] == (6,)
+    assert feats["action"]["shape"] == (6,)
+    for cam in ("observation.images.right", "observation.images.top", "observation.images.wrist.right"):
+        assert feats[cam]["dtype"] in ("video", "image")
+    for marker in ("is_first", "is_last", "is_terminal"):
+        assert feats[marker] == {"dtype": "bool", "shape": (1,), "names": None}
 
 
 def test_same_key_aggregates_names():
     # turtlebot3 has multiple observation.state specs -> one aggregated feature.
-    c, specs = _specs('turtlebot3.yaml')
+    _c, specs = _specs("turtlebot3.yaml")
     feats = build_lerobot_features(specs)
-    assert feats['observation.state']['shape'][0] == len(feats['observation.state']['names'])
-    assert feats['observation.state']['shape'][0] == 16
+    assert feats["observation.state"]["shape"][0] == len(feats["observation.state"]["names"])
+    assert feats["observation.state"]["shape"][0] == 16
+
+
+def test_live_robot_declares_decoded_image_channels(tmp_path):
+    """Regression: the live Robot's observation_features used
+    spec.image_channels (the SOURCE encoding count: 1 for mono8, 4 for rgba8)
+    while decoders always deliver (h, w, 3) — a shape mismatch for any
+    non-3-channel source. Live features must declare the decoded shape."""
+    yaml = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.images.cam:
+    channel: {topic: /cam, type: sensor_msgs/msg/Image}
+    align: {strategy: hold, timeline: receive}
+    apply: [{resize: [48, 64]}]
+  observation.state:
+    channel: {topic: /js, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+actions:
+  action:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+"""
+    p = tmp_path / "mono.yaml"
+    p.write_text(yaml)
+
+    from lerobot_robot_rosetta.config_rosetta import RosettaConfig
+    from lerobot_robot_rosetta.rosetta import Rosetta
+
+    robot = Rosetta(RosettaConfig(config_path=str(p)))
+    assert robot.observation_features["cam"] == (48, 64, 3)  # not (48, 64, 1)
+
+    # And it equals what the offline writer declares for the same contract.
+    c, _ = _specs("so_101.yaml")
+    del c
+    contract = load_contract(p)
+    offline = build_lerobot_features(list(iter_observation_specs(contract)) + list(iter_action_specs(contract)))
+    assert tuple(offline["observation.images.cam"]["shape"]) == robot.observation_features["cam"]
