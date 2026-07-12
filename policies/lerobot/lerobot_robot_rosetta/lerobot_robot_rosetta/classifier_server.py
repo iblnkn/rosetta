@@ -20,9 +20,8 @@ calls predict_reward() instead of predict_action_chunk(). The existing
 RobotClient connects to it unchanged.
 
 This is lerobot-side inference tooling, not a rosetta adapter: it loads a
-lerobot reward model and calls predict() directly, deliberately bypassing the
-checkpoint's normalization pipeline (predict_reward()'s normalize hooks are
-broken pre-migration). It knows nothing about contracts or ROS; it lives in
+lerobot reward_classifier model and calls its own predict_reward() eval
+method directly. It knows nothing about contracts or ROS; it lives in
 lerobot_robot_rosetta purely so HIL deployments get it from the same install
 as the robot adapter.
 
@@ -67,8 +66,14 @@ logger = get_logger("classifier_server")
 OBS_QUEUE_TIMEOUT = 2.0
 
 # Reward models moved out of the policy registry in lerobot 0.6.0
-# (lerobot.rewards); these types resolve via get_reward_model_class.
-REWARD_MODEL_TYPES = frozenset({"reward_classifier", "sarm", "robometer", "topreward"})
+# (lerobot.rewards); "reward_classifier" is the only one this server
+# supports. lerobot's other reward models (sarm, robometer, topreward) score
+# a whole video against a task instruction and have no per-step, image-only
+# inference method — they're offline dataset-labeling tools, not online
+# classifiers, so they don't fit this gRPC-per-observation server at all.
+# Anything else falls through to get_policy_class, for classifiers saved as a
+# plain pre-0.6.0 PreTrainedPolicy.
+REWARD_CLASSIFIER_TYPE = "reward_classifier"
 
 
 class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
@@ -150,7 +155,7 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         logger.info(f"Loading classifier: type={policy_type}, path={pretrained_name_or_path}, device={device}")
 
         start = time.perf_counter()
-        if policy_type in REWARD_MODEL_TYPES:
+        if policy_type == REWARD_CLASSIFIER_TYPE:
             policy_class = get_reward_model_class(policy_type)
         else:
             policy_class = get_policy_class(policy_type)
@@ -269,12 +274,11 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         1. Convert raw observation to a tensor dict (LeRobot's helper handles key
            mapping, image resizing, and float32 [0,1] conversion).
         2. Move tensors to the inference device.
-        3. Extract image tensors and resize to the model's expected spatial dims.
-        4. Call predict() directly. predict_reward() has broken
-           normalize_inputs/normalize_targets calls from the pre-migration
-           architecture.
-        5. Threshold probabilities to get a binary reward.
-        6. Wrap the scalar reward as a single TimedAction so the RobotClient can
+        3. Resize image tensors to the model's expected spatial dims.
+        4. Call predict_reward() — the model's own eval method. It extracts
+           images from the batch and thresholds (binary or multiclass)
+           internally.
+        5. Wrap the scalar reward as a single TimedAction so the RobotClient can
            process it through the normal action pipeline.
         """
         OBS_IMAGE = "observation.image"
@@ -289,24 +293,17 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         # 2. Move to device
         batch = {k: v.to(self.device) for k, v in observation.items() if isinstance(v, torch.Tensor)}
 
-        # 3. Extract image tensors (same key filtering as Classifier)
-        images = [batch[key] for key in self.classifier.config.input_features if key.startswith(OBS_IMAGE)]
-
-        # Resize to the model's expected spatial dims if needed
+        # 3. Resize image tensors to the model's expected spatial dims, in place
         if self._image_size is not None:
-            images = [F.interpolate(img, size=self._image_size, mode="bilinear", align_corners=False) for img in images]
+            image_keys = [key for key in self.classifier.config.input_features if key.startswith(OBS_IMAGE)]
+            for key in image_keys:
+                batch[key] = F.interpolate(batch[key], size=self._image_size, mode="bilinear", align_corners=False)
 
-        # 4. Run inference directly via predict()
+        # 4. predict_reward() extracts images from batch and thresholds internally.
         with torch.no_grad():
-            output = self.classifier.predict(images)
+            reward = self.classifier.predict_reward(batch, threshold=0.5)
 
-        # 5. Binary threshold
-        if self.classifier.config.num_classes == 2:
-            reward = (output.probabilities > 0.5).float()
-        else:
-            reward = torch.argmax(output.probabilities, dim=1).float()
-
-        # 6. Wrap as TimedAction with shape (1,) to match action_features.
+        # 5. Wrap as TimedAction with shape (1,) to match action_features.
         #    Use timestep+1 so the action is always newer than latest_action in
         #    RobotClient._aggregate_action_queues, which drops actions where
         #    timestep <= latest_action. A regular PolicyServer avoids this by

@@ -34,7 +34,7 @@ def test_reward_types_route_to_reward_factory(monkeypatch):
     monkeypatch.setattr(cs, "get_policy_class", lambda n: calls.append(("policy", n)))
 
     for name in ("reward_classifier", "act"):
-        if name in cs.REWARD_MODEL_TYPES:
+        if name == cs.REWARD_CLASSIFIER_TYPE:
             cs.get_reward_model_class(name)
         else:
             cs.get_policy_class(name)
