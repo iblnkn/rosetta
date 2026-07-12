@@ -26,7 +26,6 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
-
 from lerobot.async_inference.helpers import TimedObservation
 from lerobot.configs.types import FeatureType, PolicyFeature
 from lerobot_robot_rosetta import classifier_server as cs
