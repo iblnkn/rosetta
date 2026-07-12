@@ -53,6 +53,7 @@ del _decoders, _encoders
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
 BAG_CUSTOM_DATA_KEY = "custom_data"
 BAG_PROMPT_KEY = "lerobot.operator_prompt"
+BAG_CONTRACT_HASH_KEY = "rosetta.contract_hash"
 
 
 # ---------- Bag discovery ----------
@@ -64,6 +65,11 @@ def find_bag_dirs(raw_dir: Path) -> list[Path]:
     if not bag_dirs:
         raise RuntimeError(f"No bag directories found in {raw_dir}")
     return bag_dirs
+
+
+def read_bag_contract_hash(bag_dir: Path) -> str:
+    """Read the recorded contract's sha256 hex digest for one bag (empty if absent)."""
+    return _read_contract_hash(_read_bag_metadata(bag_dir))
 
 
 # ---------- Internal helpers ----------
@@ -84,6 +90,15 @@ def _read_prompt(meta: dict[str, Any]) -> str:
     custom_data = info.get(BAG_CUSTOM_DATA_KEY, {})
     if isinstance(custom_data, dict):
         return custom_data.get(BAG_PROMPT_KEY, "")
+    return ""
+
+
+def _read_contract_hash(meta: dict[str, Any]) -> str:
+    """Read the recorded contract's sha256 hex digest from metadata custom_data."""
+    info = meta.get(BAG_METADATA_KEY, {})
+    custom_data = info.get(BAG_CUSTOM_DATA_KEY, {})
+    if isinstance(custom_data, dict):
+        return custom_data.get(BAG_CONTRACT_HASH_KEY, "")
     return ""
 
 

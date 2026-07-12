@@ -36,6 +36,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 
@@ -48,6 +49,7 @@ from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackRet
 from rosetta_interfaces.action import RunPolicy
 
 from rosetta.contract.schema import load_contract
+from rosetta.contract.sidecar import resolve_repo_file
 from rosetta.contract.specs import (
     iter_action_specs,
     iter_observation_specs,
@@ -73,6 +75,17 @@ class PolicyRunnerNode(LifecycleNode):
             "contract_path",
             "",
             ParameterDescriptor(description="Path to contract YAML file", read_only=True),
+        )
+        self.declare_parameter(
+            "pretrained_name_or_path",
+            "",
+            ParameterDescriptor(
+                description="Path or HF repo ID of the trained policy. Declared here (framework-agnostic) "
+                "so it's available before contract_path is resolved -- if contract_path is empty, this is "
+                "used to fall back to the contract that trained the model. Framework adapters read the same "
+                "parameter for their own checkpoint loading; their own declare calls become no-ops.",
+                read_only=True,
+            ),
         )
         self.declare_parameter(
             "framework",
@@ -116,8 +129,11 @@ class PolicyRunnerNode(LifecycleNode):
         """Load contract, build the bridge, resolve the framework runner."""
         contract_path = self.get_parameter("contract_path").value
         if not contract_path:
-            self.get_logger().error("contract_path parameter required")
-            return TransitionCallbackReturn.FAILURE
+            contract_path = self._resolve_fallback_contract_path()
+            if not contract_path:
+                self.get_logger().error("contract_path parameter required")
+                return TransitionCallbackReturn.FAILURE
+            self.get_logger().info(f"Using model-embedded contract (via dataset chain): {contract_path}")
 
         try:
             self._contract = load_contract(contract_path)
@@ -157,6 +173,33 @@ class PolicyRunnerNode(LifecycleNode):
 
         self.get_logger().info(f"Configured: contract={contract_path}, framework={framework}")
         return TransitionCallbackReturn.SUCCESS
+
+    def _resolve_fallback_contract_path(self) -> str:
+        """Chase pretrained_name_or_path -> train_config.json -> dataset -> its contract sidecar.
+
+        Best-effort: any missing link (no checkpoint given, no train_config.json,
+        no dataset reference, dataset unreachable, no contract sidecar on the
+        dataset) resolves to "" and the caller falls back to today's required-
+        contract_path error. Never raises.
+        """
+        pretrained = self.get_parameter("pretrained_name_or_path").value
+        if not pretrained:
+            return ""
+
+        train_config_path = resolve_repo_file(pretrained, "train_config.json", repo_type="model")
+        if train_config_path is None:
+            return ""
+
+        try:
+            train_config = json.loads(train_config_path.read_text())
+            dataset_repo_id = train_config["dataset"]["repo_id"]
+            dataset_root = train_config["dataset"].get("root")
+        except Exception as e:
+            self.get_logger().warning(f"Failed to read dataset reference from {train_config_path}: {e}")
+            return ""
+
+        contract_path = resolve_repo_file(dataset_root or dataset_repo_id, "meta/rosetta_contract.yaml", repo_type="dataset")
+        return str(contract_path) if contract_path is not None else ""
 
     def on_activate(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Activate lifecycle publishers and accept goals."""

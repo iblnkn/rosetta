@@ -36,6 +36,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ from typing import Any
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_observation_specs, iter_specs
 from rosetta.policies import DATASET_WRITER_GROUP, available_frameworks, load_dataset_writer
-from rosetta.robots.ros2.offline.bag_frames import BagFrameSource, iter_bag_frames
+from rosetta.robots.ros2.offline.bag_frames import BagFrameSource, iter_bag_frames, read_bag_contract_hash
 
 
 def port(
@@ -56,6 +57,7 @@ def port(
     root: Path | None = None,
     num_shards: int | None = None,
     shard_index: int | None = None,
+    embed_contract: bool = True,
     writer_opts: dict[str, Any] | None = None,
 ) -> None:
     """Port rosbag2 recordings to a policy-framework dataset."""
@@ -80,12 +82,35 @@ def port(
         logging.warning("No bags to process in this shard")
         return
 
+    # --contract is always the source of truth for decoding. Cross-check it
+    # against what the first bag actually recorded with, purely as a
+    # heads-up -- an explicit --contract still wins on mismatch, and this
+    # check itself must never be why a port fails (e.g. --contract already
+    # went through load_contract() above; a raw re-read of the same path
+    # failing here is not worth aborting a whole port over).
+    if embed_contract:
+        try:
+            local_hash = hashlib.sha256(Path(contract_path).read_bytes()).hexdigest()
+        except OSError:
+            local_hash = None
+        bag_hash = read_bag_contract_hash(bag_dirs[0]) if local_hash else ""
+        if local_hash and bag_hash and bag_hash != local_hash:
+            logging.warning(
+                "Bag %s was recorded with a different contract (hash=%s) than "
+                "--contract (hash=%s); using --contract for decoding and embedding.",
+                bag_dirs[0].name,
+                bag_hash,
+                local_hash,
+            )
+
     writer = load_dataset_writer(framework)
     writer.open(
         contract=contract,
         specs=specs,
         repo_id=repo_id,
         root=root,
+        contract_path=Path(contract_path),
+        embed_contract=embed_contract,
         **(writer_opts or {}),
     )
 
@@ -146,6 +171,13 @@ def main():
     parser.add_argument("--root", type=Path, default=None, help="Output parent directory")
     parser.add_argument("--num-shards", type=int, default=None, help="Total shards (parallel port)")
     parser.add_argument("--shard-index", type=int, default=None, help="This shard index")
+    parser.add_argument(
+        "--no-embed-contract",
+        dest="embed_contract",
+        action="store_false",
+        default=True,
+        help="Don't copy the contract into the dataset's meta/rosetta_contract.yaml sidecar",
+    )
 
     # Common and framework-specific writer options. Writers ignore options they
     # don't use.
@@ -181,6 +213,7 @@ def main():
             root=args.root,
             num_shards=args.num_shards,
             shard_index=args.shard_index,
+            embed_contract=args.embed_contract,
             writer_opts=writer_opts,
         )
     except KeyboardInterrupt:

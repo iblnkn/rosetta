@@ -29,6 +29,7 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import threading
@@ -73,6 +74,8 @@ from rosetta.robots.ros2.ros2_utils import qos_profile_from_dict
 BAG_METADATA_KEY = "rosbag2_bagfile_information"
 BAG_CUSTOM_DATA_KEY = "custom_data"
 BAG_PROMPT_KEY = "lerobot.operator_prompt"
+BAG_CONTRACT_KEY = "rosetta.contract_yaml"
+BAG_CONTRACT_HASH_KEY = "rosetta.contract_hash"
 
 # ---------- Constants ----------
 
@@ -168,9 +171,19 @@ class EpisodeRecorderNode(LifecycleNode):
                 read_only=True,
             ),
         )
+        self.declare_parameter(
+            "embed_contract",
+            True,
+            ParameterDescriptor(
+                description="Embed the contract YAML (text + hash) into the bag's metadata.yaml custom_data",
+                read_only=True,
+            ),
+        )
 
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract = None
+        self._contract_text: str = ""
+        self._contract_hash: str = ""
         self._bag_base: Path | None = None
         self._storage_id: str | None = None
         self._default_max_duration: float = 0.0
@@ -229,6 +242,13 @@ class EpisodeRecorderNode(LifecycleNode):
             except Exception as e:
                 self.get_logger().error(f"Failed to load contract: {e}")
                 return TransitionCallbackReturn.FAILURE
+
+            if self.get_parameter("embed_contract").value:
+                self._contract_text = Path(contract_path).read_text()
+                self._contract_hash = hashlib.sha256(self._contract_text.encode()).hexdigest()
+            else:
+                self._contract_text = ""
+                self._contract_hash = ""
 
             self._bag_base = Path(self.get_parameter("bag_base_dir").value).expanduser()
             self._bag_base.mkdir(parents=True, exist_ok=True)
@@ -349,6 +369,8 @@ class EpisodeRecorderNode(LifecycleNode):
 
         # Clear state
         self._contract = None
+        self._contract_text = ""
+        self._contract_hash = ""
         self._topics = []
 
         self.get_logger().info("Cleaned up")
@@ -761,7 +783,7 @@ class EpisodeRecorderNode(LifecycleNode):
             discovered_topics = list(self._discovered_topics)
             self._close_writer()
             try:
-                self._write_metadata(bag_dir, prompt)
+                self._write_metadata(bag_dir, prompt, self._contract_text, self._contract_hash)
             except RuntimeError as e:
                 # Metadata write failed - this is a real error, fail the run
                 self.get_logger().error(f"Metadata error: {e}")
@@ -979,17 +1001,18 @@ class EpisodeRecorderNode(LifecycleNode):
             self._writer = None
         self._cleanup_discovered_subs()
 
-    def _write_metadata(self, bag_dir: Path, prompt: str) -> None:
+    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "", contract_hash: str = "") -> None:
         """
-        Write prompt to metadata.yaml as custom_data.
+        Write prompt and/or contract provenance to metadata.yaml as custom_data.
 
         Raises
         ------
             RuntimeError: If metadata.yaml cannot be written after retries.
-                This is a fail-fast design - we don't silently lose the prompt.
+                This is a fail-fast design - we don't silently lose the prompt
+                or the contract.
 
         """
-        if not prompt:
+        if not prompt and not contract_text:
             return
 
         meta_path = bag_dir / "metadata.yaml"
@@ -1009,21 +1032,25 @@ class EpisodeRecorderNode(LifecycleNode):
                 meta[BAG_METADATA_KEY] = info
                 custom = info.get(BAG_CUSTOM_DATA_KEY) or {}
                 info[BAG_CUSTOM_DATA_KEY] = custom
-                custom[BAG_PROMPT_KEY] = prompt
+                if prompt:
+                    custom[BAG_PROMPT_KEY] = prompt
+                if contract_text:
+                    custom[BAG_CONTRACT_KEY] = contract_text
+                    custom[BAG_CONTRACT_HASH_KEY] = contract_hash
 
                 with meta_path.open("w") as f:
                     yaml.safe_dump(meta, f, sort_keys=False)
 
-                self.get_logger().debug(f"Wrote prompt to metadata on attempt {attempt + 1}")
+                self.get_logger().debug(f"Wrote metadata on attempt {attempt + 1}")
                 return
             except Exception as e:
                 last_error = e
                 self.get_logger().debug(f"Metadata write attempt {attempt + 1} failed: {e}")
                 time.sleep(METADATA_RETRY_DELAY_SEC)
 
-        # Fail fast - don't silently lose the prompt
+        # Fail fast - don't silently lose the prompt/contract
         raise RuntimeError(
-            f"Failed to write prompt to {meta_path} after {METADATA_RETRY_COUNT} attempts. Last error: {last_error}"
+            f"Failed to write metadata to {meta_path} after {METADATA_RETRY_COUNT} attempts. Last error: {last_error}"
         )
 
 
