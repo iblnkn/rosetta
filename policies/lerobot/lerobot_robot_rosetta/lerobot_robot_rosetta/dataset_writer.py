@@ -24,6 +24,7 @@ lifecycle and builds the LeRobot feature schema.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,8 @@ class LeRobotDatasetWriter:
         push_to_hub: bool = False,
         hub_private: bool = True,
         hub_tags: list[str] | None = None,
+        contract_path: Path | None = None,
+        embed_contract: bool = True,
         **_opts: Any,
     ) -> None:
         """Create the LeRobotDataset with features derived from contract specs."""
@@ -87,6 +90,13 @@ class LeRobotDatasetWriter:
             features=build_lerobot_features(specs),
             rgb_encoder=RGBEncoderConfig(vcodec=vcodec),
         )
+        if embed_contract and contract_path is not None:
+            # Sidecar, not schema: LeRobot's info.json is a closed dataclass
+            # that silently drops unknown keys, but nothing enumerates the
+            # rest of meta/, so a plain extra file survives create/load/
+            # push_to_hub untouched. Prefixed to read as obviously
+            # third-party to a non-rosetta consumer of the dataset.
+            shutil.copy(contract_path, self._ds.root / "meta" / "rosetta_contract.yaml")
 
     def add_frame(self, frame: dict[str, Any]) -> None:
         assert self._ds is not None, "open() must be called before add_frame()"
