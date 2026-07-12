@@ -18,9 +18,10 @@ when embed_contract is on, and leaves the dataset untouched when it's off."""
 from pathlib import Path
 
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
-from lerobot_robot_rosetta.dataset_writer import LeRobotDatasetWriter
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
+
+from lerobot_robot_rosetta.dataset_writer import LeRobotDatasetWriter
 
 CONTRACT_YAML = """
 robot_type: smoke_bot
@@ -58,7 +59,7 @@ def _open_writer(tmp_path: Path, **open_kwargs) -> tuple[LeRobotDatasetWriter, P
 
 
 def test_embed_contract_writes_sidecar(tmp_path: Path):
-    writer, contract_path = _open_writer(tmp_path, embed_contract=True)
+    _writer, contract_path = _open_writer(tmp_path, embed_contract=True)
     sidecar = tmp_path / "out" / "smoke/ds" / "meta" / "rosetta_contract.yaml"
     assert sidecar.exists()
     assert sidecar.read_text() == contract_path.read_text()

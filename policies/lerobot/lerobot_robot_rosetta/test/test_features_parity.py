@@ -33,14 +33,16 @@ from pathlib import Path
 
 import pytest
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
+from ament_index_python.packages import get_package_share_directory
 from lerobot.utils.feature_utils import hw_to_dataset_features
-from lerobot_robot_rosetta.config_rosetta import RosettaConfig
-from lerobot_robot_rosetta.dataset_writer import build_lerobot_features
-from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
 from rosetta.contract.schema import Align, Channel, Source, load_contract
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec, iter_action_specs, iter_observation_specs
 
-CONTRACTS = sorted((Path(__file__).resolve().parents[2] / "rosetta" / "contracts").glob("*.yaml"))
+from lerobot_robot_rosetta.config_rosetta import RosettaConfig
+from lerobot_robot_rosetta.dataset_writer import build_lerobot_features
+from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
+
+CONTRACTS = sorted((Path(get_package_share_directory("rosetta")) / "contracts").glob("*.yaml"))
 BOUNDARY_MARKERS = {"is_first", "is_last", "is_terminal"}
 
 

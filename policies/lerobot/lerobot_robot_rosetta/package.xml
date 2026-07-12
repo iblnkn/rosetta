@@ -16,6 +16,7 @@
        (pixi.toml) and declared in setup.py install_requires. -->
   <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-grpcio</exec_depend>
 
+  <test_depend>ament_index_python</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 

@@ -24,6 +24,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+
 from lerobot_robot_rosetta import policy_runner as pr
 
 
@@ -75,8 +76,9 @@ class _FakeProc:
 @pytest.fixture
 def spawned(monkeypatch):
     """Neutralize contract validation, subprocess, and socket; record spawns."""
-    import lerobot_robot_rosetta.rosetta as adapter
     import rosetta.contract.specs as cu
+
+    import lerobot_robot_rosetta.rosetta as adapter
 
     monkeypatch.setattr(cu, "iter_observation_specs", lambda contract: [])
     monkeypatch.setattr(cu, "iter_action_specs", lambda contract: [])

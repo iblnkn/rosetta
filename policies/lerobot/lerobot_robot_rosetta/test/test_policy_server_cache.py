@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import pytest
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import RemotePolicyConfig
+
 from lerobot_robot_rosetta import policy_server as ps
 
 

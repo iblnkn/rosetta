@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 from lerobot.async_inference.helpers import RemotePolicyConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
+
 from lerobot_robot_rosetta import classifier_server as cs
 
 

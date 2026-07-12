@@ -17,12 +17,13 @@
 from pathlib import Path
 
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  side-effect: register decoders/codecs
-from lerobot_robot_rosetta.dataset_writer import build_lerobot_features
+from ament_index_python.packages import get_package_share_directory
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 
-# src/action/lerobot_robot_rosetta/test/ -> parents[2] == src/action
-CONTRACTS = Path(__file__).resolve().parents[2] / "rosetta" / "contracts"
+from lerobot_robot_rosetta.dataset_writer import build_lerobot_features
+
+CONTRACTS = Path(get_package_share_directory("rosetta")) / "contracts"
 
 
 def _specs(name):
