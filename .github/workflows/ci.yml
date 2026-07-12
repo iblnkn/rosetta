@@ -10,8 +10,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci:
-    uses: iblnkn/rosetta_ws/.github/workflows/reusable-ros-ci.yml@dev
-    with:
-      package-name: rosetta
-      upstream-repo-file: upstream.repos
+  # industrial_ci is Docker-native: it pulls an official ROS image and builds
+  # inside it, so there's no "is ROS actually installed on this runner" class
+  # of bug to hand-roll around. rosdep resolves deps straight from
+  # package.xml, and UPSTREAM_WORKSPACE pulls in direct deps the same way
+  # upstream.repos used to, just inline.
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      # ament_python has no rosdep key of its own (it ships with the base ROS
+      # install, unlike ament_cmake) — rosdep can't resolve it and industrial_ci
+      # treats any unresolved key as fatal, so it has to be skipped explicitly.
+      ROSDEP_SKIP_KEYS: ament_python
+      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master
+
+  # industrial_ci has no native ruff support (it predates ruff's dominance in
+  # the Python-lint space) — kept as a separate job. ruff.toml is the
+  # workspace's shared config; there's one copy (in rosetta_ws) rather than
+  # duplicating it into every package repo.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/dev/ruff.toml -o ruff.toml
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check .
