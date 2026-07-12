@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: iblnkn/rosetta_ws/.github/workflows/reusable-ros-ci.yml@main
+    uses: iblnkn/rosetta_ws/.github/workflows/reusable-ros-ci.yml@dev
     with:
       package-name: rosetta
       upstream-repo-file: upstream.repos
