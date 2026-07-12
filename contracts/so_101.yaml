@@ -11,18 +11,23 @@ x-qos:
   cmd:    &cmd_qos    {reliability: best_effort, history: keep_last, depth: 10}
 
 observations:
-  observation.images.wrist:
+  observation.images.right:
+    channel: {topic: /front_camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+    align: {strategy: hold, timeline: header}
+    apply: [resize: [512, 512]]
+
+  observation.images.top:
+    channel: {topic: /top_camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+    align: {strategy: hold, timeline: header}
+    apply: [resize: [512, 512]]
+
+  observation.images.wrist.right:
     channel: {topic: /wrist_camera/image_raw/compressed,
               type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
     align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
-
-  observation.images.side:
-    channel: {topic: /side_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [512, 512]]
-
 
   observation.state:
     channel: {topic: /follower_arm/joint_states,
