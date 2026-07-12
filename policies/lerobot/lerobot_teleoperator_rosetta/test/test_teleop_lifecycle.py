@@ -27,13 +27,14 @@ from pathlib import Path
 
 import pytest
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from lerobot.utils.errors import DeviceAlreadyConnectedError
 from sensor_msgs.msg import JointState
 
 from lerobot_teleoperator_rosetta.config_rosetta_teleop import RosettaTeleopConfig
 from lerobot_teleoperator_rosetta.rosetta_teleop import RosettaTeleop
 
-CONTRACT = Path(__file__).resolve().parents[2] / "rosetta" / "contracts" / "so_101_hil.yaml"
+CONTRACT = Path(get_package_share_directory("rosetta")) / "contracts" / "so_101_hil.yaml"
 INPUT_TOPIC = "/human/leader_arm/joint_states"
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_pitch", "wrist_roll", "wrist_yaw"]
 

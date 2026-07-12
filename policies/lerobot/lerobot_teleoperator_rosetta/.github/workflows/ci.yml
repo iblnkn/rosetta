@@ -20,7 +20,10 @@ jobs:
       # lerobot is PyPI-only (not a ROS/rosdep package) — colcon build doesn't
       # resolve a package's own install_requires the way rosdep resolves
       # package.xml, so nothing installs it without this hook.
-      BEFORE_BUILD_TARGET_WORKSPACE: "pip install --break-system-packages lerobot"
+      # --break-system-packages: PEP 668, required on Ubuntu 24.04.
+      # --ignore-installed: lerobot's deps (e.g. numpy) can want to upgrade
+      # apt-installed packages, which pip can't uninstall (no RECORD file).
+      BEFORE_BUILD_TARGET_WORKSPACE: "pip install --break-system-packages --ignore-installed lerobot"
     steps:
       - uses: actions/checkout@v4
       - uses: ros-industrial/industrial_ci@master

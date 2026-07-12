@@ -13,6 +13,7 @@
   <depend>rosetta</depend>
   <depend>python3-numpy</depend>
 
+  <test_depend>ament_index_python</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
