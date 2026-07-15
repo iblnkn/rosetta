@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""read_bag_contract_hash reads back what episode_recorder_node writes."""
+"""read_bag_contract_text reads back what episode_recorder_node writes."""
 
 import yaml
 from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_HASH_KEY,
+    BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,
     BAG_METADATA_KEY,
 )
-from rosetta.robots.ros2.offline.bag_frames import read_bag_contract_hash
+from rosetta.robots.ros2.offline.bag_frames import read_bag_contract_text
 
 
 def _write_metadata(bag_dir, custom_data: dict):
@@ -29,19 +29,19 @@ def _write_metadata(bag_dir, custom_data: dict):
     (bag_dir / "metadata.yaml").write_text(yaml.safe_dump(meta))
 
 
-def test_reads_recorded_hash(tmp_path):
+def test_reads_recorded_contract(tmp_path):
     bag_dir = tmp_path / "ep"
-    _write_metadata(bag_dir, {BAG_CONTRACT_HASH_KEY: "deadbeef"})
-    assert read_bag_contract_hash(bag_dir) == "deadbeef"
+    _write_metadata(bag_dir, {BAG_CONTRACT_KEY: "robot_type: x\n"})
+    assert read_bag_contract_text(bag_dir) == "robot_type: x\n"
 
 
-def test_absent_hash_returns_empty_string(tmp_path):
+def test_absent_contract_returns_empty_string(tmp_path):
     bag_dir = tmp_path / "ep"
     _write_metadata(bag_dir, {})
-    assert read_bag_contract_hash(bag_dir) == ""
+    assert read_bag_contract_text(bag_dir) == ""
 
 
 def test_missing_metadata_file_returns_empty_string(tmp_path):
     bag_dir = tmp_path / "ep_no_meta"
     bag_dir.mkdir()
-    assert read_bag_contract_hash(bag_dir) == ""
+    assert read_bag_contract_text(bag_dir) == ""

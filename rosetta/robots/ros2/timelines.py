@@ -111,8 +111,7 @@ def get_message_timestamp_ns(msg, spec: "StreamSpec", receive_ns: int) -> int | 
     Returns:
     -------
         Timestamp in nanoseconds, or None when *this message* does not carry
-        the named timeline (e.g. an uninitialized header stamp). There is no
-        silent fallback — a missing timeline is the caller's signal to drop.
+        the named timeline (e.g. an uninitialized header stamp).
 
     Raises:
     ------

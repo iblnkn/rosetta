@@ -41,36 +41,38 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
+import yaml
+
 from rosetta.contract.schema import load_contract
 from rosetta.contract.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH
 from rosetta.contract.specs import iter_observation_specs, iter_specs
 from rosetta.policies import available_dataset_writers, load_dataset_writer
-from rosetta.robots.ros2.bag_metadata import contract_hash
-from rosetta.robots.ros2.offline.bag_frames import find_bag_dirs, iter_bag_frames, read_bag_contract_hash
+from rosetta.robots.ros2.offline.bag_frames import find_bag_dirs, iter_bag_frames, read_bag_contract_text
 
 if TYPE_CHECKING:
     from rosetta.contract.schema import Contract
     from rosetta.policies import DatasetWriter
 
 
-def warn_if_contract_mismatch(contract_path: Path, bag_hash: str) -> None:
+def warn_if_contract_mismatch(contract_path: Path, bag_contract: str) -> None:
     """Heads-up when a bag was recorded with a different contract than --contract.
 
     --contract is always the source of truth for decoding; a mismatch only
-    warns, and this check itself must never be why a port fails — an
-    unreadable --contract here (it already loaded fine upstream) or a bag
-    with no recorded hash silently skips the comparison.
+    warns, and this check itself must never be why a port fails. A bag with no
+    embedded contract, or an unreadable/unparseable --contract, silently skips
+    the comparison. Compares parsed YAML, so whitespace- or comment-only edits
+    do not warn.
     """
-    try:
-        local_hash = contract_hash(contract_path)
-    except OSError:
+    if not bag_contract:
         return
-    if bag_hash and bag_hash != local_hash:
+    try:
+        local = yaml.safe_load(Path(contract_path).read_text())
+        recorded = yaml.safe_load(bag_contract)
+    except (OSError, yaml.YAMLError):
+        return
+    if recorded != local:
         logging.warning(
-            "Bag was recorded with a different contract (hash=%s) than "
-            "--contract (hash=%s); using --contract for decoding and embedding.",
-            bag_hash,
-            local_hash,
+            "Bag was recorded with a different contract than --contract; using --contract for decoding and embedding."
         )
 
 
@@ -181,8 +183,8 @@ def port(
         return
 
     # First bag as a representative sample: all bags in a run are normally
-    # recorded by one recorder config, so one hash comparison suffices.
-    warn_if_contract_mismatch(contract_path, read_bag_contract_hash(bag_dirs[0]))
+    # recorded by one recorder config, so one comparison suffices.
+    warn_if_contract_mismatch(contract_path, read_bag_contract_text(bag_dirs[0]))
 
     episodes = (
         (bag_dir.name, iter_bag_frames(bag_dir, specs, warmup_keys=warmup_keys, task_topics=task_topics))

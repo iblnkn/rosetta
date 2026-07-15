@@ -42,7 +42,7 @@ from rosetta.frames.codecs import has_decoder
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer, step_ns
 from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_HASH_KEY,
+    BAG_CONTRACT_KEY,
     BAG_METADATA_KEY,
     BAG_PROMPT_KEY,
     read_bag_metadata,
@@ -77,9 +77,9 @@ def find_bag_dirs(raw_dir: Path, *, num_shards: int | None = None, shard_index: 
     return shard
 
 
-def read_bag_contract_hash(bag_dir: Path) -> str:
-    """Read the recorded contract's sha256 hex digest for one bag (empty if absent)."""
-    return read_custom_field(read_bag_metadata(bag_dir), BAG_CONTRACT_HASH_KEY)
+def read_bag_contract_text(bag_dir: Path) -> str:
+    """Read the contract embedded at record time for one bag (empty if absent)."""
+    return read_custom_field(read_bag_metadata(bag_dir), BAG_CONTRACT_KEY)
 
 
 # ---------- Internal helpers ----------

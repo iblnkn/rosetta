@@ -20,7 +20,6 @@ contract-only, both together, and neither (no-op, no file required).
 
 import yaml
 from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_HASH_KEY,
     BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,
     BAG_METADATA_KEY,
@@ -62,29 +61,26 @@ def test_prompt_only_unaffected_by_contract_fields(tmp_path):
     custom = _read_custom_data(bag_dir)
     assert custom[BAG_PROMPT_KEY] == "pick up cube"
     assert BAG_CONTRACT_KEY not in custom
-    assert BAG_CONTRACT_HASH_KEY not in custom
 
 
 def test_contract_only_written_without_prompt(tmp_path):
     bag_dir = _init_bag_dir(tmp_path)
-    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "", "robot_type: x\n", "deadbeef")
+    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "", "robot_type: x\n")
     custom = _read_custom_data(bag_dir)
     assert BAG_PROMPT_KEY not in custom
     assert custom[BAG_CONTRACT_KEY] == "robot_type: x\n"
-    assert custom[BAG_CONTRACT_HASH_KEY] == "deadbeef"
 
 
 def test_prompt_and_contract_both_written(tmp_path):
     bag_dir = _init_bag_dir(tmp_path)
-    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "pick up cube", "robot_type: x\n", "deadbeef")
+    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "pick up cube", "robot_type: x\n")
     custom = _read_custom_data(bag_dir)
     assert custom[BAG_PROMPT_KEY] == "pick up cube"
     assert custom[BAG_CONTRACT_KEY] == "robot_type: x\n"
-    assert custom[BAG_CONTRACT_HASH_KEY] == "deadbeef"
 
 
 def test_neither_prompt_nor_contract_is_a_noop(tmp_path):
     bag_dir = tmp_path / "ep_no_meta"
     bag_dir.mkdir()  # deliberately no metadata.yaml -- must not try to write one
-    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "", "", "")
+    EpisodeRecorderNode._write_metadata(_FakeSelf(), bag_dir, "", "")
     assert not (bag_dir / "metadata.yaml").exists()

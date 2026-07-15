@@ -51,10 +51,8 @@ from std_srvs.srv import Trigger
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_specs
 from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_HASH_KEY,
     BAG_CONTRACT_KEY,
     BAG_PROMPT_KEY,
-    contract_hash,
     update_custom_data,
 )
 from rosetta.robots.ros2.nodes.node_utils import (
@@ -198,7 +196,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # Initialize state variables (resources created in lifecycle callbacks)
         self._contract = None
         self._contract_text: str = ""
-        self._contract_hash: str = ""
         self._bag_base: Path | None = None
         self._storage_id: str | None = None
         self._topics: list[tuple[str, str, QoSProfile]] = []  # (topic, type, qos)
@@ -244,12 +241,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         if self.get_parameter("embed_contract").value:
             self._contract_text = Path(contract_path).read_text()
-            # Byte-exact hash shared with the porter's --contract comparison
-            # (text-mode hashing made the identical file hash differently).
-            self._contract_hash = contract_hash(contract_path)
         else:
             self._contract_text = ""
-            self._contract_hash = ""
 
         self._bag_base = Path(self.get_parameter("bag_base_dir").value).expanduser()
         self._bag_base.mkdir(parents=True, exist_ok=True)
@@ -340,7 +333,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         self._contract = None
         self._contract_text = ""
-        self._contract_hash = ""
         self._topics = []
 
     # -------------------- Topic and subscription management --------------------
@@ -674,7 +666,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             self._close_writer()
             if writer_opened:
                 try:
-                    self._write_metadata(bag_dir, prompt, self._contract_text, self._contract_hash)
+                    self._write_metadata(bag_dir, prompt, self._contract_text)
                 except RuntimeError as e:
                     # A partial bag with provenance is still a real error, but
                     # never mask an earlier one.
@@ -797,7 +789,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             self.destroy_subscription(sub)
         self._discovered_topics = []
 
-    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "", contract_hash: str = "") -> None:
+    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "") -> None:
         """
         Write prompt and/or contract provenance to metadata.yaml as custom_data.
 
@@ -813,7 +805,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             entries[BAG_PROMPT_KEY] = prompt
         if contract_text:
             entries[BAG_CONTRACT_KEY] = contract_text
-            entries[BAG_CONTRACT_HASH_KEY] = contract_hash
         if not entries:
             return
 

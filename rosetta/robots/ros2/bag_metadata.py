@@ -14,19 +14,17 @@
 
 """Bag metadata custom_data: the recorder/porter seam.
 
-The episode recorder writes the operator prompt, embedded contract, and
-contract hash into rosbag2's metadata.yaml ``custom_data`` block; the bag
-porter reads them back. The key constants and read/write/hash helpers live
-here — one home for the writer/reader pair, so a drifted key literal cannot
-make the porter silently stop finding prompts or hashes in new bags (both
-readers default to "" by design).
+The episode recorder writes the operator prompt and the embedded contract into
+rosbag2's metadata.yaml ``custom_data`` block; the bag porter reads them back.
+The key constants and read/write helpers live here, one home for the
+writer/reader pair, so a drifted key literal cannot make the porter silently
+stop finding prompts or contracts in new bags (readers default to "" by design).
 
-ROS-free (yaml/hashlib/pathlib only).
+ROS-free (yaml/pathlib only).
 """
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -36,18 +34,6 @@ BAG_METADATA_KEY = "rosbag2_bagfile_information"
 BAG_CUSTOM_DATA_KEY = "custom_data"
 BAG_PROMPT_KEY = "lerobot.operator_prompt"
 BAG_CONTRACT_KEY = "rosetta.contract_yaml"
-BAG_CONTRACT_HASH_KEY = "rosetta.contract_hash"
-
-
-def contract_hash(path: Path | str) -> str:
-    """sha256 hex digest of the contract file's BYTES.
-
-    Bytes, not text: the recorder embeds this hash at record time and the
-    porter compares it against its own ``--contract`` hash — text mode's
-    universal-newline translation would make the identical file hash
-    differently (e.g. CRLF checkouts) and produce spurious mismatch warnings.
-    """
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def read_bag_metadata(bag_dir: Path) -> dict[str, Any]:

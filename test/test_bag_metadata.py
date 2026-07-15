@@ -12,44 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The recorder/porter metadata seam: one hash, one custom_data shape."""
-
-import hashlib
+"""The recorder/porter metadata seam: one custom_data shape."""
 
 import pytest
 import yaml
 from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_HASH_KEY,
+    BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,
     BAG_METADATA_KEY,
     BAG_PROMPT_KEY,
-    contract_hash,
     read_bag_metadata,
     read_custom_field,
     update_custom_data,
 )
 
 
-def test_contract_hash_is_byte_exact(tmp_path):
-    # Regression: the recorder used to hash read_text().encode() while the
-    # porter hashed read_bytes(); universal-newline translation made the
-    # identical CRLF file hash differently, producing spurious "recorded
-    # with a different contract" warnings at port time.
-    p = tmp_path / "c.yaml"
-    p.write_bytes(b"robot_type: test\r\nfps: 30\r\n")
-    assert contract_hash(p) == hashlib.sha256(p.read_bytes()).hexdigest()
-    assert contract_hash(p) != hashlib.sha256(p.read_text().encode()).hexdigest()
-
-
 def test_custom_data_round_trip(tmp_path):
     meta_path = tmp_path / "metadata.yaml"
     meta_path.write_text(yaml.safe_dump({BAG_METADATA_KEY: {"storage_identifier": "mcap"}}))
 
-    update_custom_data(meta_path, {BAG_PROMPT_KEY: "pick", BAG_CONTRACT_HASH_KEY: "deadbeef"})
+    update_custom_data(meta_path, {BAG_PROMPT_KEY: "pick", BAG_CONTRACT_KEY: "robot_type: x\n"})
 
     meta = read_bag_metadata(tmp_path)
     assert read_custom_field(meta, BAG_PROMPT_KEY) == "pick"
-    assert read_custom_field(meta, BAG_CONTRACT_HASH_KEY) == "deadbeef"
+    assert read_custom_field(meta, BAG_CONTRACT_KEY) == "robot_type: x\n"
     # rosbag2's own fields survive the read-modify-write.
     assert meta[BAG_METADATA_KEY]["storage_identifier"] == "mcap"
 

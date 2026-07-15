@@ -92,7 +92,6 @@ class FakeRecorder:
         self._discovered_topics = []
         self._topics = []
         self._contract_text = ""
-        self._contract_hash = ""
         self._last_bag_dir = None
         self._params = {"default_max_duration": 0.0, "feedback_rate_hz": feedback_rate}
         self._bag_dir = tmp_path / "ep"
@@ -119,7 +118,7 @@ class FakeRecorder:
     def _close_writer(self):
         self.close_calls += 1
 
-    def _write_metadata(self, bag_dir, prompt, contract_text, contract_hash):
+    def _write_metadata(self, bag_dir, prompt, contract_text):
         self.metadata_calls += 1
         if self._metadata_error is not None:
             raise self._metadata_error
