@@ -18,13 +18,21 @@ iter_specs also yields. This keeps RL and record-only columns out of
 observation.state."""
 
 import pytest
-
-import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.schema import Align, Channel, Contract, FrameEntry, Source
+from rosetta.contract.schema import (
+    Align,
+    Channel,
+    Contract,
+    FrameEntry,
+    Source,
+    Teleop,
+    TeleopFeedbackSource,
+    TeleopInputSource,
+)
 from rosetta.contract.specs import (
     iter_action_specs,
     iter_observation_specs,
+    iter_policy_specs,
     iter_reward_as_action_specs,
     iter_specs,
 )
@@ -45,7 +53,7 @@ def _entry(key, topic, msg_type, select=None, **channel_kw):
     )
 
 
-def _contract(observations=(), actions=(), rewards=()):
+def _contract(observations=(), actions=(), rewards=(), teleop=None):
     return Contract(
         robot_type="r",
         robot_interface="ros2",
@@ -58,6 +66,7 @@ def _contract(observations=(), actions=(), rewards=()):
         signals=[],
         info=[],
         complementary_data=[],
+        teleop=teleop,
     )
 
 
@@ -103,3 +112,69 @@ def test_reward_as_action_registered_type_passes():
     assert len(specs) == 1
     assert specs[0].key == "action"
     assert specs[0].dtype == "float32"  # explicit dtype honored
+
+
+def test_reward_as_action_rejects_empty_rewards_section():
+    """Regression: is_classifier=True with no 'rewards' entries used to
+    resolve to zero action specs with no error, silently discarding every
+    policy output instead of failing at spec-resolution time."""
+    c = _contract()  # no rewards
+    with pytest.raises(ContractValidationError, match="rewards"):
+        list(iter_reward_as_action_specs(c))
+
+
+def _source(topic, msg_type, select=None, **channel_kw):
+    return Source(channel=Channel(topic=topic, type=msg_type, **channel_kw), align=HOLD, select=select)
+
+
+def test_teleop_leaks_into_iter_specs_but_not_policy_specs():
+    """Teleop input/feedback are record-only diagnostic columns (like the
+    extended sections): the porter's iter_specs carries them, keyed by the
+    action/observation they target (target='/cmd' -> 'teleop.input.action'),
+    but iter_policy_specs (observations+actions only) must not, since they
+    duplicate/don't belong in a policy's I/O vectors."""
+    obs = _entry("observation.state", "/joints", "sensor_msgs/msg/JointState", ["position.j1"])
+    act = _entry("action", "/cmd", "sensor_msgs/msg/JointState", ["position.j1"])
+    teleop = Teleop(
+        input=(
+            TeleopInputSource(
+                source=_source("/leader/joints", "sensor_msgs/msg/JointState", ["position.j1"]), target="/cmd"
+            ),
+        ),
+        events=None,
+        feedback=(
+            TeleopFeedbackSource(
+                source=_source("/leader/feedback", "sensor_msgs/msg/JointState", ["effort.j1"]), origin="/joints"
+            ),
+        ),
+    )
+    c = _contract([obs], [act], teleop=teleop)
+
+    all_keys = {s.key for s in iter_specs(c)}
+    policy_keys = {s.key for s in iter_policy_specs(c)}
+
+    assert {"teleop.input.action", "teleop.feedback.observation.state"} <= all_keys
+    assert not ({"teleop.input.action", "teleop.feedback.observation.state"} & policy_keys)
+    assert policy_keys == {"observation.state", "action"}
+
+
+def test_teleop_input_non_numeric_dtype_rejected():
+    # A String teleop input decodes to str, which hil_manager_node would then
+    # try to re-encode onto the numeric action topic — failing on every
+    # message at teleop rate. Reject at load instead.
+    obs = _entry("observation.state", "/joints", "sensor_msgs/msg/JointState", ["position.j1"])
+    act = _entry("action", "/cmd", "sensor_msgs/msg/JointState", ["position.j1"])
+    teleop = Teleop(
+        input=(TeleopInputSource(source=_source("/leader/text", "std_msgs/msg/String"), target="/cmd"),),
+        events=None,
+        feedback=(),
+    )
+    c = _contract([obs], [act], teleop=teleop)
+    with pytest.raises(ContractValidationError, match="numeric action topic"):
+        list(iter_specs(c))
+
+
+def test_iter_specs_omits_teleop_when_contract_has_none():
+    """No teleop section (the common case) must not raise or synthesize keys."""
+    c = _contract()
+    assert {s.key for s in iter_specs(c)} == set()

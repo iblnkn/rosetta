@@ -24,22 +24,21 @@ episode thread, and returns; the thread releases the guard on every exit.
 import threading
 
 import pytest
-from rosetta_interfaces.srv import StartHILEpisode
-
+from rosetta.robots.ros2.nodes.hil_manager_node import HilManagerNode
 from rosetta.robots.ros2.nodes.node_utils import wait_until
-from rosetta.robots.ros2.nodes.rosetta_hil_manager_node import RosettaHilManagerNode
+from rosetta_interfaces.srv import StartHILEpisode
 
 
 @pytest.fixture
 def node(rclpy_ctx):
-    n = RosettaHilManagerNode()
+    n = HilManagerNode()
     yield n
     n.destroy_node()
 
 
 def _call(node, prompt="t"):
     request = StartHILEpisode.Request(prompt=prompt)
-    return node._handle_start_episode(request, StartHILEpisode.Response())
+    return node._on_start_episode(request, StartHILEpisode.Response())
 
 
 def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
@@ -49,19 +48,19 @@ def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
         "_run_episode",
         lambda *_a: (release.wait(5.0), _fields())[1],
     )
-    node._accepting_goals = True
+    node._accepting_work = True
 
     resp = _call(node)
     assert resp.accepted is True  # returned while the episode still runs
-    assert node._episode_busy.busy
+    assert node._busy.busy
 
     # Concurrent start while the episode runs is rejected.
     resp2 = _call(node)
     assert resp2.accepted is False
-    assert "in progress" in resp2.message
+    assert "already busy" in resp2.message
 
     release.set()
-    assert wait_until(lambda: not node._episode_busy.busy, timeout=5.0)
+    assert wait_until(lambda: not node._busy.busy, timeout=5.0)
 
 
 def test_guard_released_when_episode_raises(node, monkeypatch):
@@ -69,20 +68,20 @@ def test_guard_released_when_episode_raises(node, monkeypatch):
         raise RuntimeError("episode exploded")
 
     monkeypatch.setattr(node, "_run_episode", _boom)
-    node._accepting_goals = True
+    node._accepting_work = True
 
     resp = _call(node)
     assert resp.accepted is True
     # The leak regression: the thread's finally must release the guard.
-    assert wait_until(lambda: not node._episode_busy.busy, timeout=5.0)
+    assert wait_until(lambda: not node._busy.busy, timeout=5.0)
 
 
 def test_inactive_node_rejects_without_claiming(node):
-    node._accepting_goals = False
+    node._accepting_work = False
     resp = _call(node)
     assert resp.accepted is False
-    assert resp.message == "Node not active"
-    assert not node._episode_busy.busy
+    assert "node not active" in resp.message
+    assert not node._busy.busy
 
 
 def _fields():

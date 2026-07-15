@@ -23,32 +23,31 @@ twice with the bag writer.
 
 import pytest
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-
 from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 
 _dedup = EpisodeRecorderNode._dedup_topics
 
 
 def test_identical_duplicate_collapses_to_one():
-    entry = ("/joint_states", "sensor_msgs/msg/JointState", 10)
+    entry = ("/joint_states", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
     assert _dedup([entry, entry]) == [entry]
 
 
 def test_distinct_topics_pass_through_in_order():
-    a = ("/a", "sensor_msgs/msg/JointState", 10)
-    b = ("/b", "std_msgs/msg/Float32", 10)
+    a = ("/a", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
+    b = ("/b", "std_msgs/msg/Float32", QoSProfile(depth=10))
     assert _dedup([a, b]) == [a, b]
 
 
 def test_conflicting_types_raise():
-    a = ("/t", "sensor_msgs/msg/JointState", 10)
-    b = ("/t", "std_msgs/msg/Float32", 10)
+    a = ("/t", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
+    b = ("/t", "std_msgs/msg/Float32", QoSProfile(depth=10))
     with pytest.raises(ValueError, match="different types"):
         _dedup([a, b])
 
 
 def test_conflicting_qos_raises():
-    a = ("/t", "sensor_msgs/msg/JointState", 10)
+    a = ("/t", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
     b = (
         "/t",
         "sensor_msgs/msg/JointState",

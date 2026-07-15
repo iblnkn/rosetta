@@ -12,23 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TRANSIENT_LOCAL buffer retention depth.
+"""Per-episode TRANSIENT_LOCAL subscription QoS depth.
 
 Regression: /tf_static is TRANSIENT_LOCAL, and multiple independent nodes
 commonly publish it (robot_state_publisher plus a sensor-calibration
-static_transform_publisher). The buffer's retention depth used to be taken
-straight from the contract's configured QoS depth (conventionally 1, a
-wire/DDS matching hint) -- so a second publisher's latched message silently
-evicted the first's from the buffer. It must be sized to at least the live
-publisher count instead.
+static_transform_publisher). Each live publisher redelivers its own latched
+sample when the per-episode subscription is created; a subscription depth
+taken straight from the contract's configured QoS depth (conventionally 1,
+a wire/DDS matching hint) lets one redelivered sample evict another in the
+RMW queue before the executor drains it — verified against rmw_zenoh and
+cyclonedds. The depth must be widened to at least the live publisher count.
 """
 
 from rosetta.robots.ros2.nodes.episode_recorder_node import (
-    MAX_BUFFERED_MESSAGES_PER_TOPIC,
+    MAX_LATCHED_SUB_DEPTH,
     EpisodeRecorderNode,
 )
 
-_depth = EpisodeRecorderNode._latched_buffer_depth
+_depth = EpisodeRecorderNode._latched_sub_depth
 
 
 def test_multiple_publishers_widen_beyond_configured_depth():
@@ -46,4 +47,4 @@ def test_configured_depth_wins_when_larger_than_publisher_count():
 
 
 def test_clamped_to_safety_ceiling():
-    assert _depth(configured_depth=1, publisher_count=10_000) == MAX_BUFFERED_MESSAGES_PER_TOPIC
+    assert _depth(configured_depth=1, publisher_count=10_000) == MAX_LATCHED_SUB_DEPTH

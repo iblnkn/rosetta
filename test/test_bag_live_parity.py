@@ -28,22 +28,26 @@ Pinned regressions:
   inclusive comparison and excluded it);
 - warmup: ticks before every routed observation stream has data are skipped;
   late action streams do NOT gate warmup;
-- a routed observation topic with zero messages -> RuntimeError.
+- a routed observation topic with zero messages -> RuntimeError;
+- a spec whose type is encode-only (no decoder) -> RuntimeError before any
+  message is read (porting it could only record zeros);
+- an unstamped message on a header-timeline stream is dropped (warn-once)
+  and a stamped one recovers, same as the live ingest guard.
 """
+
+import logging
 
 import numpy as np
 import pytest
 import rosbag2_py
 from rclpy.serialization import serialize_message
-from sensor_msgs.msg import JointState
-
-import rosetta.robots.ros2.decoders  # noqa: F401  register codecs
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.frames.codecs import decode_value
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.offline.bag_frames import iter_bag_frames
+from sensor_msgs.msg import JointState
 
 FPS = 10
 STEP_NS = int(1e9 / FPS)
@@ -247,3 +251,62 @@ def test_absent_action_topic_still_ports(tmp_path):
     assert ported
     for frame in ported:
         np.testing.assert_array_equal(frame["action"], [0.0])
+
+
+def test_encode_only_spec_fails_fast(bag_dir):
+    # Encode-only channel types are valid live (actions are never decoded
+    # there) but unportable: the porter records every spec, so it must refuse
+    # up front rather than silently record an all-zero column.
+    encode_only = ActionStreamSpec(
+        key="action.aux",
+        names=["g1"],
+        fps=FPS,
+        source=Source(
+            channel=Channel(topic="/grip", type="test_msgs/msg/EncodeOnly"),
+            align=Align("hold", "receive"),
+        ),
+        dtype="float64",
+    )
+    with pytest.raises(RuntimeError, match="cannot be decoded for porting"):
+        next(iter_bag_frames(bag_dir, [*SPECS, encode_only], warmup_keys=WARMUP_KEYS))
+
+
+def _js_stamped(names, positions, stamp_ns):
+    msg = _js(names, positions)
+    msg.header.stamp.sec = stamp_ns // 1_000_000_000
+    msg.header.stamp.nanosec = stamp_ns % 1_000_000_000
+    return msg
+
+
+def test_header_timeline_drop_and_recovery_offline(tmp_path, caplog):
+    # Offline twin of the live ingest guard: an unstamped message on a
+    # header-timeline stream is dropped (warn-once), a stamped one recovers,
+    # and porting continues instead of dying or fabricating a timestamp.
+    spec = ObservationStreamSpec(
+        key="observation.h",
+        names=["position.j1"],
+        fps=FPS,
+        source=Source(
+            channel=Channel(topic="/obs_h", type="sensor_msgs/msg/JointState"),
+            align=Align("hold", "header"),
+        ),
+        is_image=False,
+        image_resize=None,
+        dtype="float64",
+    )
+    events = [
+        ("/obs_h", T0, _js(["j1"], [1.0])),  # zero stamp -> dropped
+        ("/obs_h", T0 + 50_000_000, _js_stamped(["j1"], [2.0], T0 + 50_000_000)),
+        ("/obs_h", T0 + 150_000_000, _js_stamped(["j1"], [3.0], T0 + 150_000_000)),
+    ]
+    d = tmp_path / "bag_header"
+    _write_bag(d, events)
+
+    with caplog.at_level(logging.WARNING):
+        frames = list(iter_bag_frames(d, [spec], warmup_keys={"observation.h"}))
+
+    drops = [r for r in caplog.records if "missing its 'header' timeline" in r.getMessage()]
+    assert len(drops) == 1
+    # Tick 0 (T0) is a warmup skip (its only message was dropped); the first
+    # emitted frame carries the recovered, stamped value.
+    np.testing.assert_array_equal(frames[0]["observation.h"], [2.0])

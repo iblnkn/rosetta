@@ -17,14 +17,14 @@ Frame I/O protocols: how the robot side and the policy side meet.
 
 A live robot, to Rosetta, is a duck-typed feed of frame dicts
 (``{contract_key: np.ndarray | str}``, see :mod:`rosetta.frames` for what a
-frame is): observations sampled out on the clock defined by the contract's
-``fps``, actions published back in. These protocols name that surface
-so a :class:`~rosetta.policies.PolicyRunner` can be written — and tested —
-against frames alone, with no dependency on any pub/sub ecosystem.
+frame is): observations sampled out on the clock set by the contract's
+``fps``, actions published back in. These protocols name that surface so a
+:class:`~rosetta.policies.PolicyRunner` can be written and tested against
+frames alone, with no dependency on any pub/sub ecosystem.
 
-``rosetta.robots.ros2.topic_bridge.TopicBridge`` is the ROS2 implementation;
-a future robot interface (ROS1, zenoh, MQTT, ...) implements the same
-methods and every policy framework works with it unchanged.
+``rosetta.robots.ros2.topic_bridge.TopicBridge`` is the ROS2 implementation.
+A future robot interface (ROS1, zenoh, MQTT, ...) implements the same methods,
+and every policy framework works with it unchanged.
 """
 
 from __future__ import annotations
@@ -33,8 +33,12 @@ from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
-class FrameSource(Protocol):
-    """Produces observation frames on the clock defined by the contract's ``fps``."""
+class FrameIO(Protocol):
+    """Bidirectional frame I/O with a live robot.
+
+    What a :class:`~rosetta.policies.PolicyRunner` receives per goal: sample
+    observations out, publish actions in, reset between episodes.
+    """
 
     def sample_frame(self) -> dict[str, Any]:
         """Current observation frame: ``{contract_key: np.ndarray | str}``."""
@@ -45,27 +49,13 @@ class FrameSource(Protocol):
         """True once every observation stream has delivered at least one value."""
         ...
 
-
-@runtime_checkable
-class FrameSink(Protocol):
-    """Consumes action frames and publishes them to the robot."""
-
     def publish_frame(self, action_frame: dict[str, Any]) -> dict[str, Any]:
-        """Publish one action frame (``{contract_key: np.ndarray}``); returns it."""
+        """Publish one action frame (``{contract_key: np.ndarray}``). Returns it."""
         ...
 
     def send_safety_action(self) -> None:
         """Publish the contract's safety action (e.g. zero velocity)."""
         ...
-
-
-@runtime_checkable
-class FrameIO(FrameSource, FrameSink, Protocol):
-    """Bidirectional frame I/O with a live robot.
-
-    What a :class:`~rosetta.policies.PolicyRunner` receives per goal: sample
-    observations out, publish actions in, reset between episodes.
-    """
 
     def reset_state(self) -> None:
         """Clear per-episode state (buffers, warmup) between runs."""

@@ -34,72 +34,55 @@ from typing import Any, Iterator
 
 import numpy as np
 import rosbag2_py
-import yaml
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 from rosetta.contract.specs import StreamSpec
+from rosetta.frames.codecs import has_decoder
 from rosetta.frames.layout import FrameLayout
-from rosetta.frames.resample import StreamBuffer
-
-# Register the ROS codecs (import side effect populates the core registry).
-from rosetta.robots.ros2 import decoders as _decoders
-from rosetta.robots.ros2 import encoders as _encoders
+from rosetta.frames.resample import StreamBuffer, step_ns
+from rosetta.robots.ros2.bag_metadata import (
+    BAG_CONTRACT_HASH_KEY,
+    BAG_METADATA_KEY,
+    BAG_PROMPT_KEY,
+    read_bag_metadata,
+    read_custom_field,
+)
 from rosetta.robots.ros2.ingest import StreamIngest
-
-del _decoders, _encoders
-
-# Bag metadata keys
-BAG_METADATA_KEY = "rosbag2_bagfile_information"
-BAG_CUSTOM_DATA_KEY = "custom_data"
-BAG_PROMPT_KEY = "lerobot.operator_prompt"
-BAG_CONTRACT_HASH_KEY = "rosetta.contract_hash"
-
 
 # ---------- Bag discovery ----------
 
 
-def find_bag_dirs(raw_dir: Path) -> list[Path]:
-    """Find all bag directories (identified by metadata.yaml)."""
+def find_bag_dirs(raw_dir: Path, *, num_shards: int | None = None, shard_index: int | None = None) -> list[Path]:
+    """Find all bag directories (identified by metadata.yaml), optionally sharded.
+
+    Sharding (``num_shards``/``shard_index``) selects a deterministic stride
+    subset for parallel or SLURM porting. Finding no bags at all is an error;
+    a valid shard that happens to receive none is an empty list.
+    """
     bag_dirs = sorted(p.parent for p in raw_dir.rglob("metadata.yaml"))
     if not bag_dirs:
         raise RuntimeError(f"No bag directories found in {raw_dir}")
-    return bag_dirs
+    logging.info("Found %d bags in %s", len(bag_dirs), raw_dir)
+
+    if num_shards is None:
+        return bag_dirs
+    if shard_index is None:
+        raise ValueError("shard_index required when num_shards is specified")
+    if shard_index >= num_shards:
+        raise ValueError(f"shard_index ({shard_index}) >= num_shards ({num_shards})")
+
+    shard = bag_dirs[shard_index::num_shards]
+    logging.info("Shard %d/%d: processing %d bags", shard_index, num_shards, len(shard))
+    return shard
 
 
 def read_bag_contract_hash(bag_dir: Path) -> str:
     """Read the recorded contract's sha256 hex digest for one bag (empty if absent)."""
-    return _read_contract_hash(_read_bag_metadata(bag_dir))
+    return read_custom_field(read_bag_metadata(bag_dir), BAG_CONTRACT_HASH_KEY)
 
 
 # ---------- Internal helpers ----------
-
-
-def _read_bag_metadata(bag_dir: Path) -> dict[str, Any]:
-    """Read bag metadata.yaml."""
-    meta_path = bag_dir / "metadata.yaml"
-    if not meta_path.exists():
-        return {}
-    with meta_path.open() as f:
-        return yaml.safe_load(f) or {}
-
-
-def _read_prompt(meta: dict[str, Any]) -> str:
-    """Read prompt from metadata custom_data."""
-    info = meta.get(BAG_METADATA_KEY, {})
-    custom_data = info.get(BAG_CUSTOM_DATA_KEY, {})
-    if isinstance(custom_data, dict):
-        return custom_data.get(BAG_PROMPT_KEY, "")
-    return ""
-
-
-def _read_contract_hash(meta: dict[str, Any]) -> str:
-    """Read the recorded contract's sha256 hex digest from metadata custom_data."""
-    info = meta.get(BAG_METADATA_KEY, {})
-    custom_data = info.get(BAG_CUSTOM_DATA_KEY, {})
-    if isinstance(custom_data, dict):
-        return custom_data.get(BAG_CONTRACT_HASH_KEY, "")
-    return ""
 
 
 def _get_topic_types(reader: rosbag2_py.SequentialReader) -> dict[str, str]:
@@ -223,12 +206,12 @@ def iter_bag_frames(
     (a present topic produced no samples).
     """
     fps = specs[0].fps
-    step_ns = int(1e9 / fps)
+    step = step_ns(fps)
 
-    meta = _read_bag_metadata(bag_dir)
+    meta = read_bag_metadata(bag_dir)
     info = meta.get(BAG_METADATA_KEY, {})
     storage_id = info.get("storage_identifier", "mcap")
-    prompt = _read_prompt(meta)
+    prompt = read_custom_field(meta, BAG_PROMPT_KEY)
 
     reader = rosbag2_py.SequentialReader()
     reader.open(
@@ -242,6 +225,23 @@ def iter_bag_frames(
     topic_types = _get_topic_types(reader)
     layout = FrameLayout(specs)
     entries, routing = _build_buffers(specs, topic_types)
+
+    # Fail fast on specs the porter could never decode: encode-only channel
+    # types are valid for live serving (actions are never decoded there), but
+    # porting *records* every spec, so an undecodable one would silently
+    # produce an all-zero dataset column via the ingest drop path.
+    undecodable = sorted(
+        f"{spec.key} ({spec.source.channel.type})"
+        for spec, _ in entries
+        if not spec.source.channel.decoder and not has_decoder(spec.source.channel.type)
+    )
+    if undecodable:
+        raise RuntimeError(
+            f"{bag_dir.name}: contract streams cannot be decoded for porting: {undecodable}. "
+            f"Their message types are encode-only (no registered or inline decoder), so the "
+            f"port could only record zeros for them. Register a decoder or set 'decoder:' on "
+            f"the channel."
+        )
 
     # Fail fast on warmup (observation) topics absent from the bag: their
     # buffers could never fill, so every frame would silently carry fabricated
@@ -260,7 +260,7 @@ def iter_bag_frames(
     warmup_idxs = sorted({i for idxs in routing.values() for i in idxs if entries[i][0].key in warmup_keys})
 
     start_ns, end_ns = _get_bag_time_bounds_ns(reader)
-    n_ticks = max(1, int((end_ns - start_ns) // step_ns) + 1)
+    n_ticks = max(1, int((end_ns - start_ns) // step) + 1)
 
     tick_idx = 0
     tick_ns = start_ns
@@ -277,7 +277,7 @@ def iter_bag_frames(
     task_warned = False
 
     def _log_warmup() -> None:
-        seconds = skipped * step_ns / 1e9
+        seconds = skipped * step / 1e9
         delays = {entries[i][0].key: (entries[i][1].last_ts or start_ns) - start_ns for i in warmup_idxs}
         detail = ", ".join(f"{k}: +{ns / 1e9:.2f}s" for k, ns in sorted(delays.items()))
         if skipped > max(int(fps * WARMUP_WARN_SECONDS), int(n_ticks * WARMUP_WARN_FRACTION)):
@@ -322,7 +322,7 @@ def iter_bag_frames(
             if frame is not None:
                 yield frame
             tick_idx += 1
-            tick_ns = start_ns + tick_idx * step_ns
+            tick_ns = start_ns + tick_idx * step
 
         if topic in task_topics:
             msg = deserialize_message(data, get_message(task_topics[topic]))
@@ -346,7 +346,7 @@ def iter_bag_frames(
                 spec, buffer = entries[i]
                 if msg is None:
                     msg = deserialize_message(data, get_message(spec.source.channel.type))
-                ingest.ingest(msg, spec, buffer, i, fallback_ns=bag_ns)
+                ingest.ingest(msg, spec, buffer, i, receive_ns=bag_ns)
 
     # Emit remaining frames
     while tick_idx < n_ticks:
@@ -354,60 +354,8 @@ def iter_bag_frames(
         if frame is not None:
             yield frame
         tick_idx += 1
-        tick_ns = start_ns + tick_idx * step_ns
+        tick_ns = start_ns + tick_idx * step
 
     if emitted == 0:
         stale = [entries[i][0].key for i in warmup_idxs if entries[i][1].last_ts is None]
         raise RuntimeError(f"{bag_dir.name}: no frames emitted; observation streams never produced a sample: {stale}")
-
-
-class BagFrameSource:
-    """Iterate episodes (bags) under a directory, yielding per-episode frame streams.
-
-    Optional sharding (num_shards/shard_index) selects a deterministic stride
-    subset of bags for parallel or SLURM porting. Each episode is a
-    (bag_dir, frame_iterator) pair. The caller drives a DatasetWriter per
-    episode.
-    """
-
-    def __init__(
-        self,
-        raw_dir: Path,
-        specs: list[StreamSpec],
-        *,
-        num_shards: int | None = None,
-        shard_index: int | None = None,
-        warmup_keys: set[str],
-        task_topics: dict[str, str] | None = None,
-    ):
-        self.raw_dir = Path(raw_dir)
-        self.specs = list(specs)
-        self.num_shards = num_shards
-        self.shard_index = shard_index
-        self.warmup_keys = warmup_keys
-        self.task_topics = dict(task_topics or {})
-
-    def bag_dirs(self) -> list[Path]:
-        """Resolve the (optionally sharded) list of bag directories."""
-        all_bag_dirs = find_bag_dirs(self.raw_dir)
-        logging.info("Found %d bags in %s", len(all_bag_dirs), self.raw_dir)
-
-        if self.num_shards is None:
-            return all_bag_dirs
-
-        if self.shard_index is None:
-            raise ValueError("shard_index required when num_shards is specified")
-        if self.shard_index >= self.num_shards:
-            raise ValueError(f"shard_index ({self.shard_index}) >= num_shards ({self.num_shards})")
-
-        shard = all_bag_dirs[self.shard_index :: self.num_shards]
-        logging.info("Shard %d/%d: processing %d bags", self.shard_index, self.num_shards, len(shard))
-        return shard
-
-    def episodes(self) -> Iterator[tuple[Path, Iterator[dict[str, Any]]]]:
-        """Yield (bag_dir, frame_iterator) for each selected bag."""
-        for bag_dir in self.bag_dirs():
-            yield (
-                bag_dir,
-                iter_bag_frames(bag_dir, self.specs, warmup_keys=self.warmup_keys, task_topics=self.task_topics),
-            )

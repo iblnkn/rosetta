@@ -4,10 +4,10 @@ from glob import glob
 from setuptools import find_packages, setup
 
 # Main Rosetta package - provides ROS2 nodes and common utilities
-# The LeRobot plugins are in separate packages:
-#   - lerobot_robot_rosetta: Robot plugin
-#   - lerobot_teleoperator_rosetta: Teleoperator plugin
-#   - rosetta_rl: RL training components
+# The plugins/adapters are in separate packages:
+#   - lerobot_robot_rosetta: LeRobot Robot plugin
+#   - lerobot_teleoperator_rosetta: LeRobot Teleoperator plugin
+#   - starvla_rosetta / vla_foundry_rosetta: framework adapters
 package_name = "rosetta"
 
 setup(
@@ -31,7 +31,7 @@ setup(
         "console_scripts": [
             "episode_recorder_node = rosetta.robots.ros2.nodes.episode_recorder_node:main",
             "episode_keyboard_node = rosetta.robots.ros2.nodes.episode_keyboard_node:main",
-            "rosetta_hil_manager_node = rosetta.robots.ros2.nodes.rosetta_hil_manager_node:main",
+            "hil_manager_node = rosetta.robots.ros2.nodes.hil_manager_node:main",
             "policy_runner_node = rosetta.robots.ros2.nodes.policy_runner_node:main",
             "rosetta_port = rosetta.robots.ros2.offline.port:main",
         ],

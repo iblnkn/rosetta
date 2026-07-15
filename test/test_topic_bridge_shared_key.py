@@ -26,11 +26,10 @@ import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
-from sensor_msgs.msg import JointState
-
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.robots.ros2.topic_bridge import TopicBridge
+from sensor_msgs.msg import JointState
 
 
 def _obs(key, names, topic):
@@ -137,6 +136,62 @@ def test_shared_action_key_routes_slices_per_spec(rclpy_ctx):
         assert _spin_until(executor, both_received)
         np.testing.assert_allclose(received["arm"], [1.0, 2.0])
         np.testing.assert_allclose(received["grip"], [3.0])
+        bridge.teardown()
+    finally:
+        executor.remove_node(node)
+        executor.remove_node(sub_node)
+        node.destroy_node()
+        sub_node.destroy_node()
+
+
+def test_publish_frame_drops_non_finite_frame_atomically(rclpy_ctx):
+    """A NaN command drops the WHOLE frame (no partial publish), then recovers.
+
+    Encode is two-phase: with the NaN in the second spec's slice, a
+    per-spec encode-and-publish loop would already have commanded /arm_cmd
+    before failing on /grip_cmd. Nothing may reach the wire, `safety: hold`
+    state (`_last_sent`) must not cache any slice of the bad frame, and the
+    watchdog clock (`_last_action_ns`) must not count it as a served action.
+    A later finite frame publishes normally -- the policy recovers seamlessly.
+    """
+    specs = [
+        _act("action", ["position.j1", "position.j2"], "/arm_cmd"),
+        _act("action", ["position.grip"], "/grip_cmd"),
+    ]
+    node = LifecycleNode("bridge_host_nan")
+    sub_node = rclpy.create_node("fixture_sub_nan")
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
+    executor.add_node(sub_node)
+    received: dict[str, list[list[float]]] = {"arm": [], "grip": []}
+    try:
+        bridge = TopicBridge([], specs, fps=30)
+        bridge.setup(node)
+        node.trigger_configure()
+        node.trigger_activate()
+
+        sub_node.create_subscription(
+            JointState, "/arm_cmd", lambda m: received["arm"].append(list(m.position)), 10
+        )
+        sub_node.create_subscription(
+            JointState, "/grip_cmd", lambda m: received["grip"].append(list(m.position)), 10
+        )
+
+        # NaN frame: logged and dropped, not raised; no state advances.
+        bridge.publish_frame({"action": np.array([1.0, 2.0, np.nan])})
+        assert bridge._last_action_ns is None
+        assert bridge._last_sent == [None, None]
+
+        # Recovery: the next finite frame publishes. Per-publisher ordering
+        # means anything (wrongly) published for the NaN frame would arrive
+        # before it, so "only finite values ever received" is deterministic.
+        def both_received():
+            bridge.publish_frame({"action": np.array([4.0, 5.0, 6.0])})
+            return received["arm"] and received["grip"]
+
+        assert _spin_until(executor, both_received)
+        assert all(msg == [4.0, 5.0] for msg in received["arm"])
+        assert all(msg == [6.0] for msg in received["grip"])
         bridge.teardown()
     finally:
         executor.remove_node(node)

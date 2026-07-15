@@ -33,9 +33,9 @@ hil_manager:
     # policy_runner_node looking for a model path that doesn't exist.
     enable_reward_classifier: false
 
-    # Whether to actually record episodes to a bag. Defaults true -- episodes
-    # start/stop, labeling, and intervention all behave identically when
-    # false, nothing is just written to disk.
+    # Whether to record episodes to a bag. Defaults true. When false, episode
+    # start/stop, labeling, and intervention all behave identically; only the
+    # bag write is skipped.
     enable_recording: true
 
     # Whether hil_manager owns the policy's lifecycle: send a RunPolicy goal

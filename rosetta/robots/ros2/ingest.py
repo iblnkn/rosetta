@@ -37,7 +37,7 @@ kill the caller — live that would take down the whole inference node's
 executor, and offline the port must produce exactly the frames the live
 bridge would have served. Drop the message with a once-per-stream warning
 (plus a recovery notice); the stream then behaves like a missing stream
-(zero-fill + transition logging + safety watchdog downstream).
+(zero-fill + transition logging downstream).
 
 Stream identity is the spec's position in the resolved spec list — specs are
 unhashable and (key, topic) is not unique (one topic may feed several specs).
@@ -50,7 +50,7 @@ from typing import Any, Callable
 from rosetta.contract.specs import StreamSpec
 from rosetta.frames.codecs import decode_value
 from rosetta.frames.resample import StreamBuffer
-from rosetta.robots.ros2.ros2_utils import get_message_timestamp_ns
+from rosetta.robots.ros2.timelines import get_message_timestamp_ns
 
 
 class StreamIngest:
@@ -73,14 +73,16 @@ class StreamIngest:
         spec: StreamSpec,
         buffer: StreamBuffer,
         index: int,
-        fallback_ns: int,
+        receive_ns: int,
     ) -> None:
         """Extract the chosen timeline's timestamp, decode, and push one message.
 
-        ``fallback_ns`` is the receive time (node clock live, bag timestamp
-        offline) — the 'receive' timeline's value for this message.
+        ``receive_ns`` is the receive time (node clock live, bag timestamp
+        offline) — the 'receive' timeline's value for this message. The two
+        are receive-time approximations, not the same instant, so only
+        'header'-timeline streams replay bit-exactly offline.
         """
-        ts_ns = get_message_timestamp_ns(msg, spec, fallback_ns)
+        ts_ns = get_message_timestamp_ns(msg, spec, receive_ns)
         if ts_ns is None:
             if index not in self._timeline_dropped:
                 self._warn(
@@ -91,8 +93,7 @@ class StreamIngest:
             return
         if index in self._timeline_dropped:
             self._info(
-                f"Timeline '{spec.source.align.timeline}' recovered for '{spec.key}' "
-                f"({spec.source.channel.topic})"
+                f"Timeline '{spec.source.align.timeline}' recovered for '{spec.key}' ({spec.source.channel.topic})"
             )
             self._timeline_dropped.discard(index)
 

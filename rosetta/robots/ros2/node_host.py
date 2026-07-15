@@ -25,11 +25,11 @@ installs no signal handlers, leaving SIGINT/SIGTERM to the host process.
 from __future__ import annotations
 
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import rclpy
 from rclpy.context import Context
-from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
+from rclpy.executors import Executor, ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 
 THREAD_JOIN_TIMEOUT_SEC = 1.0
@@ -39,59 +39,93 @@ class NodeHost:
     """Creates a node via a factory, spins it on a daemon thread, owns teardown."""
 
     def __init__(self) -> None:
-        self.node: Optional[Node] = None
-        self._context: Optional[Context] = None
-        self._executor: Optional[SingleThreadedExecutor] = None
-        self._spin_thread: Optional[threading.Thread] = None
+        self._node: Node | None = None
+        self._context: Context | None = None
+        self._executor: SingleThreadedExecutor | None = None
+        self._spin_thread: threading.Thread | None = None
+        self._spin_exc: BaseException | None = None
+
+    @property
+    def node(self) -> Node | None:
+        """The hosted node, or None before start()/after stop().
+
+        Raises instead of returning a node whose spin thread has died: a
+        dead executor means subscriptions, timers, and the safety watchdog
+        have all silently stopped, so serving the node as if it were healthy
+        would let callers keep reading ever-staler data.
+        """
+        if self._spin_exc is not None:
+            raise RuntimeError("NodeHost spin thread died; node is not being spun") from self._spin_exc
+        return self._node
 
     def start(self, make_node: Callable[[Context], Node]) -> Node:
-        """Create the node (idempotent) and start spinning it.
+        """Create the node and start spinning it (idempotent).
 
+        A second call returns the existing node and ignores the factory.
         The factory receives the host's private context and must pass it to
-        the node constructor. The spin thread starts before any lifecycle
-        transition is triggered — transitions are service calls that need a
-        spinning executor.
-        """
-        if self.node is not None:
-            return self.node
-        self._context = Context()
-        rclpy.init(context=self._context)
-        self.node = make_node(self._context)
-        self._executor = SingleThreadedExecutor(context=self._context)
-        self._executor.add_node(self.node)
-        self._spin_thread = threading.Thread(target=self._spin, daemon=True)
-        self._spin_thread.start()
-        return self.node
+        the node constructor. The executor exists for subscriptions, timers,
+        and external lifecycle service requests — lifecycle trigger_*() calls
+        are synchronous local calls and do not need it.
 
-    def _spin(self) -> None:
+        If anything below raises, stop() rolls back whatever was already
+        built instead of leaking the context: a retry on this same instance
+        must get a fresh context, not silently orphan the failed one.
+        """
+        if self._node is not None:
+            # Route through the property: it raises if the spin thread died,
+            # so a retry can't silently receive a dead node.
+            return self.node
+        self._spin_exc = None
+        self._context = Context()
         try:
-            self._executor.spin()  # blocks until stop() shuts the executor down
+            rclpy.init(context=self._context)
+            self._node = make_node(self._context)
+            self._executor = SingleThreadedExecutor(context=self._context)
+            self._executor.add_node(self._node)
+            thread = threading.Thread(target=self._spin, args=(self._executor,), daemon=True)
+            thread.start()
+            self._spin_thread = thread
+        except Exception:
+            self.stop()
+            raise
+        return self._node
+
+    def _spin(self, executor: Executor) -> None:
+        try:
+            executor.spin()  # blocks until stop() shuts the executor down
         except ExternalShutdownException:
             pass  # context torn down out from under the executor
+        except BaseException as e:
+            # A callback raised. Poison the host so the next node access
+            # fails loudly, then re-raise for the thread excepthook.
+            self._spin_exc = e
+            raise
 
     def stop(self) -> None:
         """Shut down executor, spin thread, node, and context. Safe when never started.
 
-        The host is reusable afterwards: a later start() builds a fresh context.
+        The host is reusable afterwards: a later start() builds a fresh
+        context. Raises if the spin thread outlives the join timeout — the
+        node must never be destroyed under a still-running executor thread —
+        leaving node and context alive so a retry can re-join.
         """
         if self._executor is not None:
             self._executor.shutdown()
-            self._executor = None
 
         if self._spin_thread is not None:
             self._spin_thread.join(timeout=THREAD_JOIN_TIMEOUT_SEC)
+            if self._spin_thread.is_alive():
+                raise RuntimeError(f"NodeHost spin thread did not exit within {THREAD_JOIN_TIMEOUT_SEC}s")
             self._spin_thread = None
+        self._executor = None
 
-        if self.node is not None:
-            self.node.destroy_node()
-            self.node = None
+        if self._node is not None:
+            self._node.destroy_node()
+            self._node = None
 
         if self._context is not None:
             self._context.try_shutdown()
             self._context = None
 
-    def __enter__(self) -> NodeHost:
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.stop()
+        # The poison's job is done once the dead node is torn down.
+        self._spin_exc = None

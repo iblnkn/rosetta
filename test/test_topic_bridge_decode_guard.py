@@ -23,12 +23,11 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from sensor_msgs.msg import JointState
-
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
 from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.topic_bridge import TopicBridge
+from sensor_msgs.msg import JointState
 
 
 class _FakeLogger:
@@ -120,6 +119,38 @@ def test_recovery_pushes_and_logs_once(bridge_parts):
     assert len(node.logger.warnings) == 2
 
 
+def test_reset_state_preserves_latched_streams():
+    # Latched (transient_local) data is not episode-scoped: DDS redelivers
+    # latched samples only to NEW subscriptions, so clearing the buffer on a
+    # publish-once topic would leave it empty forever.
+    def spec(topic, qos):
+        return ObservationStreamSpec(
+            key=f"observation.{topic.strip('/')}",
+            names=["position.j1"],
+            fps=30,
+            source=Source(
+                channel=Channel(topic=topic, type="sensor_msgs/msg/JointState", qos=qos),
+                align=Align("hold", "receive"),
+            ),
+            is_image=False,
+            image_resize=None,
+            dtype="float64",
+        )
+
+    latched = spec("/map", {"durability": "transient_local", "depth": 1})
+    plain = spec("/js", None)
+    bridge = TopicBridge([latched, plain], [], fps=30)
+    buf_latched, buf_plain = StreamBuffer.from_spec(latched), StreamBuffer.from_spec(plain)
+    bridge._obs_buffers = [(latched, buf_latched), (plain, buf_plain)]
+    buf_latched.push(1_000, 1.0)
+    buf_plain.push(1_000, 2.0)
+
+    bridge.reset_state()
+
+    assert buf_latched.last_val == 1.0  # latched survives the episode boundary
+    assert buf_plain.last_val is None  # episode-scoped data cleared
+
+
 def test_reset_state_rearms_warning(bridge_parts):
     bridge, node, spec, buffer = bridge_parts
     bridge._on_observation(_bad_msg(), spec=spec, buffer=buffer, index=0)
@@ -139,11 +170,14 @@ def test_reset_state_rearms_warning(bridge_parts):
 
 
 def _shared_key_specs():
+    # Distinct namespaces, as _derive_namespaces would assign for two topics
+    # sharing a key (FrameLayout rejects colliding rendered names).
     def spec(topic, names):
         return ObservationStreamSpec(
             key="observation.state",
             names=names,
             fps=30,
+            namespace=topic.strip("/"),
             source=Source(
                 channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
                 align=Align("hold", "receive"),

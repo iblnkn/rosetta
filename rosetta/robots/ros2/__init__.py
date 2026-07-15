@@ -21,5 +21,10 @@ QoS / timestamp helpers, the live :class:`~.topic_bridge.TopicBridge`
 (a :class:`~rosetta.frames.protocols.FrameIO`), and the ROS2 nodes. Offline
 tooling — rosbag2 replay and the bag->dataset porter — lives in
 :mod:`.offline`. Imports here may pull in rclpy / rosidl / rosbag2, so keep
-this package out of the waist's import graph.
+this package out of the waist's import graph — with deliberate
+exceptions: :mod:`.decoders`, :mod:`.encoders`, :mod:`.field_access`, and
+:mod:`.timelines` import without ROS (rclpy/rosidl are call-time
+dependencies of the codec bodies and of timeline introspection), because
+codec discovery and contract validation load them during ROS-less contract
+loading, and :mod:`.ingest` stays unit-testable without a ROS install.
 """

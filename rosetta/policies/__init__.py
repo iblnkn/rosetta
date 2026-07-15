@@ -25,7 +25,9 @@ A policy framework, to Rosetta, is anything that implements two seams:
 Implementations live in their own adapter packages (LeRobot, vla_foundry,
 starvla, ...) and are resolved by name from setuptools entry points, so this
 package never imports a framework — and no framework ever imports the robot
-side. An adapter registers itself like so::
+side. The registered object must be a class with a zero-argument constructor
+implementing the protocol; the loaders validate this structurally at load
+time and fail fast otherwise. An adapter registers itself like so::
 
     # in the adapter package's setup.py / pyproject.toml
     entry_points={
@@ -42,31 +44,27 @@ This side imports only Rosetta's waist (:mod:`rosetta.contract`,
 
 Modules: :mod:`.protocols` is what an adapter *implements* (the two
 Protocols and the value types they exchange); :mod:`.registry` is how the
-hosting node *resolves* one by name at runtime (the entry-point groups and
-loader functions).
+hosting node *resolves* one by name at runtime.
 """
 
 from __future__ import annotations
 
-from ..frames.protocols import FrameIO
-from .protocols import DatasetWriter, PolicyRunner, RunnerFeedback, RunnerResult
+from .protocols import DatasetWriter, NodeLike, PolicyRunner, RunnerFeedback, RunnerResult
 from .registry import (
-    DATASET_WRITER_GROUP,
-    POLICY_RUNNER_GROUP,
-    available_frameworks,
+    available_dataset_writers,
+    available_policy_runners,
     load_dataset_writer,
     load_policy_runner,
 )
 
 __all__ = [
-    "DATASET_WRITER_GROUP",
-    "POLICY_RUNNER_GROUP",
     "DatasetWriter",
-    "FrameIO",
+    "NodeLike",
     "PolicyRunner",
     "RunnerFeedback",
     "RunnerResult",
-    "available_frameworks",
+    "available_dataset_writers",
+    "available_policy_runners",
     "load_dataset_writer",
     "load_policy_runner",
 ]

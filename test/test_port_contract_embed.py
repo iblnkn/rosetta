@@ -12,15 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""port() must thread contract_path/embed_contract to the writer and warn on
-a bag/--contract hash mismatch, without ever failing the port because of it
-(--contract always wins for decoding)."""
+"""Contract embedding: open-kwargs threading and the bag-hash heads-up.
 
+write_dataset must thread contract_path/embed_contract to the writer, and
+warn_if_contract_mismatch must warn on a bag/--contract hash mismatch without
+ever failing the port (--contract always wins for decoding).
+
+No monkeypatching: write_dataset takes its writer as an argument, and
+warn_if_contract_mismatch takes the bag hash as a value.
+"""
+
+import hashlib
 import logging
-from pathlib import Path
-from types import SimpleNamespace
 
-from rosetta.robots.ros2.offline import port as port_mod
+from rosetta.robots.ros2.offline.port import warn_if_contract_mismatch, write_dataset
 
 
 class _StubWriter:
@@ -43,106 +48,83 @@ class _StubWriter:
         pass
 
 
-class _StubSource:
-    def __init__(self, *_a, **_k):
-        pass
-
-    def bag_dirs(self):
-        return [Path("ep0")]
+def _one_episode():
+    return [("ep0", iter([{"observation.state": [0.0]}]))]
 
 
-def _stub_iter_bag_frames(_bag_dir, _specs, warmup_keys=None):
-    _ = warmup_keys
-    yield {"observation.state": [0.0]}
+# ---------------------------------------------------------------------------
+# open-kwargs threading
+# ---------------------------------------------------------------------------
 
 
-def _patch_common(monkeypatch, writer):
-    monkeypatch.setattr(port_mod, "load_contract", lambda _p: SimpleNamespace(tasks=[]))
-    monkeypatch.setattr(port_mod, "iter_specs", lambda _c: iter(()))
-    monkeypatch.setattr(port_mod, "iter_observation_specs", lambda _c: iter(()))
-    monkeypatch.setattr(port_mod, "BagFrameSource", _StubSource)
-    monkeypatch.setattr(port_mod, "load_dataset_writer", lambda _b: writer)
-    monkeypatch.setattr(port_mod, "iter_bag_frames", _stub_iter_bag_frames)
-
-
-def test_writer_receives_contract_path_and_embed_flag(monkeypatch, tmp_path):
+def test_writer_receives_contract_path_and_embed_flag(tmp_path):
     writer = _StubWriter()
-    _patch_common(monkeypatch, writer)
-    monkeypatch.setattr(port_mod, "read_bag_contract_hash", lambda _bag_dir: "")
-
     contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
 
-    port_mod.port(tmp_path, "repo", contract_path, embed_contract=True)
+    write_dataset(writer, _one_episode(), contract=None, repo_id="repo", contract_path=contract_path)
 
     assert writer.open_kwargs["contract_path"] == contract_path
-    assert writer.open_kwargs["embed_contract"] is True
+    assert writer.open_kwargs["embed_contract"] is True  # default
 
 
-def test_no_embed_contract_flag_propagates(monkeypatch, tmp_path):
+def test_no_embed_contract_flag_propagates(tmp_path):
     writer = _StubWriter()
-    _patch_common(monkeypatch, writer)
-    monkeypatch.setattr(port_mod, "read_bag_contract_hash", lambda _bag_dir: "")
 
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
-
-    port_mod.port(tmp_path, "repo", contract_path, embed_contract=False)
+    write_dataset(
+        writer,
+        _one_episode(),
+        contract=None,
+        repo_id="repo",
+        contract_path=tmp_path / "contract.yaml",
+        embed_contract=False,
+    )
 
     assert writer.open_kwargs["embed_contract"] is False
 
 
-def test_hash_mismatch_warns_but_does_not_fail(monkeypatch, tmp_path, caplog):
-    writer = _StubWriter()
-    _patch_common(monkeypatch, writer)
-    # Bag was recorded with a different contract than the one we're porting with.
-    monkeypatch.setattr(port_mod, "read_bag_contract_hash", lambda _bag_dir: "stale-hash")
+# ---------------------------------------------------------------------------
+# bag-hash heads-up (a warning, never a failure)
+# ---------------------------------------------------------------------------
 
+
+def test_hash_mismatch_warns(tmp_path, caplog):
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text("robot_type: x\n")
 
     with caplog.at_level(logging.WARNING):
-        port_mod.port(tmp_path, "repo", contract_path, embed_contract=True)
+        warn_if_contract_mismatch(contract_path, "stale-hash")
 
     assert any("different contract" in rec.message for rec in caplog.records)
-    # --contract still wins: the writer gets the --contract path regardless.
-    assert writer.open_kwargs["contract_path"] == contract_path
 
 
-def test_bag_without_embedded_contract_still_gets_dataset_sidecar(monkeypatch, tmp_path):
-    """Embedding must not depend on the bag having recorded one.
-
-    A bag with no rosetta.contract_hash at all -- recorded before this
-    feature existed, with embed_contract:=false, or by plain `ros2 bag
-    record` -- must still get the --contract file embedded in the dataset,
-    since that's driven by --contract itself, not by anything read back
-    from the bag.
-    """
-    writer = _StubWriter()
-    _patch_common(monkeypatch, writer)
-    monkeypatch.setattr(port_mod, "read_bag_contract_hash", lambda _bag_dir: "")  # nothing recorded
-
+def test_matching_hash_does_not_warn(tmp_path, caplog):
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text("robot_type: x\n")
-
-    port_mod.port(tmp_path, "repo", contract_path, embed_contract=True)
-
-    assert writer.open_kwargs["contract_path"] == contract_path
-    assert writer.open_kwargs["embed_contract"] is True
-
-
-def test_matching_hash_does_not_warn(monkeypatch, tmp_path, caplog):
-    writer = _StubWriter()
-    _patch_common(monkeypatch, writer)
-
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
-    import hashlib
-
     matching_hash = hashlib.sha256(contract_path.read_bytes()).hexdigest()
-    monkeypatch.setattr(port_mod, "read_bag_contract_hash", lambda _bag_dir: matching_hash)
 
     with caplog.at_level(logging.WARNING):
-        port_mod.port(tmp_path, "repo", contract_path, embed_contract=True)
+        warn_if_contract_mismatch(contract_path, matching_hash)
 
     assert not any("different contract" in rec.message for rec in caplog.records)
+
+
+def test_bag_without_recorded_hash_does_not_warn(tmp_path, caplog):
+    """A bag with no rosetta.contract_hash (pre-feature recording, plain
+    `ros2 bag record`, embed_contract:=false) skips the comparison; embedding
+    is driven by --contract itself, not by anything read back from the bag."""
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text("robot_type: x\n")
+
+    with caplog.at_level(logging.WARNING):
+        warn_if_contract_mismatch(contract_path, "")
+
+    assert not caplog.records
+
+
+def test_unreadable_contract_path_does_not_warn_or_raise(tmp_path, caplog):
+    """The check must never be why a port fails: --contract already loaded
+    fine upstream, so a raw re-read failing here silently skips."""
+    with caplog.at_level(logging.WARNING):
+        warn_if_contract_mismatch(tmp_path / "missing.yaml", "any-hash")
+
+    assert not caplog.records

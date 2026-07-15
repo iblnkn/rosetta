@@ -17,12 +17,8 @@
 from pathlib import Path
 
 import pytest
-
 from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.schema import (
-    is_valid_lerobot_dtype,
-    load_contract,
-)
+from rosetta.contract.schema import load_contract
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "contracts"
 
@@ -94,9 +90,9 @@ def test_stone_showcases_every_feature():
     assert timelines == {"header", "receive"}
     # Tasks, teleop roles, adjunct.
     assert [(t.key, t.channel.topic) for t in c.tasks] == [("task", "/task_prompt")]
-    assert c.teleop.input is not None
+    assert [tis.target for tis in c.teleop.input] == ["/arm/joint_commands"]
     assert c.teleop.events is not None and "is_intervention" in c.teleop.events.select
-    assert c.teleop.feedback is not None
+    assert [tfs.origin for tfs in c.teleop.feedback] == ["/arm/joint_states"]
     assert [a.topic for a in c.adjunct] == ["/tf", "/tf_static", "/scan"]
     # Extended sections are present with mandatory dtypes.
     assert {e.key for e in c.rewards} == {"next.reward"}
@@ -145,17 +141,34 @@ def test_v1_list_sections_rejected_with_pointed_error(tmp_path):
         load_contract(p)
 
 
-@pytest.mark.parametrize(
-    "dtype",
-    ["float32", "float64", "int32", "int64", "bool", "uint8", "video", "image", "string"],
-)
-def test_valid_dtypes_accepted(dtype):
-    assert is_valid_lerobot_dtype(dtype)
+DTYPE_CONTRACT = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, dtype: 'DTYPE'}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1, position.j2]
+"""
 
 
-@pytest.mark.parametrize("dtype", ["not_a_dtype", "flot32", ""])
-def test_invalid_dtypes_rejected(dtype):
-    assert not is_valid_lerobot_dtype(dtype)
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "int64", "bool"])
+def test_supported_numeric_dtypes_load(tmp_path, dtype):
+    p = tmp_path / "c.yaml"
+    p.write_text(DTYPE_CONTRACT.replace("DTYPE", dtype))
+    load_contract(p)
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "float16", "image", "not_a_dtype", "flot32", ""])
+def test_unsupported_dtypes_rejected_at_load(tmp_path, dtype):
+    # The vocabulary is closed and checked at load: anything FrameLayout
+    # cannot assemble is refused here, not at bridge configure / writer open.
+    # 'image' is gone deliberately — no resolver ever emitted it.
+    p = tmp_path / "c.yaml"
+    p.write_text(DTYPE_CONTRACT.replace("DTYPE", dtype))
+    with pytest.raises(ContractValidationError, match="Invalid dtype"):
+        load_contract(p)
 
 
 def test_missing_robot_type_rejected(tmp_path):
@@ -170,10 +183,11 @@ TELEOP_FEEDBACK_CONTRACT = (
     + """
 teleop:
   feedback:
-    channel: {topic: /wrist_cmd, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: receive}
-    select: [orientation.x, orientation.y, orientation.z, orientation.w]
-    kind: quaternion
+    - origin: /joint_states
+      channel: {topic: /wrist_cmd, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [orientation.x, orientation.y, orientation.z, orientation.w]
+      kind: quaternion
 """
 )
 
@@ -181,7 +195,7 @@ teleop:
 def test_teleop_feedback_parses_with_kind(tmp_path):
     p = tmp_path / "c.yaml"
     p.write_text(TELEOP_FEEDBACK_CONTRACT)
-    fb = load_contract(p).teleop.feedback.sources[0]
+    fb = load_contract(p).teleop.feedback[0].source
     assert fb.channel.safety == "none"  # feedback never fabricates safety commands
     assert fb.kind == "quaternion"
 
@@ -192,3 +206,69 @@ def test_teleop_feedback_rejects_safety(tmp_path):
     p.write_text(TELEOP_FEEDBACK_CONTRACT.replace("topic: /wrist_cmd,", "topic: /wrist_cmd, safety: zeros,"))
     with pytest.raises(ContractValidationError, match="safety"):
         load_contract(p)
+
+
+def test_teleop_input_rejects_unknown_target(tmp_path):
+    """A teleop input target that doesn't name a real action topic is a
+    load-time error, not a message silently going nowhere."""
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        VALID_CONTRACT
+        + """
+teleop:
+  input:
+    - target: /no/such/topic
+      channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [position.j1, position.j2]
+"""
+    )
+    with pytest.raises(ContractValidationError, match="target"):
+        load_contract(p)
+
+
+def test_teleop_feedback_rejects_unknown_origin(tmp_path):
+    """A teleop feedback origin that doesn't name a real observation topic is
+    a load-time error, not a message silently going nowhere."""
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        VALID_CONTRACT
+        + """
+teleop:
+  feedback:
+    - origin: /no/such/topic
+      channel: {topic: /wrist_cmd, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [position.j1, position.j2]
+"""
+    )
+    with pytest.raises(ContractValidationError, match="origin"):
+        load_contract(p)
+
+
+# ---------------------------------------------------------------------------
+# Enum storage: parsed documents carry members, not bare strings
+# ---------------------------------------------------------------------------
+
+
+def test_enum_fields_stored_as_members(tmp_path):
+    """The loader stores StrEnum members (still ==-comparable to their raw
+    strings), so downstream code can use identity and exhaustiveness checks."""
+    from rosetta.contract.schema import FieldKind, ResamplePolicy, SafetyBehavior
+
+    p = tmp_path / "contract.yaml"
+    p.write_text(VALID_CONTRACT)
+    c = load_contract(p)
+    src = c.observations[0].sources[0]
+    assert isinstance(src.align.strategy, ResamplePolicy)
+    assert isinstance(src.channel.safety, SafetyBehavior)
+    assert isinstance(src.kind, FieldKind)
+    assert src.align.strategy == "hold"  # str-mixin equality preserved
+
+
+def test_field_kind_dims():
+    from rosetta.contract.schema import FieldKind
+
+    assert FieldKind.QUATERNION.dims == 4
+    assert FieldKind.ROTATION_6D.dims == 6
+    assert FieldKind.CONTINUOUS.dims is None

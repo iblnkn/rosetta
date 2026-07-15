@@ -17,9 +17,18 @@
 Dependency-free leaf of the waist: operators, codecs, and schema all raise
 ContractValidationError, and putting it here (rather than in schema) keeps
 the module import graph acyclic —
-errors <- operators <- frames.codecs <- schema <- specs / frames.layout.
+errors <- plugins <- operators <- frames.codecs <- schema <- specs / frames.layout.
+
+Convention: ContractValidationError is for user-fixable problems — an invalid
+contract, or an operator/codec plugin it depends on failing to load — raised
+at contract load / spec resolution so mistakes fail fast. Plain ValueError
+remains the type for internal invariants and for the runtime decode/encode
+backstops that load-time validation normally makes unreachable.
 """
 
 
 class ContractValidationError(ValueError):
-    """Raised when contract YAML is invalid."""
+    """Raised when a contract, or an operator/codec plugin it references, fails validation.
+
+    Subclasses ValueError so callers catching the generic type still see it.
+    """

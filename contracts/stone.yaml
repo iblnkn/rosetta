@@ -34,7 +34,9 @@ x-qos:
   cmd:    &cmd_qos    {reliability: reliable,    history: keep_last, depth: 10}
 
 observations:
-  # demonstrates: image stream, resize operator, hold alignment on sensed time
+  # demonstrates: image stream, resize operator, hold alignment on sensed time.
+  # resize declares the stream's output geometry (integers, [h, w]) — every
+  # image observation needs an operator in its pipeline that declares one.
   observation.images.front:
     channel: {topic: /front_camera/image_raw/compressed,
               type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
@@ -80,12 +82,16 @@ observations:
   # holding), receive timeline (std_msgs types carry no header — naming a
   # timeline the channel can't provide is a load-time error), custom decoder
   # ("module:function", normally in your own package; validated at load —
-  # these bundled examples double as the custom-codec signature reference)
+  # these bundled examples double as the custom-codec signature reference).
+  # select declares the stream's width and feature labels; a custom decoder
+  # must return exactly that many values (a select-less numeric stream is a
+  # scalar).
   observation.battery:
     channel: {topic: /battery/raw, type: std_msgs/msg/Float64MultiArray,
               decoder: "rosetta.examples.stone_codecs:decode_battery",
               dtype: float32, qos: *state_qos}
     align: {strategy: drop, timeline: receive}
+    select: [cell0, cell1, cell2, cell3]
 
 actions:
   # demonstrates: shared-key action splitting (the inverse of concatenation:
@@ -105,6 +111,7 @@ actions:
                 encoder: "rosetta.examples.stone_codecs:encode_gripper",
                 safety: hold}
       align: {strategy: hold, timeline: receive}
+      select: [data]   # shared keys need a select on every source (static dims)
       kind: binary
 
   # demonstrates: a second action key, clamp operator (bidirectional: clamps on
@@ -132,28 +139,39 @@ tasks:
 teleop:
   # Role sections: input/events/feedback are fixed roles the teleoperator
   # adapter consumes — no frame-key level, unlike the keyed sections above.
-  # demonstrates: teleop input (same entry shape as observations)
+  # demonstrates: teleop input -- a list of independently-targeted sources.
+  # Each entry names the action channel topic it drives via `target`
+  # (validated at load time against every declared action topic); hil_manager_node
+  # decodes this source and encodes+publishes it onto `target` live, so the
+  # action's own topic already carries the human's command during teleop.
+  # This one drives only the arm (the gripper source of the `action` key is
+  # not teleop-driven here -- it's left to be closed/opened via events).
   input:
-    channel: {topic: /human/leader_arm/joint_states,
-              type: sensor_msgs/msg/JointState, qos: *state_qos}
-    align: {strategy: hold, timeline: header}
-    select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
-             position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+    - target: /arm/joint_commands
+      channel: {topic: /human/leader_arm/joint_states,
+                type: sensor_msgs/msg/JointState, qos: *state_qos}
+      align: {strategy: hold, timeline: header}
+      select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
+               position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
 
   # demonstrates: edge-triggered event mapping (map-form select: event ← field;
   # no align — events are not resampled)
   events:
     channel: {topic: /joy, type: sensor_msgs/msg/Joy, qos: *event_qos}
     select: {is_intervention: buttons.10, success: buttons.0, failure: buttons.1,
-             terminate_episode: buttons.2, rerecord_episode: buttons.3}
+             end_success: buttons.2, end_failure: buttons.3}
 
-  # demonstrates: teleop feedback — actions flowing back to the human device
-  # (e.g. force feedback on the leader arm)
+  # demonstrates: teleop feedback -- a list of independently-sourced entries.
+  # Each names the observation channel topic it forwards via `origin`
+  # (validated against every declared observation topic): here, the arm's own
+  # joint_states (which also carries effort) is re-encoded and published back
+  # to the leader arm as force feedback.
   feedback:
-    channel: {topic: /human/leader_arm/effort_feedback,
-              type: sensor_msgs/msg/JointState, qos: *cmd_qos}
-    align: {strategy: hold, timeline: receive}
-    select: [effort.shoulder_pan, effort.shoulder_lift, effort.elbow]
+    - origin: /arm/joint_states
+      channel: {topic: /human/leader_arm/effort_feedback,
+                type: sensor_msgs/msg/JointState, qos: *cmd_qos}
+      align: {strategy: hold, timeline: receive}
+      select: [effort.shoulder_pan, effort.shoulder_lift, effort.elbow]
 
 # Extended sections (rewards / signals / info / complementary_data) are
 # ordinary frame entries — same channel → align → key pipeline, landing in

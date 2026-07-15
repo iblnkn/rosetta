@@ -1,12 +1,15 @@
-# Rosetta Client Node Parameters (LeRobot Policy Inference)
+# Policy Runner Node Parameters (policy inference)
 # This file is the source of truth for node configuration.
 #
 # Usage:
 #   ros2 launch rosetta policy_runner_launch.py
 #
-# Override parameters at launch:
-#   ros2 launch rosetta policy_runner_launch.py \
-#       --ros-args -p pretrained_name_or_path:=/path/to/model
+# Override at launch (launch-arg form):
+#   ros2 launch rosetta policy_runner_launch.py pretrained_name_or_path:=/path/to/model
+#
+# Or when running the node directly:
+#   ros2 run rosetta policy_runner_node --ros-args --params-file <this file> \
+#       -p pretrained_name_or_path:=/path/to/model
 
 policy_runner:
   ros__parameters:
@@ -16,9 +19,10 @@ policy_runner:
     # LeRobot policy server address (host:port)
     server_address: "127.0.0.1:8080"
 
-    # Policy architecture type
+    # Policy architecture type — must match the pretrained checkpoint above
+    # (a mismatch fails at configure inside lerobot's from_pretrained).
     # Options: "act", "smolvla", "diffusion", "tdmpc", "vqbet", "pi0", "pi05"
-    policy_type: "smolvla"
+    policy_type: "act"
 
     # Device for policy inference: "cuda", "cpu", "mps", or specific like "cuda:0"
     policy_device: "cuda"

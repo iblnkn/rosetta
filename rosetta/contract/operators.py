@@ -34,17 +34,24 @@ nested property ``FORWARD_ONLY`` < ``BIDIRECTIONAL`` < ``BIJECTIVE``:
   action whose ``apply`` contains ``resize`` is rejected at contract load
   (see ``_parse_apply(require_serveable=True)``).
 
-A ``BIJECTIVE`` operator is verified by a round-trip gate at build time: it
-will not load unless ``inverse(forward(x)) == x`` on its
-:meth:`Operator.sample_input`. A wrong inverse therefore fails fast at
-contract load, not silently at runtime.
+A ``BIJECTIVE`` operator is verified by a round-trip gate when specs
+resolve: it will not build unless ``inverse(forward(x))`` recovers ``x``
+(to allclose tolerance) on its :meth:`Operator.sample_input`. A wrong
+inverse therefore fails fast at startup, not silently at runtime.
 
 This module is the framework only (registry, tiers, round-trip gate,
 pipelines); the built-in operators themselves (``rad2deg``, ``resize``,
 ``clamp``) live in :mod:`.builtin_operators` and register into
 ``OPERATOR_REGISTRY`` on import -- they hold no special status over a
-third-party plugin loaded via :func:`discover_operators`. To add a
-capability you register a new operator there; this module does not change.
+third-party plugin loaded via :func:`discover_operators`: everything spec
+resolution needs from an operator is declared on the :class:`Operator`
+interface (e.g. ``output_hw`` for image geometry), never matched by name.
+To add a capability you register a new operator there; this module does
+not change.
+
+Operators preserve the input dtype unless their semantics require
+otherwise: ``clamp`` returns the dtype it was given, while ``rad2deg`` is
+inherently a float conversion.
 
 Usage:
     @register_operator("rad2deg", kind=Invertibility.BIJECTIVE)
@@ -59,14 +66,14 @@ Usage:
 
 from __future__ import annotations
 
-import importlib.metadata as _ilm
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
 from .errors import ContractValidationError
+from .plugins import load_entry_point_plugins
 
 # =============================================================================
 # Invertibility taxonomy
@@ -87,13 +94,17 @@ class Invertibility(Enum):
       it does *not* round-trip -- it is intentionally lossy (e.g. ``clamp``,
       whose inverse clips just like its forward). Safe to run both ways; the
       bound is the point.
-    - ``BIJECTIVE``: the inverse exactly undoes the forward
+    - ``BIJECTIVE``: the inverse undoes the forward to allclose tolerance
       (``inverse(forward(x)) == x``, e.g. ``rad2deg``). This is the only tier
-      subject to the compile-time round-trip gate (see :func:`build_operator`).
+      subject to the round-trip gate (see :func:`build_operator`).
 
-    Two gates read this one field:
-    - action-pipeline gate (contract load): ``kind != FORWARD_ONLY``.
-    - round-trip gate (contract load): ``kind == BIJECTIVE``.
+    Three gates read this one field:
+    - action-pipeline gate (contract load, ``_parse_apply``):
+      ``kind != FORWARD_ONLY``.
+    - reward-as-action gate (spec resolution; rewards parse non-serveable,
+      then re-check when used as a classifier action): same condition.
+    - round-trip gate (spec resolution, :func:`build_operator`):
+      ``kind == BIJECTIVE``.
     """
 
     FORWARD_ONLY = "forward_only"
@@ -141,14 +152,25 @@ class Operator:
     and implement ``forward`` (and ``inverse`` when the tier is serveable).
     ``args`` is the operator's own YAML payload (``None`` for bare-string
     operators like ``rad2deg``, a list for ``resize: [h, w]``). ``ctx`` is the
-    static :class:`OperatorContext`.
+    static :class:`OperatorContext`. An operator that takes arguments
+    overrides ``__init__`` to validate them; the base rejects any payload, so
+    a stray ``rad2deg: {...}`` in a contract fails at load instead of being
+    silently ignored.
     """
 
     name: str = ""
     kind: Invertibility = Invertibility.FORWARD_ONLY
 
+    output_hw: tuple[int, int] | None = None
+    """Declared output image geometry ``(h, w)``, or None if the operator does
+    not change/declare geometry. Spec resolution reads the LAST non-None
+    declaration in a pipeline as the stream's final geometry -- no operator is
+    special-cased by name, so any plugin may fulfill the image-geometry role."""
+
     def __init__(self, args: Any, ctx: OperatorContext) -> None:
-        del args, ctx
+        del ctx
+        if args is not None:
+            raise ContractValidationError(f"operator '{self.name}' takes no arguments, got {args!r}")
 
     def forward(self, arr: np.ndarray) -> np.ndarray:
         """Apply the operator in the build / decode direction."""
@@ -156,7 +178,7 @@ class Operator:
 
     def inverse(self, arr: np.ndarray) -> np.ndarray:
         """Apply the operator in the serve / encode direction."""
-        raise ContractValidationError(f"operator '{self.name}' is {self.kind.name} and has no serve direction")
+        raise NotImplementedError(f"operator '{self.name}' is {self.kind.name} and has no serve direction")
 
     def sample_input(self) -> np.ndarray:
         """
@@ -176,8 +198,6 @@ OPERATOR_REGISTRY: dict[str, type[Operator]] = {}
 OPERATOR_ENTRY_POINT_GROUP = "rosetta.operators"
 """Entry-point group third-party operator plugins register under (see discover_operators)."""
 
-_operators_discovered = False
-
 
 def discover_operators() -> None:
     """
@@ -187,36 +207,25 @@ def discover_operators() -> None:
     ``@register_operator`` decorators, so installed plugins populate
     OPERATOR_REGISTRY automatically. The contract therefore references custom
     operators *by name* only -- never by module path -- keeping the contract
-    free of implementation wiring. Idempotent: the scan runs once per process.
+    free of implementation wiring.
 
-    A plugin that fails to import is a hard error (raised as
-    ContractValidationError), not a silent skip -- a half-registered operator
-    set would surface later as a confusing "Unknown operator".
+    Idempotent, hard-error semantics live in the shared loader (see
+    :func:`.plugins.load_entry_point_plugins`): a plugin that fails to import
+    raises ContractValidationError, and that failure is latched -- every
+    later call re-raises the same error until the process restarts with a
+    fixed environment.
     """
-    global _operators_discovered  # noqa: PLW0603 - module-level discovery latch
-    if _operators_discovered:
-        return
-    _operators_discovered = True  # set first: a failure must not trigger a re-scan
-
-    try:
-        eps = _ilm.entry_points(group=OPERATOR_ENTRY_POINT_GROUP)
-    except TypeError:
-        # importlib.metadata < 3.10 dict API (ROS 2 Jazzy is 3.12; defensive).
-        eps = _ilm.entry_points().get(OPERATOR_ENTRY_POINT_GROUP, [])
-
-    for ep in eps:
-        try:
-            ep.load()  # imports the module -> runs its @register_operator decorators
-        except Exception as e:
-            raise ContractValidationError(
-                f"Failed to load operator plugin '{ep.name}' ({ep.value}) from "
-                f"entry-point group '{OPERATOR_ENTRY_POINT_GROUP}': {e}"
-            ) from e
+    load_entry_point_plugins(OPERATOR_ENTRY_POINT_GROUP, "operator")
 
 
-def register_operator(name: str, *, kind: Invertibility):
+def register_operator(name: str, *, kind: Invertibility, override: bool = False):
     """
     Register an operator class under ``name``.
+
+    Registration is where an operator's structural promises are checked, so a
+    malformed plugin fails at import (surfaced by :func:`discover_operators`
+    as a load error) instead of mid-serve: the class must implement
+    ``forward``, and a serveable ``kind`` must implement ``inverse``.
 
     Args:
     ----
@@ -224,10 +233,31 @@ def register_operator(name: str, *, kind: Invertibility):
         kind: The operator's :class:`Invertibility` tier. ``FORWARD_ONLY``
             operators are rejected on actions at contract load; ``BIJECTIVE``
             operators are round-trip verified at build time.
+        override: Replace an existing operator for ``name``. Without it, a
+            second registration for an already-registered name is an error, so
+            a plugin cannot silently shadow a built-in (or another plugin)
+            depending on import order.
+
+    Raises:
+    ------
+        ValueError: If ``name`` is already registered and ``override`` is False.
+        TypeError: If the class does not implement ``forward``, or ``kind`` is
+            serveable but the class does not implement ``inverse``.
 
     """
 
     def _wrap(cls: type[Operator]) -> type[Operator]:
+        if name in OPERATOR_REGISTRY and not override:
+            raise ValueError(
+                f"Operator already registered under '{name}'. Pass override=True to replace it intentionally."
+            )
+        if cls.forward is Operator.forward:
+            raise TypeError(f"operator '{name}' does not implement forward()")
+        if kind.serveable and cls.inverse is Operator.inverse:
+            raise TypeError(
+                f"operator '{name}' is declared {kind.name} (serveable) but does not "
+                f"implement inverse(); implement it or declare FORWARD_ONLY"
+            )
         cls.name = name
         cls.kind = kind
         OPERATOR_REGISTRY[name] = cls
@@ -236,17 +266,60 @@ def register_operator(name: str, *, kind: Invertibility):
     return _wrap
 
 
+def lookup_operator(name: str, *, ctx: str = "") -> type[Operator]:
+    """
+    Resolve a registered operator class by name, discovering plugins first.
+
+    Args:
+    ----
+        name: Registered operator name (an ``apply`` list key).
+        ctx: Optional location for the error message (e.g. ``"apply[0] of
+            observations 'joints'"``).
+
+    Raises:
+    ------
+        ContractValidationError: If ``name`` is not a registered operator.
+
+    """
+    discover_operators()
+    cls = OPERATOR_REGISTRY.get(name)
+    if cls is None:
+        where = f" in {ctx}" if ctx else ""
+        known = ", ".join(sorted(OPERATOR_REGISTRY)) or "(none)"
+        raise ContractValidationError(f"Unknown operator '{name}'{where}. Registered operators: {known}")
+    return cls
+
+
 def _verify_round_trip(operator: Operator) -> None:
     """
-    Compile-time round-trip gate for ``BIJECTIVE`` operators.
+    Spec-resolution round-trip gate for ``BIJECTIVE`` operators.
 
-    A ``BIJECTIVE`` declaration is a promise that ``inverse`` exactly undoes
-    ``forward``. Verify it on the operator's :meth:`Operator.sample_input` so
-    a wrong inverse fails at contract load rather than silently corrupting
-    actions at runtime.
+    A ``BIJECTIVE`` declaration is a promise that ``inverse`` undoes
+    ``forward`` to within allclose tolerance (rtol=1e-5, atol=1e-8). Verify it
+    on the operator's :meth:`Operator.sample_input` so a wrong inverse fails
+    when specs resolve rather than silently corrupting actions at runtime.
+    The sample's dtype is the operator's to choose (an integer image operator
+    may verify on uint8); shape must survive the round trip exactly, so
+    broadcasting cannot mask a shape bug.
     """
-    x = np.asarray(operator.sample_input(), dtype=np.float64)
-    y = operator.inverse(operator.forward(x))
+    x = np.asarray(operator.sample_input())
+    if x.size == 0:
+        raise ContractValidationError(
+            f"operator '{operator.name}': sample_input() returned an empty array; "
+            f"the round-trip gate needs at least one value"
+        )
+    try:
+        y = np.asarray(operator.inverse(operator.forward(x)))
+    except Exception as e:
+        raise ContractValidationError(
+            f"operator '{operator.name}' raised while running the BIJECTIVE round-trip "
+            f"gate: {e}. Fix forward/inverse, or override sample_input() with an "
+            f"in-domain sample."
+        ) from e
+    if y.shape != x.shape:
+        raise ContractValidationError(
+            f"operator '{operator.name}' is declared BIJECTIVE but the round trip changed shape {x.shape} -> {y.shape}."
+        )
     if not np.allclose(y, x, rtol=1e-5, atol=1e-8):
         raise ContractValidationError(
             f"operator '{operator.name}' is declared BIJECTIVE but failed the "
@@ -271,11 +344,7 @@ def build_operator(name: str, args: Any, ctx: OperatorContext) -> Operator:
             a ``BIJECTIVE`` operator fails the round-trip gate.
 
     """
-    discover_operators()
-    cls = OPERATOR_REGISTRY.get(name)
-    if cls is None:
-        known = ", ".join(sorted(OPERATOR_REGISTRY)) or "(none)"
-        raise ContractValidationError(f"Unknown operator '{name}'. Registered operators: {known}")
+    cls = lookup_operator(name)
     operator = cls(args, ctx)
     if cls.kind is Invertibility.BIJECTIVE:
         _verify_round_trip(operator)
@@ -287,14 +356,14 @@ def build_operator(name: str, args: Any, ctx: OperatorContext) -> Operator:
 # =============================================================================
 
 
-def forward_pipeline(arr: np.ndarray, operators: "list[Operator] | tuple[Operator, ...]") -> np.ndarray:
+def forward_pipeline(arr: np.ndarray, operators: Sequence[Operator]) -> np.ndarray:
     """Run operators front-to-back (build / decode direction)."""
     for operator in operators:
         arr = operator.forward(arr)
     return arr
 
 
-def inverse_pipeline(arr: np.ndarray, operators: "list[Operator] | tuple[Operator, ...]") -> np.ndarray:
+def inverse_pipeline(arr: np.ndarray, operators: Sequence[Operator]) -> np.ndarray:
     """Run operators back-to-front via their inverses (serve / encode direction)."""
     for operator in reversed(operators):
         arr = operator.inverse(arr)

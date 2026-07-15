@@ -14,11 +14,19 @@
 
 """Tests for StreamBuffer resampling policies and clock-reset handling."""
 
+import pytest
 from rosetta.contract.schema import ResamplePolicy
 from rosetta.frames.resample import StreamBuffer
 
 STEP = 100  # ns between ticks
 TOL = 50  # ns asof tolerance
+
+
+def test_unknown_policy_rejected_at_construction():
+    # No silent hold-fallback: an unrecognized policy is a programming error,
+    # not a resampling strategy.
+    with pytest.raises(ValueError, match="Unknown resample policy"):
+        StreamBuffer("hodl", STEP)
 
 
 def test_sample_before_any_push_returns_none():

@@ -3,7 +3,7 @@
 </p>
 <!-- <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/ROS2-Humble%20%7C%20Jazzy-blue" alt="ROS2">
+  <img src="https://img.shields.io/badge/ROS2-Jazzy-blue" alt="ROS2">
   <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
 </p> -->
 
@@ -47,13 +47,16 @@
 <details>
 <summary><strong>Recent Changes</strong></summary>
 
+- **Codec rename & fail-fast registration (breaking):** "codec" is now "codec" everywhere — `rosetta/frames/codecs.py` → `rosetta/frames/codecs.py`, `discover_codecs` → `discover_codecs`, the plugin entry-point group `rosetta.codecs` → `rosetta.codecs`, and the bundled example `rosetta.examples.stone_codecs` → `rosetta.examples.stone_codecs` (update inline `decoder:`/`encoder:` paths that referenced it). `encode_value` is now payload-first — `encode_value(action_vec, spec, stamp_ns=None)` — matching `decode_value(msg, spec)` and the registered encoder callables. Registration fails fast: `register_decoder` validates its `dtype` against the contract vocabulary, and `override=True` with nothing registered is an error (a plugin overriding a renamed/removed built-in fails loudly instead of silently registering fresh). A plugin that fails to import now latches that failure — every later discovery call re-raises the original error until the process restarts (a rescan could never recover: partial registrations from the failed module would collide as duplicates and mask the real error). The dtype vocabulary (`SUPPORTED_NUMERIC_DTYPES`/`SPECIAL_DTYPES`) lives in `frames/codecs.py` beside the registry; schema re-exports it. Load-time additions: a teleop input whose dtype is non-numeric is rejected (its decoded value re-encodes onto a numeric action topic), and Joy selectors reject negative indices. A hub-resolved sidecar contract that declares inline `decoder:`/`encoder:` paths now logs a prominent warning naming each one.
+- **Operator & serve-path hardening (breaking):** the encode path now refuses non-finite commands — `encode_value` raises `NonFiniteActionError` on NaN/Inf (after the inverse pipeline, on every action channel), and `TopicBridge.publish_frame` encodes the whole frame before publishing any of it, dropping a non-finite frame atomically with a throttled error (the watchdog's per-channel `safety` covers persistence; `safety: hold` can never re-send a bad frame). `clamp` is dict-only (`{min: lo, max: hi}` — the `[lo, hi]` list form no longer loads), rejects bool/string bounds, and preserves the input dtype (no more silent uint8→float64 promotion). `resize` requires two integers in `[1, 8192]` (floats/bools/strings were silently truncated or crashed load with raw errors before) and is rejected at load on non-image streams (it used to load and then crash on every message). `_nearest_resize` now rounds sampling indices symmetrically instead of truncating (≤ 1 source-pixel shift vs previously ported datasets; record and serve stay pixel-identical by construction). Bare operators (`rad2deg`) reject stray argument payloads at load.
+- **Teleop input/feedback targeting (breaking):** `teleop.input`/`teleop.feedback` are now each a *list* of independently-targeted sources instead of a single block: every entry names the topic it corresponds to in `actions`/`observations` via `target`/`origin` (validated at load time), so a contract can teleop one action, several, or none. Schema: `Teleop.input`/`.feedback` changed from `FrameEntry | None` to `tuple[TeleopInputSource | TeleopFeedbackSource, ...]` (new dataclasses in `contract/schema.py`). `hil_manager_node` now decodes each teleop input and encodes+publishes it onto its `target` using the contract's normal decode/encode machinery (previously it republished the raw message to every command publisher unchanged, which only worked when every action shared one message type). The porter additionally records each entry as its own `teleop.input.<action key>` / `teleop.feedback.<observation key>` diagnostic column.
 - **Online/offline split (breaking):** `rosetta.robots.ros2.port` and `rosetta.robots.ros2.bag_frames` moved to `rosetta.robots.ros2.offline.{port,bag_frames}`; everything else in `rosetta.robots.ros2` (decoders/encoders, `topic_bridge`, nodes) is the live path. The `rosetta_port` console script and its CLI are unchanged.
 - **Spec composition (breaking):** runtime specs now carry `source: Source` — the exact declaration they were resolved from — and the flat passthrough fields are gone: `spec.topic` → `spec.source.channel.topic`, `spec.msg_type` → `spec.source.channel.type`, `spec.align` → `spec.source.align`, `spec.qos` → `spec.source.channel.qos`, `spec.decoder`/`spec.encoder` → `spec.source.channel.*`, `spec.safety_behavior` → `spec.source.channel.safety`, `spec.kind` → `spec.source.kind`. Computed fields (`key`, `names`, `fps`, `dtype`, `namespace`, `operators`, `is_image`, `image_resize`) stay flat. A forgotten copy is no longer expressible, so the field-set parity guard is retired (the test now pins computed derivations + the identity guarantee). Behavior fix: reward-as-action specs now honor a `kind` declared on a reward channel (the flat design silently dropped it to `continuous`).
 - **Frame I/O rename (breaking):** "stream" now means exactly one thing — the decoded, timelined sample sequence of a single channel *before* alignment (the `StreamSpec`/`StreamBuffer` sense, matching Rerun semantics). The post-align robot surface is not a stream (it's bidirectional), so it was renamed: `rosetta.frames.streams` → `rosetta.frames.protocols`, `FrameStream` → `FrameIO` (a `FrameIO` is both a `FrameSource` and a `FrameSink`, like Python's `TextIO`); `PolicyRunner.run()`'s first parameter is now `frames: FrameIO`. `FrameSource`/`FrameSink` are unchanged.
 - **Contract naming split (breaking):** "Spec" now means exactly one thing — a resolved runtime stream spec. The `StreamSpec` family (`StreamSpec`, `ObservationStreamSpec`, `ActionStreamSpec`) moved from `rosetta.contract.schema` to `rosetta.contract.specs` (import from there, or from the top-level `rosetta`); the declaration-side dataclasses in `contract/schema.py` dropped the suffix to mirror their YAML stanzas — `ChannelSpec` → `Channel`, `AlignSpec` → `Align`, `SourceSpec` → `Source`, `TaskSpec` → `Task`, `TeleopSpec` → `Teleop`, `TeleopEventsSpec` → `TeleopEventMap` (not `TeleopEvents`: that name is lerobot's event enum). `FrameEntry`, `Contract`, enums, and the contract YAML are unchanged.
 - **Operators rename (breaking):** `rosetta/contract/ops.py` → `rosetta/contract/operators.py`; "op" is now "operator" everywhere — `Op` → `Operator`, `OpContext` → `OperatorContext`, `register_op` → `register_operator`, `build_op` → `build_operator`, `OP_REGISTRY` → `OPERATOR_REGISTRY`, and the plugin entry-point group `rosetta.ops` → `rosetta.operators`. Resolved specs carry `operators` (was `ops`). The contract YAML is unchanged (`apply:` lists and operator names stay as they were).
 - **Contract format v2 (breaking):** sections are now mappings keyed by frame key (v1's flat entry lists no longer load); each entry is a `channel: {topic, type, qos, ...}` block plus a **mandatory** `align: {strategy, timeline}` (`tolerance_ms` with `asof`), then `select`/`apply`/`kind`. A list value under one key declares ordered sources (concatenation for observations, action splitting). `serve: {safety}` moved to `channel.safety`; `stamp: receive|header` became open timeline names (`timeline: receive|header`) chosen per source — including actions, replacing the deleted global `timestamp_source`. New required top-level fields: `robot_interface: ros2` and `fps`. Validation replaces fallback: unknown keys anywhere, a missing align, or a timeline the channel's message type cannot provide (e.g. `header` on `std_msgs`) are load-time errors, and a header-timeline message arriving unstamped is dropped at ingest instead of silently falling back to receive time. Top-level `x-*` keys are ignored (YAML anchor holders, e.g. shared QoS). `clamp` accepts `{min, max}`. See `contracts/stone.yaml` for the annotated tour.
-- **Restructure (breaking):** the package tree now states the architecture — `rosetta.core` split into `rosetta.contract` (`contract.py` → `contract/schema.py`, `contract_utils.py` → `contract/specs.py`, plus `ops.py`, `errors.py`) and `rosetta.frames` (`converters.py` → `frames/codecs.py`, `frame_layout.py` → `frames/layout.py`, `resample.py` → `frames/resample.py`, naming helpers → `frames/naming.py`); `rosetta.ros2` → `rosetta.robots.ros2`; `rosetta.backends.protocols` → `rosetta.policies`. New `rosetta.frames.streams` defines `FrameSource`/`FrameSink`/`FrameStream` — `PolicyRunner.run()` now takes a `FrameStream` instead of a `TopicBridge`, so framework adapters no longer import rclpy. Entry-point groups (`rosetta.dataset_writers`, `rosetta.policy_runners`) are unchanged.
+- **Restructure (breaking):** the package tree now states the architecture — `rosetta.core` split into `rosetta.contract` (`contract.py` → `contract/schema.py`, `contract_utils.py` → `contract/specs.py`, plus `ops.py`, `errors.py`) and `rosetta.frames` (`codecs.py` → `frames/codecs.py` (since renamed back to `frames/codecs.py`, see above), `frame_layout.py` → `frames/layout.py`, `resample.py` → `frames/resample.py`, naming helpers → `frames/naming.py`); `rosetta.ros2` → `rosetta.robots.ros2`; `rosetta.backends.protocols` → `rosetta.policies`. New `rosetta.frames.streams` defines `FrameSource`/`FrameSink`/`FrameStream` — `PolicyRunner.run()` now takes a `FrameStream` instead of a `TopicBridge`, so framework adapters no longer import rclpy. Entry-point groups (`rosetta.dataset_writers`, `rosetta.policy_runners`) are unchanged.
 - **Node rename (breaking):** `rosetta_client_node` → `policy_runner_node` (class `PolicyRunnerNode`, default node name `policy_runner`, launch `policy_runner_launch.py`, params `policy_runner.yaml`); its `backend` parameter is now `framework`, and `rosetta_port`'s `--backend` flag is now `--framework`
 - **Contract:** `name` → `robot_type`, `rate_hz` → `fps`
 - **Nodes:** `PolicyBridge` → `rosetta_client_node`, `EpisodeRecorderServer` → `episode_recorder_node`
@@ -199,11 +202,14 @@ The workspace consists of several packages; framework adapters register into `ro
 ```
 rosetta/
 ├── launch/
+│   ├── episode_keyboard_launch.py
 │   ├── episode_recorder_launch.py
+│   ├── hil_launch.py
 │   └── policy_runner_launch.py
 └── params/
     ├── episode_recorder.yaml    # Default config for Episode Recorder
-    └── policy_runner.yaml      # Default config for the policy runner
+    ├── hil_manager.yaml         # HIL launch "super YAML" (all four nodes)
+    └── policy_runner.yaml       # Default config for the policy runner
 ```
 
 ### LeRobot Plugin Architecture
@@ -384,7 +390,6 @@ ros2 service call /episode_recorder/cancel_recording std_srvs/srv/Trigger
 | `storage_id` | `mcap` | Rosbag format: `mcap` (recommended) or `sqlite3` |
 | `default_max_duration` | `300.0` | Max episode duration in seconds |
 | `feedback_rate_hz` | `2.0` | Recording feedback publish rate |
-| `default_qos_depth` | `10` | QoS queue depth for subscriptions |
 | `log_level` | `info` | Logging level: `debug`, `info`, `warn`, `error` |
 | `configure` | `true` | Auto-configure on startup |
 | `activate` | `true` | Auto-activate on startup |
@@ -845,16 +850,24 @@ corrupting actions silently.
 | Operator | Form | Tier | Notes |
 |----|------|------|-------|
 | `rad2deg` | `rad2deg` | `BIJECTIVE` | radians (ROS) ↔ degrees (dataset) |
-| `clamp` | `clamp: {min: lo, max: hi}` (or `[lo, hi]`) | `BIDIRECTIONAL` | clip element-wise; on actions this bounds the outgoing command (lossy, so not bijective) |
-| `resize` | `resize: [h, w]` | `FORWARD_ONLY` | nearest-neighbor image resize; observation only |
+| `clamp` | `clamp: {min: lo, max: hi}` | `BIDIRECTIONAL` | clip element-wise, preserving the input dtype; on actions this bounds the outgoing command (lossy, so not bijective) |
+| `resize` | `resize: [h, w]` | `FORWARD_ONLY` | nearest-neighbor image resize (integers, ≤ 8192); image observations only; declares the stream's output geometry |
 
 ```yaml
 apply: [rad2deg, clamp: {min: -180, max: 180}]   # convert then bound
 apply: [resize: [224, 224]]                      # image resize (observations only)
 ```
 
+Operators bound values; they do not repair them. `clamp` passes NaN through
+(`np.clip` semantics), so the encode path itself refuses non-finite values: a
+NaN/Inf command from a diverged policy is never published — the frame is
+dropped whole (no partial frame across a multi-channel action) with a
+throttled error, and if the condition persists the watchdog applies each
+channel's declared `safety` behavior. A recovered policy resumes seamlessly.
+
 Add a built-in capability by registering a new operator in
-`rosetta/contract/operators.py`; the contract schema does not change:
+`rosetta/contract/builtin_operators.py`; the framework
+(`rosetta/contract/operators.py`) and the contract schema do not change:
 
 ```python
 from rosetta.contract.operators import register_operator, Operator, Invertibility
@@ -864,6 +877,14 @@ class MyOperator(Operator):
     def forward(self, arr): ...
     def inverse(self, arr): ...   # round-trip verified at contract load
 ```
+
+Registration enforces the tier's promises up front: a serveable tier
+(`BIDIRECTIONAL`/`BIJECTIVE`) without an `inverse` is rejected at import, and
+a name that is already registered raises unless you pass `override=True`
+(same rule as the codec registries) — a plugin cannot silently shadow a
+built-in like `clamp`. An operator that fixes image geometry declares it by
+setting `self.output_hw = (h, w)`; image observations require some operator
+in their pipeline to declare it (built-in `resize` does).
 
 **Bring your own operator as a plugin**, no fork needed. Package your operator
 and advertise it under the `rosetta.operators` entry-point group. Rosetta
@@ -883,29 +904,49 @@ apply: [my_op]             # resolves to the plugin's registered operator
 
 For human-in-the-loop recording with a leader arm or other input device.
 Teleop uses fixed **role** sections — `input`, `events`, `feedback` — instead
-of frame keys:
+of frame keys. `input`/`feedback` are each a *list* of independently-targeted
+sources, not a single block: every entry names the actions/observations
+section topic it corresponds to (`target`/`origin`), validated at load time,
+so a contract can teleop one action, several, or none, without touching the
+`actions`/`observations` sections themselves:
 
 ```yaml
 teleop:
-  input:                  # same entry shape as an observation
-    channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
+  input:
+    - target: /arm/joint_commands   # names an existing action channel's topic
+      channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: header}
+      select: [position.j1, position.j2]
 
   events:                 # edge-triggered; no align — events are not resampled
     channel: {topic: /joy, type: sensor_msgs/msg/Joy}
     select:               # event_name -> button/axis path
       is_intervention: buttons.5
       success: buttons.0
-      terminate_episode: buttons.6
-      rerecord_episode: buttons.7
+      end_success: buttons.6
+      end_failure: buttons.7
       failure: buttons.1
+
+  feedback:
+    - origin: /arm/joint_states      # names an existing observation channel's topic
+      channel: {topic: /leader_arm/effort_feedback, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [effort.j1, effort.j2]
 ```
 
-An optional `feedback` role (action-shaped, e.g. force feedback to the leader
-arm) is demonstrated in `contracts/stone.yaml`. Feedback channels never
-declare `safety` (a teleop device gets no fabricated commands — declaring it
-is a load error).
+`hil_manager_node` drives each `input` entry live: it decodes the
+teleop message and encodes+publishes it onto `target` using the same
+decode/encode machinery as everything else in the contract (so a leader
+device with different fields, units, or a resampled timeline than the action
+it drives still works correctly — not a raw byte-for-byte republish). The
+action's own topic therefore already carries the human's command during
+teleop; `input`/`feedback` are additionally exposed as their own
+`teleop.input.<action key>` / `teleop.feedback.<observation key>` dataset
+columns by the porter, for diagnostics. Feedback runs the mirror direction
+(observation -> encode -> publish to the human device) regardless of mux
+state. Feedback channels never declare `safety` (a teleop device gets no
+fabricated commands — declaring it is a load error). See `contracts/stone.yaml`
+for a full worked example.
 
 ### Tasks, Rewards, and Signals
 
@@ -1095,7 +1136,7 @@ def my_better_image_decoder(msg, spec): ...
 
 #### Method 2: Inline path in the contract (per-spec override)
 
-Point a single spec directly at a converter function. It applies to that spec
+Point a single spec directly at a codec function. It applies to that spec
 only, overrides the registry there, and needs no packaging. Use it for a one-off,
 or to use a different decoder on one topic while the registry default applies
 elsewhere:
@@ -1106,12 +1147,20 @@ actions:
     channel:
       topic: /my_command
       type: my_msgs/msg/MyCustomCommand
-      decoder: my_package.converters:decode_my_command  # module:function (reading bags)
-      encoder: my_package.converters:encode_my_command  # for publishing
+      decoder: my_package.codecs:decode_my_command  # module:function (reading bags)
+      encoder: my_package.codecs:encode_my_command  # for publishing
     align: {strategy: hold, timeline: receive}
 ```
 
 The module must be importable; paths are validated at contract load time.
+
+> **Trust model — a contract is code-equivalent.** Loading a contract *imports*
+> every `decoder:`/`encoder:` module it names (that's what validates the path)
+> and, at runtime, invokes those functions on robot message data. Only load
+> contracts you trust. This matters most for the policy runner's sidecar
+> fallback, which can fetch `rosetta_contract.yaml` from a Hugging Face Hub
+> model/dataset repo: a contract downloaded from a third-party repo is treated
+> as trusted input, exactly like a launch file.
 
 > **Round-trip safety:** every encoder/decoder pair is round-trip tested
 > (`decode(encode(v)) == v`). A new pair must declare its round-trip behavior
@@ -1126,7 +1175,7 @@ The module must be importable; paths are validated at contract load time.
 def my_decoder(msg, spec) -> np.ndarray:
     # msg: ROS message instance
     # spec.names: list of selected field paths from the contract
-    # spec.msg_type: ROS message type string
+    # spec.source.channel.type: ROS message type string
     return np.array([...], dtype=np.float64)
 ```
 
@@ -1134,8 +1183,9 @@ def my_decoder(msg, spec) -> np.ndarray:
 
 ```python
 def my_encoder(values, spec, stamp_ns=None):
-    # values: numpy array of action values (operators in spec.apply have already been
-    #         run in the serve/inverse direction, e.g. clamp/deg2rad)
+    # values: numpy array of action values (decode_value/encode_value already ran
+    #         spec.operators in the serve/inverse direction, e.g. clamp/deg2rad,
+    #         before your encoder sees them)
     # spec.names: list of selected field paths from the contract
     # stamp_ns: optional timestamp in nanoseconds
     msg = MyMessage()
@@ -1325,7 +1375,7 @@ The five default features (`timestamp`, `frame_index`, `episode_index`, `index`,
 
 #### Info
 
-The `info` slot in `EnvTransition` is **runtime-only** and is not persisted to datasets. It carries transient signals like teleop events (`is_intervention`, `rerecord_episode`, `terminate_episode`) used during live recording and policy execution. If you need persistent metadata, use `complementary_data` instead.
+The `info` slot in `EnvTransition` is **runtime-only** and is not persisted to datasets. It carries transient signals like teleop events (`is_intervention`, `end_success`, `end_failure`) used during live recording and policy execution. If you need persistent metadata, use `complementary_data` instead.
 
 Note: `meta/info.json` in the dataset directory is unrelated; it stores the dataset schema (features, fps, robot_type), not per-frame data.
 

@@ -15,13 +15,12 @@
 """read_bag_contract_hash reads back what episode_recorder_node writes."""
 
 import yaml
-
-from rosetta.robots.ros2.offline.bag_frames import (
+from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_HASH_KEY,
     BAG_CUSTOM_DATA_KEY,
     BAG_METADATA_KEY,
-    read_bag_contract_hash,
 )
+from rosetta.robots.ros2.offline.bag_frames import read_bag_contract_hash
 
 
 def _write_metadata(bag_dir, custom_data: dict):

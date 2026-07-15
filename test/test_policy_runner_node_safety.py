@@ -27,8 +27,7 @@ Regressions pinned:
 import threading
 
 import pytest
-from rclpy.action import GoalResponse
-
+from rclpy.action import CancelResponse, GoalResponse
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
 
 
@@ -93,9 +92,102 @@ def test_safety_action_still_sent_when_goal_hangs(node):
 
 
 def test_goal_accept_is_mutually_exclusive(node):
-    node._accepting_goals = True
+    node._accepting_work = True
     assert node._on_goal(None) == GoalResponse.ACCEPT
     assert node._on_goal(None) == GoalResponse.REJECT  # busy until release
     node._busy.release()
     assert node._on_goal(None) == GoalResponse.ACCEPT
     node._busy.release()
+
+
+def test_goal_rejected_before_activation(node):
+    assert node._on_goal(None) == GoalResponse.REJECT  # initial state: not accepting
+    assert not node._busy.busy  # a rejected goal claims nothing
+
+
+def test_cancel_in_accept_to_execute_window_is_not_lost(node):
+    # The stop event must exist from the moment a goal is accepted, and a
+    # cancel landing before _execute binds the goal must still take effect:
+    # the cancel callback skips signaling (no bound goal to route to), and
+    # _goal_work honors it by re-checking is_cancel_requested after binding.
+    fakes = _OrderedFakes()
+    node._runner = fakes.make_runner()
+    node._accepting_work = True
+
+    assert node._on_goal(None) == GoalResponse.ACCEPT
+    assert node._stop_event is not None and not node._stop_event.is_set()
+
+    class Handle:
+        goal_id = object()
+        is_cancel_requested = True  # cancel accepted in the accept->bind window
+
+    assert node._on_cancel(Handle()) == CancelResponse.ACCEPT  # unrouted: no bound goal yet
+    assert not node._stop_event.is_set()  # ...so the callback signals nothing
+
+    with node._goal_work(Handle()) as stop_event:
+        assert stop_event.is_set()  # the bind-time re-check honored the cancel
+    assert fakes.calls == ["request_stop"]
+    assert not node._busy.busy  # released by _goal_work
+
+
+def test_stale_cancel_does_not_stop_next_goal(node):
+    # A late cancel callback for finished goal A must not set goal B's stop
+    # event: cancels route by goal id against the bound goal.
+    node._accepting_work = True
+
+    class Handle:
+        def __init__(self):
+            self.goal_id = object()
+            self.is_cancel_requested = False
+
+    goal_a, goal_b = Handle(), Handle()
+
+    assert node._on_goal(None) == GoalResponse.ACCEPT
+    with node._goal_work(goal_a):
+        pass  # goal A runs and finishes
+
+    assert node._on_goal(None) == GoalResponse.ACCEPT  # goal B claims the slot
+    with node._goal_work(goal_b) as stop_b:
+        node._on_cancel(goal_a)  # stale cancel for A arrives late
+        assert not stop_b.is_set()  # B unaffected
+        node._on_cancel(goal_b)  # a cancel for the bound goal still works
+        assert stop_b.is_set()
+
+
+def test_feedback_loop_logs_and_stops_on_adapter_error(rclpy_ctx):
+    from rclpy.parameter import Parameter
+
+    node = PolicyRunnerNode(parameter_overrides=[Parameter("feedback_rate_hz", value=50.0)])
+    try:
+
+        class Runner:
+            def feedback(self):
+                raise RuntimeError("adapter bug")
+
+        class Handle:
+            is_cancel_requested = False
+
+            def publish_feedback(self, msg):
+                raise AssertionError("must not publish after a feedback() error")
+
+        node._runner = Runner()
+        # Returns (via break) instead of propagating and killing the thread.
+        node._feedback_loop(Handle(), threading.Event())
+    finally:
+        node.destroy_node()
+
+
+def test_teardown_nulls_runner_then_propagates(node):
+    """Null-first keeps _teardown_runner idempotent, but the failure is NOT
+    swallowed: a framework resource that failed to release (e.g. a policy
+    server subprocess) must surface through the base's guarded teardown."""
+
+    class Runner:
+        def teardown(self):
+            raise RuntimeError("boom")
+
+    node._runner = Runner()
+    with pytest.raises(RuntimeError, match="boom"):
+        node._teardown_runner()
+    assert node._runner is None
+    node._teardown_runner()  # second call is a clean no-op

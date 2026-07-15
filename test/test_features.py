@@ -12,18 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for feature building and zero-fill shape agreement.
+"""Tests for image/string feature building and image zero-fill shape agreement.
 
 Regression guard for the image zero-fill bug: a missing image frame must
 zero-fill with the same shape as a real decoded frame and the declared feature.
+Numeric feature/zero-fill agreement lives in test_frame_layout.py — numeric
+shapes are a whole-key concern (concatenation), owned by FrameLayout.
 """
 
 import numpy as np
-
+import pytest
 from rosetta.frames.layout import (
     DECODED_IMAGE_CHANNELS,
     build_feature,
-    zeros_for_spec,
+    zero_image_for_spec,
 )
 
 
@@ -32,6 +34,8 @@ class _ImageSpec:
 
     is_image = True
     dtype = "video"
+    namespace = None
+    operators = ()
 
     def __init__(self, key, resize):
         self.key = key
@@ -39,8 +43,21 @@ class _ImageSpec:
         self.names = None
 
 
+class _StringSpec:
+    is_image = False
+    dtype = "string"
+    namespace = None
+    operators = ()
+
+    def __init__(self, key):
+        self.key = key
+        self.names = ()
+
+
 class _VectorSpec:
     is_image = False
+    namespace = None
+    operators = ()
 
     def __init__(self, key, dtype, names):
         self.key = key
@@ -56,17 +73,26 @@ def test_decoded_image_channels_is_three():
 def test_feature_and_zeros_agree_for_images():
     spec = _ImageSpec("observation.images.cam", (64, 48))
     feat = build_feature(spec)
-    zeros = zeros_for_spec(spec)
+    zeros = zero_image_for_spec(spec)
     assert feat["shape"] == (64, 48, 3)
     assert zeros.shape == (64, 48, 3)
     assert zeros.dtype == np.uint8
 
 
-def test_vector_feature_and_zeros_agree():
-    spec = _VectorSpec("observation.state", "float32", ["a", "b", "c"])
-    feat = build_feature(spec)
-    zeros = zeros_for_spec(spec)
-    assert feat["shape"] == (3,)
-    assert feat["dtype"] == "float32"
-    assert zeros.shape == (3,)
-    assert zeros.dtype == np.float32
+def test_string_feature():
+    feat = build_feature(_StringSpec("task2"))
+    assert feat == {"dtype": "string", "shape": (1,), "names": None}
+
+
+def test_build_feature_rejects_numeric_specs():
+    # Numeric features come from FrameLayout.lerobot_features() only.
+    spec = _VectorSpec("observation.state", "float32", ["a", "b"])
+    with pytest.raises(ValueError, match="lerobot_features"):
+        build_feature(spec)
+
+
+def test_image_spec_without_resize_rejected():
+    with pytest.raises(ValueError, match="image_resize"):
+        build_feature(_ImageSpec("observation.images.cam", None))
+    with pytest.raises(ValueError, match="image_resize"):
+        zero_image_for_spec(_ImageSpec("observation.images.cam", None))

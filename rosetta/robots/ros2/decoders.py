@@ -21,29 +21,32 @@ If you need to decode a message type that isn't here, add a new decoder.
 Decoders declare their output dtype at registration time. This is the
 single source of truth for what LeRobot dtype the decoder produces.
 
+Selector-driven decoders (JointState, Imu, Odometry, Twist, TwistStamped,
+MultiDOFCommand, JointTrajectory, Joy) require ``select`` in the contract —
+registered with ``requires_select=True``, so a select-less channel of these
+types fails at contract load. Scalar std_msgs types need no select; a
+MultiArray still needs one unless the stream is genuinely 1-wide, because
+select declares the width and a select-less numeric stream is a scalar by
+contract (see decode_value's width gate).
+
 Image Encoding Support
 ----------------------
 All images are normalized to HWC uint8 RGB format for LeRobot compatibility.
 
-Supported encodings (from sensor_msgs/image_encodings.h):
-  - rgb8, bgr8: 8-bit 3-channel color
-  - rgba8, bgra8: 8-bit 4-channel color (alpha dropped)
-  - mono8, 8uc1: 8-bit grayscale (replicated to 3 channels)
+Supported raw encodings are the keys of IMAGE_ENCODINGS (from
+sensor_msgs/image_encodings.h): rgb8/bgr8, rgba8/bgra8 (alpha dropped),
+mono8/8uc1 (replicated to 3 channels). To add one, add a table entry.
 
-Depth encodings (mono16, 16uc1, 32fc1) are NOT supported and will raise
-DepthEncodingNotSupported. LeRobot does not currently have proper depth
-image handling - it forces all images through RGB conversion which causes
-precision loss. See DEPTH_ENCODINGS for details.
-
-To add a new encoding:
-  1. Add it to the appropriate category in IMAGE_ENCODINGS
-  2. Add decoding logic in _decode_image_by_encoding()
-  3. Test with actual sensor data
+Depth encodings (mono16, 16uc1, 32fc1, 32fc) are NOT supported and will raise
+DepthEncodingNotSupported — on the raw path (message ``encoding``) and the
+compressed path (``format``, including compressedDepth). LeRobot does not
+currently have proper depth image handling - it forces all images through
+RGB conversion which causes precision loss. See DEPTH_ENCODINGS for details.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -56,38 +59,51 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
 
-from rosetta.contract.schema import DEPTH_ENCODINGS
-from rosetta.contract.specs import ObservationStreamSpec
 from rosetta.frames.codecs import register_decoder
-from rosetta.robots.ros2.ros2_utils import dot_get
+from rosetta.robots.ros2.field_access import (
+    JOINT_STATE_FIELDS,
+    JOINT_TRAJECTORY_FIELDS,
+    MULTIDOF_FIELDS,
+    dot_get,
+    gather_named_fields,
+    parse_joy_selector,
+)
+
+DEPTH_ENCODINGS = frozenset({"mono16", "16uc1", "32fc1", "32fc"})
+"""
+Depth image encodings — rejected at decode due to LeRobot limitations.
+
+LeRobot currently lacks proper depth image handling:
+- Forces all images through PIL.convert("RGB")
+- No depth-specific normalization or transforms
+- Precision loss when converting uint16/float32 to uint8
+
+Pixel encoding is a decode-time concern (read from the message's ``encoding``
+field), not a contract declaration — which is why this lives here, not in
+the contract schema.
+"""
+
+if TYPE_CHECKING:
+    from rosetta.contract.specs import StreamSpec
+
+# This module must stay importable without ROS: codec discovery
+# (rosetta.frames.codecs.discover_codecs) imports it during ROS-less contract
+# loading. Decoders are duck-typed on the message instance, so no rclpy,
+# rosidl, or message-class import belongs at module level.
 
 # =============================================================================
-# Image Encoding Configuration
+# Image Decoding
 # =============================================================================
 
-# Supported image encodings grouped by category
-# To add support for a new encoding, add it here and implement in _decode_image_by_encoding
-IMAGE_ENCODINGS = {
-    # 8-bit color (3 channels)
-    "color_8bit_3ch": {"rgb8", "bgr8"},
-    # 8-bit color with alpha (4 channels, alpha dropped)
-    "color_8bit_4ch": {"rgba8", "bgra8"},
-    # 8-bit grayscale (1 channel, replicated to 3)
-    "mono_8bit": {"mono8", "8uc1"},
+IMAGE_ENCODINGS: dict[str, tuple[int, bool]] = {
+    # encoding -> (channels, stored channel order is BGR)
+    "rgb8": (3, False),
+    "bgr8": (3, True),
+    "rgba8": (4, False),
+    "bgra8": (4, True),
+    "mono8": (1, False),
+    "8uc1": (1, False),
 }
-
-# Flatten for quick lookup
-SUPPORTED_IMAGE_ENCODINGS = frozenset(enc for encs in IMAGE_ENCODINGS.values() for enc in encs)
-
-
-# =============================================================================
-# Image Decoding Helpers
-# =============================================================================
-
-
-def _mono_to_rgb(arr: np.ndarray) -> np.ndarray:
-    """Convert HxW grayscale to HxWx3 RGB by replication."""
-    return np.repeat(arr[..., None], 3, axis=-1)
 
 
 class DepthEncodingNotSupported(ValueError):
@@ -99,35 +115,26 @@ class DepthEncodingNotSupported(ValueError):
     """
 
 
-def _decode_image_by_encoding(
-    enc: str,
-    raw: np.ndarray,
-    h: int,
-    w: int,
-    step: int,
-) -> np.ndarray:
+def decode_ros_image(msg) -> np.ndarray:
     """
-    Decode raw image bytes to HWC uint8 RGB based on encoding.
+    Decode a ROS Image message to an HWC uint8 RGB array.
 
-    Args:
-    ----
-        enc: Image encoding string (lowercase)
-        raw: Raw bytes as uint8 array
-        h: Image height
-        w: Image width
-        step: Row stride in bytes (0 = compute from width)
+    Resizing is handled by the ``resize`` operator in the entry's ``apply``
+    pipeline, not here.
 
-    Returns:
-    -------
-        HWC uint8 RGB array (h, w, 3)
-
-    Raises:
+    Raises
     ------
         DepthEncodingNotSupported: If encoding is a depth format
-        ValueError: If encoding is not supported
+        ValueError: If encoding is not supported or missing
 
     """
-    # --- Depth encodings - not supported ---
+    h, w = int(msg.height), int(msg.width)
+    enc = msg.encoding
+    if not enc:
+        # Empty encoding is a real (lazy-publisher) case; attribute absence
+        # is not — every sensor_msgs/Image has the field by construction.
+        raise ValueError("Image message has no encoding.")
+    enc = enc.lower()
     if enc in DEPTH_ENCODINGS:
         raise DepthEncodingNotSupported(
             f"Depth image encoding '{enc}' is not supported. "
@@ -135,81 +142,25 @@ def _decode_image_by_encoding(
             f"through RGB conversion which causes precision loss for depth data. "
             f"Remove this observation from your contract or wait for LeRobot depth support."
         )
+    if enc not in IMAGE_ENCODINGS:
+        raise ValueError(f"Unsupported image encoding: '{enc}'. Supported: {sorted(IMAGE_ENCODINGS)}")
 
-    # --- 8-bit 3-channel color ---
-    if enc in IMAGE_ENCODINGS["color_8bit_3ch"]:
-        ch = 3
-        if not step:
-            step = w * ch
-        row = raw.reshape(h, step)[:, : w * ch]
-        arr = row.reshape(h, w, ch)
-        if enc == "bgr8":
-            arr = arr[..., ::-1].copy()  # BGR -> RGB
-        return arr.astype(np.uint8)
-
-    # --- 8-bit 4-channel color (drop alpha) ---
-    if enc in IMAGE_ENCODINGS["color_8bit_4ch"]:
-        ch = 4
-        if not step:
-            step = w * ch
-        row = raw.reshape(h, step)[:, : w * ch]
-        arr = row.reshape(h, w, ch)
-        rgb = arr[..., :3]
-        if enc == "bgra8":
-            rgb = rgb[..., ::-1].copy()  # BGR -> RGB
-        return rgb.astype(np.uint8)
-
-    # --- 8-bit grayscale ---
-    if enc in IMAGE_ENCODINGS["mono_8bit"]:
-        if not step:
-            step = w
-        arr = raw.reshape(h, step)[:, :w]
-        return _mono_to_rgb(arr).astype(np.uint8)
-
-    # --- Unsupported encoding ---
-    raise ValueError(f"Unsupported image encoding: '{enc}'. Supported: {sorted(SUPPORTED_IMAGE_ENCODINGS)}")
-
-
-def decode_ros_image(msg) -> np.ndarray:
-    """
-    Decode ROS Image message to HWC uint8 RGB array.
-
-    Resizing is handled by the ``resize`` operator in the entry's ``apply`` pipeline,
-    not here.
-
-    Args:
-    ----
-        msg: ROS Image message
-
-    Returns:
-    -------
-        HWC uint8 RGB array
-
-    Raises:
-    ------
-        DepthEncodingNotSupported: If encoding is a depth format
-        ValueError: If encoding is not supported or missing
-
-    """
-    h, w = int(msg.height), int(msg.width)
-    enc = getattr(msg, "encoding", None)
-    if not enc:
-        raise ValueError("Image message has no encoding.")
-    enc = enc.lower()
-    step = int(getattr(msg, "step", 0))
-    raw = np.frombuffer(msg.data, dtype=np.uint8)
-
-    # Decode based on encoding
-    return _decode_image_by_encoding(enc, raw, h, w, step)
-
-
-# =============================================================================
-# Image Decoders
-# =============================================================================
+    ch, is_bgr = IMAGE_ENCODINGS[enc]
+    step = int(msg.step) or w * ch  # 0 = tightly packed rows
+    rows = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, step)[:, : w * ch]
+    if ch == 1:
+        return np.repeat(rows[..., None], 3, axis=-1)  # fresh, writable
+    arr = rows.reshape(h, w, ch)[..., :3]
+    if is_bgr:
+        arr = arr[..., ::-1]
+    # The one materializing copy: detaches from the read-only frombuffer view
+    # (resize passes equal-dims arrays through unchanged, and the serve path's
+    # torch.from_numpy needs writable memory).
+    return arr.copy()
 
 
 @register_decoder("sensor_msgs/msg/Image", dtype="video")
-def _dec_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_image(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode sensor_msgs/Image to full-resolution HWC uint8 RGB.
 
@@ -221,7 +172,7 @@ def _dec_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 @register_decoder("sensor_msgs/msg/CompressedImage", dtype="video")
-def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_compressed_image(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode sensor_msgs/CompressedImage to full-resolution HWC uint8 RGB.
 
@@ -230,6 +181,15 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     is handled by the ``resize`` operator in the entry's ``apply`` pipeline, not here.
     """
     _ = spec  # Selection/resize handled by the operator pipeline, not the codec.
+    fmt = (getattr(msg, "format", "") or "").lower()
+    # A depth stream (16UC1/32FC1, or compressed_depth_image_transport's PNGs)
+    # would sail through IMREAD_COLOR as silently-downcast 8-bit garbage —
+    # reject it loudly, exactly like the raw-Image path does.
+    if "compresseddepth" in fmt or fmt.split(";", 1)[0].strip() in DEPTH_ENCODINGS:
+        raise DepthEncodingNotSupported(
+            f"CompressedImage format '{msg.format}' is a depth stream; depth images "
+            f"are not supported (see DEPTH_ENCODINGS)."
+        )
     if cv2 is None:
         raise ImportError(
             "CompressedImage decode requires opencv-python (cv2). There is "
@@ -241,8 +201,14 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
     img = cv2.imdecode(data, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"cv2.imdecode failed for format: {msg.format}")
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    return img.astype(np.uint8)
+    # compressed_image_transport formats read "<orig>; <codec> compressed
+    # <order>", and cv2.imdecode round-trips the publisher's matrix byte
+    # order — so <order> IS the decoded channel order. Bare "jpeg"/"png"/empty
+    # formats mean bgr (cv_bridge's convention), hence the default swap.
+    order = fmt.partition("compressed")[2].strip().split(" ")[0]
+    if not order.startswith("rgb"):
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
 
 
 # =============================================================================
@@ -250,167 +216,48 @@ def _dec_compressed_image(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 # =============================================================================
 
 
-@register_decoder("sensor_msgs/msg/JointState", dtype="float64")
-def _dec_joint_state(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+@register_decoder("sensor_msgs/msg/JointState", dtype="float64", requires_select=True)
+def _dec_joint_state(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode sensor_msgs/JointState.
 
-    With selector names like ["position.joint1", "velocity.joint2"]:
-      - Extracts specified fields by joint name lookup
-    With bare names like ["joint1", "joint2"]:
-      - Defaults to position field
-    Without names:
-      - Returns all positions
+    Selector names like ["position.joint1", "velocity.joint2"] extract fields
+    by joint-name lookup; a bare name means position.
     """
     if not spec.names:
-        if hasattr(msg, "position") and msg.position:
-            return np.asarray(msg.position, dtype=np.float64)
-        return np.array([], dtype=np.float64)
-
-    name_to_idx = {name: i for i, name in enumerate(msg.name)}
-    out = []
-
-    for selector in spec.names:
-        # Support both "field.joint_name" and bare "joint_name" (defaults to position)
-        if "." in selector:
-            field, joint_name = selector.split(".", 1)
-        else:
-            field, joint_name = "position", selector
-
-        if joint_name not in name_to_idx:
-            raise ValueError(f"Joint '{joint_name}' not in message. Available: {list(msg.name)}")
-        idx = name_to_idx[joint_name]
-        arr = getattr(msg, field)
-        if idx >= len(arr):
-            raise ValueError(f"Index {idx} out of range for {field} (len={len(arr)})")
-        out.append(float(arr[idx]))
-
-    return np.asarray(out, dtype=np.float64)
+        raise ValueError("JointState decoder requires select (e.g. [position.joint1, velocity.joint2])")
+    return gather_named_fields(spec.names, msg.name, msg, JOINT_STATE_FIELDS, default="position", msg_type="JointState")
 
 
 # =============================================================================
-# IMU Decoder
+# Dotted-Path Decoders (Imu / Odometry / Twist / TwistStamped)
 # =============================================================================
 
 
-@register_decoder("sensor_msgs/msg/Imu", dtype="float64")
-def _dec_imu(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _make_dotted_decoder(msg_name: str, example: str):
+    """Build a decoder whose selector names are root-relative dotted paths.
+
+    Root-relative for every type — a stamped wrapper (TwistStamped) is NOT
+    transparent, so contracts name the wrapped field explicitly
+    (``twist.linear.x``, like Odometry's ``twist.twist.angular.z``).
     """
-    Decode sensor_msgs/Imu.
 
-    With selector names: extracts specified dotted paths
-    Without names: returns [quat(4), angular_vel(3), linear_accel(3)]
-    """
-    if not spec.names:
-        return np.concatenate(
-            [
-                np.array(
-                    [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w],
-                    dtype=np.float64,
-                ),
-                np.array(
-                    [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z],
-                    dtype=np.float64,
-                ),
-                np.array(
-                    [
-                        msg.linear_acceleration.x,
-                        msg.linear_acceleration.y,
-                        msg.linear_acceleration.z,
-                    ],
-                    dtype=np.float64,
-                ),
-            ]
-        )
+    def decode(msg: Any, spec: StreamSpec) -> np.ndarray:
+        if not spec.names:
+            raise ValueError(f"{msg_name} decoder requires select (e.g. [{example}])")
+        return np.asarray([float(dot_get(msg, name)) for name in spec.names], dtype=np.float64)
 
-    return np.asarray([float(dot_get(msg, name)) for name in spec.names], dtype=np.float64)
+    decode.__doc__ = f"Decode {msg_name}: selector names are root-relative dotted paths (e.g. [{example}])."
+    return decode
 
 
-# =============================================================================
-# Odometry Decoder
-# =============================================================================
-
-
-@register_decoder("nav_msgs/msg/Odometry", dtype="float64")
-def _dec_odometry(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """
-    Decode nav_msgs/Odometry.
-
-    With selector names: extracts specified dotted paths
-    Without names: returns [position(3), orientation_quat(4)]
-    """
-    if not spec.names:
-        return np.concatenate(
-            [
-                np.array(
-                    [msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z],
-                    dtype=np.float64,
-                ),
-                np.array(
-                    [
-                        msg.pose.pose.orientation.x,
-                        msg.pose.pose.orientation.y,
-                        msg.pose.pose.orientation.z,
-                        msg.pose.pose.orientation.w,
-                    ],
-                    dtype=np.float64,
-                ),
-            ]
-        )
-
-    return np.asarray([float(dot_get(msg, name)) for name in spec.names], dtype=np.float64)
-
-
-# =============================================================================
-# Twist Decoder
-# =============================================================================
-
-
-@register_decoder("geometry_msgs/msg/Twist", dtype="float64")
-def _dec_twist(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """
-    Decode geometry_msgs/Twist.
-
-    With selector names: extracts specified dotted paths
-    Without names: returns [linear(3), angular(3)]
-    """
-    if not spec.names:
-        return np.concatenate(
-            [
-                np.array([msg.linear.x, msg.linear.y, msg.linear.z], dtype=np.float64),
-                np.array([msg.angular.x, msg.angular.y, msg.angular.z], dtype=np.float64),
-            ]
-        )
-
-    return np.asarray([float(dot_get(msg, name)) for name in spec.names], dtype=np.float64)
-
-
-# =============================================================================
-# TwistStamped Decoder
-# =============================================================================
-
-
-@register_decoder("geometry_msgs/msg/TwistStamped", dtype="float64")
-def _dec_twist_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
-    """
-    Decode geometry_msgs/TwistStamped.
-
-    Same selector syntax as Twist - the stamped wrapper is transparent.
-    With selector names: extracts specified dotted paths from inner twist
-    Without names: returns [linear(3), angular(3)]
-    """
-    if not spec.names:
-        return np.concatenate(
-            [
-                np.array([msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z], dtype=np.float64),
-                np.array(
-                    [msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z],
-                    dtype=np.float64,
-                ),
-            ]
-        )
-
-    return np.asarray([float(dot_get(msg.twist, name)) for name in spec.names], dtype=np.float64)
+for _type, _name, _example in (
+    ("sensor_msgs/msg/Imu", "Imu", "orientation.x, angular_velocity.z"),
+    ("nav_msgs/msg/Odometry", "Odometry", "pose.pose.position.x, twist.twist.angular.z"),
+    ("geometry_msgs/msg/Twist", "Twist", "linear.x, angular.z"),
+    ("geometry_msgs/msg/TwistStamped", "TwistStamped", "twist.linear.x, twist.angular.z"),
+):
+    register_decoder(_type, dtype="float64", requires_select=True)(_make_dotted_decoder(_name, _example))
 
 
 # =============================================================================
@@ -418,43 +265,19 @@ def _dec_twist_stamped(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 # =============================================================================
 
 
-@register_decoder("control_msgs/msg/MultiDOFCommand", dtype="float64")
-def _dec_multidof_command(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+@register_decoder("control_msgs/msg/MultiDOFCommand", dtype="float64", requires_select=True)
+def _dec_multidof_command(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode control_msgs/MultiDOFCommand.
 
-    With selector names like ["values.joint1", "values_dot.joint1"]:
-      - Extracts specified DOF values by name
-    Without names:
-      - Returns [values, values_dot] concatenated
+    Selector names like ["values.joint1", "values_dot.joint1"] extract DOF
+    values by name; a bare name means values.
     """
     if not spec.names:
-        values = np.asarray(msg.values, dtype=np.float64) if msg.values else np.array([], dtype=np.float64)
-        values_dot = np.asarray(msg.values_dot, dtype=np.float64) if msg.values_dot else np.array([], dtype=np.float64)
-        return np.concatenate([values, values_dot])
-
-    dof_index = {name: i for i, name in enumerate(msg.dof_names)}
-    out = []
-
-    for selector in spec.names:
-        if selector.startswith("values_dot."):
-            dof_name = selector[11:]
-            arr = msg.values_dot
-        elif selector.startswith("values."):
-            dof_name = selector[7:]
-            arr = msg.values
-        else:
-            dof_name = selector
-            arr = msg.values
-
-        if dof_name not in dof_index:
-            raise ValueError(f"DOF '{dof_name}' not in message. Available: {list(msg.dof_names)}")
-        idx = dof_index[dof_name]
-        if idx >= len(arr):
-            raise ValueError(f"Index {idx} out of range (len={len(arr)})")
-        out.append(float(arr[idx]))
-
-    return np.asarray(out, dtype=np.float64)
+        raise ValueError("MultiDOFCommand decoder requires select (e.g. [values.joint1, values_dot.joint1])")
+    return gather_named_fields(
+        spec.names, msg.dof_names, msg, MULTIDOF_FIELDS, default="values", msg_type="MultiDOFCommand"
+    )
 
 
 # =============================================================================
@@ -462,62 +285,33 @@ def _dec_multidof_command(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 # =============================================================================
 
 
-@register_decoder("trajectory_msgs/msg/JointTrajectory", dtype="float64")
-def _dec_joint_trajectory(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+@register_decoder("trajectory_msgs/msg/JointTrajectory", dtype="float64", requires_select=True)
+def _dec_joint_trajectory(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode trajectory_msgs/JointTrajectory (first point only).
 
-    With selector names like ["position.joint1", "velocity.joint2"]:
-      - Extracts specified fields by joint name from the first trajectory point
-    With bare names like ["joint1", "joint2"]:
-      - Defaults to position field from the first point
-    Without names:
-      - Returns all positions from the first point
+    Selector names like ["position.joint1", "velocity.joint2"] extract fields
+    by joint name from the first trajectory point; a bare name means position.
 
     Field name aliases (both singular and plural are accepted):
       position / positions, velocity / velocities,
       acceleration / accelerations, effort
     """
-    if not msg.points:
-        return np.array([], dtype=np.float64)
-
-    point = msg.points[0]
-    joint_to_idx = {name: i for i, name in enumerate(msg.joint_names)}
-
     if not spec.names:
-        return np.asarray(point.positions, dtype=np.float64)
-
-    _FIELD_MAP = {
-        "position": "positions",
-        "positions": "positions",
-        "velocity": "velocities",
-        "velocities": "velocities",
-        "acceleration": "accelerations",
-        "accelerations": "accelerations",
-        "effort": "effort",
-    }
-
-    out = []
-    for selector in spec.names:
-        if "." in selector:
-            field, joint_name = selector.split(".", 1)
-        else:
-            field, joint_name = "position", selector
-
-        attr = _FIELD_MAP.get(field)
-        if attr is None:
-            raise ValueError(
-                f"Unknown JointTrajectoryPoint field '{field}'. Valid fields: position, velocity, acceleration, effort"
-            )
-        if joint_name not in joint_to_idx:
-            raise ValueError(f"Joint '{joint_name}' not in message. Available: {list(msg.joint_names)}")
-        idx = joint_to_idx[joint_name]
-        arr = getattr(point, attr)
-        if idx >= len(arr):
-            raise ValueError(f"Index {idx} out of range for '{field}' (len={len(arr)})")
-        out.append(float(arr[idx]))
-
-    return np.asarray(out, dtype=np.float64)
+        raise ValueError("JointTrajectory decoder requires select (e.g. [position.joint1, velocity.joint2])")
+    if not msg.points:
+        # An empty trajectory (a common "cancel" convention) carries none of
+        # the selected fields — raise so ingest drops this message with
+        # context instead of poisoning the stream with a wrong-width value.
+        raise ValueError(f"JointTrajectory message has no points; cannot decode {list(spec.names)}")
+    return gather_named_fields(
+        spec.names,
+        msg.joint_names,
+        msg.points[0],
+        JOINT_TRAJECTORY_FIELDS,
+        default="position",
+        msg_type="JointTrajectoryPoint",
+    )
 
 
 # =============================================================================
@@ -525,46 +319,25 @@ def _dec_joint_trajectory(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 # =============================================================================
 
 
-@register_decoder("sensor_msgs/msg/Joy", dtype="float32")
-def _dec_joy(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+@register_decoder("sensor_msgs/msg/Joy", dtype="float32", requires_select=True)
+def _dec_joy(msg: Any, spec: StreamSpec) -> np.ndarray:
     """
     Decode sensor_msgs/Joy.
 
-    With selector names like ["axes.0", "axes.1", "buttons.0"]:
-      - Extracts specific axes/buttons by index
-    Without names:
-      - Returns all axes as float32
-
-    Buttons are cast to float32 (0.0 / 1.0).
-    Selector syntax: "<field>.<index>" where field is "axes" or "buttons".
+    Selector names like ["axes.0", "axes.1", "buttons.0"] extract specific
+    axes/buttons by index; a bare index means axes. Buttons are cast to
+    float32 (0.0 / 1.0).
     """
     if not spec.names:
-        return np.asarray(msg.axes, dtype=np.float32)
+        raise ValueError("Joy decoder requires select (e.g. [axes.0, buttons.0])")
 
     out = []
     for selector in spec.names:
-        if "." in selector:
-            field, idx_str = selector.split(".", 1)
-        else:
-            field, idx_str = "axes", selector
-
-        try:
-            idx = int(idx_str)
-        except ValueError:
-            raise ValueError(
-                f"Joy selector index must be an integer, got '{idx_str}' in selector '{selector}'"
-            ) from None
-
-        if field == "axes":
-            if idx >= len(msg.axes):
-                raise ValueError(f"Axis index {idx} out of range (len={len(msg.axes)})")
-            out.append(float(msg.axes[idx]))
-        elif field == "buttons":
-            if idx >= len(msg.buttons):
-                raise ValueError(f"Button index {idx} out of range (len={len(msg.buttons)})")
-            out.append(float(msg.buttons[idx]))
-        else:
-            raise ValueError(f"Unknown Joy field '{field}'. Valid fields: axes, buttons")
+        field, idx = parse_joy_selector(selector)
+        values = msg.axes if field == "axes" else msg.buttons
+        if idx >= len(values):
+            raise ValueError(f"Joy {field} index {idx} out of range (len={len(values)})")
+        out.append(float(values[idx]))
 
     return np.asarray(out, dtype=np.float32)
 
@@ -575,21 +348,21 @@ def _dec_joy(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 @register_decoder("std_msgs/msg/Float32MultiArray", dtype="float32")
-def _dec_float32_array(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_float32_array(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Float32MultiArray to float32 array."""
     _ = spec  # Unused - no selector needed for arrays
     return np.asarray(msg.data, dtype=np.float32)
 
 
 @register_decoder("std_msgs/msg/Float64MultiArray", dtype="float64")
-def _dec_float64_array(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_float64_array(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Float64MultiArray to float64 array."""
     _ = spec  # Unused - no selector needed for arrays
     return np.asarray(msg.data, dtype=np.float64)
 
 
 @register_decoder("std_msgs/msg/Int32MultiArray", dtype="int32")
-def _dec_int32_array(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_int32_array(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Int32MultiArray to int32 array."""
     _ = spec  # Unused - no selector needed for arrays
     return np.asarray(msg.data, dtype=np.int32)
@@ -601,35 +374,42 @@ def _dec_int32_array(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
 
 
 @register_decoder("std_msgs/msg/Float32", dtype="float32")
-def _dec_float32(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_float32(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Float32 to float32 scalar."""
     _ = spec  # Unused
     return np.array([msg.data], dtype=np.float32)
 
 
 @register_decoder("std_msgs/msg/Float64", dtype="float64")
-def _dec_float64(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_float64(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Float64 to float64 scalar."""
     _ = spec  # Unused
     return np.array([msg.data], dtype=np.float64)
 
 
 @register_decoder("std_msgs/msg/Int32", dtype="int32")
-def _dec_int32(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_int32(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Int32 to int32 scalar."""
     _ = spec  # Unused
     return np.array([msg.data], dtype=np.int32)
 
 
 @register_decoder("std_msgs/msg/Int64", dtype="int64")
-def _dec_int64(msg: Any, spec: ObservationStreamSpec) -> np.ndarray:
+def _dec_int64(msg: Any, spec: StreamSpec) -> np.ndarray:
     """Decode std_msgs/Int64 to int64 scalar."""
     _ = spec  # Unused
     return np.array([msg.data], dtype=np.int64)
 
 
+@register_decoder("std_msgs/msg/Bool", dtype="bool")
+def _dec_bool(msg: Any, spec: StreamSpec) -> np.ndarray:
+    """Decode std_msgs/Bool to bool scalar."""
+    _ = spec  # Unused
+    return np.array([msg.data], dtype=bool)
+
+
 @register_decoder("std_msgs/msg/String", dtype="string")
-def _dec_string(msg: Any, spec: ObservationStreamSpec) -> str:
+def _dec_string(msg: Any, spec: StreamSpec) -> str:
     """Decode std_msgs/String to Python string."""
     _ = spec  # Unused
     return str(msg.data)

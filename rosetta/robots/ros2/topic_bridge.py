@@ -30,33 +30,39 @@ No dependency on LeRobot or any policy framework. Framework adapters
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from rclpy.lifecycle import Publisher
+from rclpy.subscription import Subscription
 from rclpy.timer import Timer
 from rosidl_runtime_py.utilities import get_message
 
+from rosetta.contract.schema import SafetyBehavior
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.frames.codecs import encode_value
+from rosetta.frames.codecs import NonFiniteActionError, encode_value
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer
-
-# Register the ROS codecs (import side effect populates the core registry).
-from rosetta.robots.ros2 import decoders as _decoders
-from rosetta.robots.ros2 import encoders as _encoders
 from rosetta.robots.ros2.ingest import StreamIngest
-from rosetta.robots.ros2.ros2_utils import (
-    LIFECYCLE_CONFIGURED_LABELS,
-    lifecycle_state_label,
-    qos_profile_from_dict,
-)
+from rosetta.robots.ros2.ros2_utils import lifecycle_state_label, qos_profile_from_dict
 
-del _decoders, _encoders
+if TYPE_CHECKING:
+    from rclpy.lifecycle import LifecycleNode
 
-
-# Watchdog fires after this many frame periods without an action.
+# Watchdog fires after this many frame periods without an action. The timer
+# period equals the timeout, so worst-case detection latency is two timer
+# periods after the last action. The watchdog is one-shot: firing (or a
+# detected clock reset) disarms it until the next successfully published
+# frame. It runs on the host node's executor, so it guards a healthy process
+# whose policy stopped commanding -- a wedged process cannot run it; the
+# hardware-side backstop is the downstream controller's own command timeout.
 WATCHDOG_PERIODS = 2
+
+
+def _is_latched(spec: ObservationStreamSpec) -> bool:
+    """True when the channel declares transient_local (latched) durability."""
+    qos = spec.source.channel.qos or {}
+    return str(qos.get("durability", "")).lower().strip() == "transient_local"
 
 
 class TopicBridge:
@@ -97,8 +103,8 @@ class TopicBridge:
         # Created in setup(), cleared in teardown()
         self._obs_buffers: list[tuple[ObservationStreamSpec, StreamBuffer]] = []
         self._act_publishers: list[tuple[ActionStreamSpec, Publisher]] = []
-        self._subscriptions: list[Any] = []
-        self._watchdog_timer: Optional[Timer] = None
+        self._subscriptions: list[Subscription] = []
+        self._watchdog_timer: Timer | None = None
 
         # Stream state tracking, keyed by spec position (specs may share a
         # key and even a topic, so neither is a unique stream identity —
@@ -113,12 +119,16 @@ class TopicBridge:
             info=lambda m: self._node.get_logger().info(m),
         )
 
-        # Safety state
-        self._last_action_ns: Optional[int] = None
-        self._last_sent: list[Optional[np.ndarray]] = []
+        # Safety state. Written by publish_frame (policy thread) and read /
+        # cleared by the watchdog timer (executor thread) without a lock:
+        # attribute access is atomic under the GIL, and the worst-case
+        # interleaving at the timeout boundary is one extra or one skipped
+        # safety tick, self-correcting on the next published frame.
+        self._last_action_ns: int | None = None
+        self._last_sent: list[np.ndarray | None] = []
 
         # Reference to the host node (set in setup, cleared in teardown)
-        self._node: Optional[Any] = None
+        self._node: LifecycleNode | None = None
 
     def setup(self, node) -> None:
         """Create subscriptions, lifecycle publishers, and watchdog on the given node.
@@ -130,6 +140,8 @@ class TopicBridge:
             node: A rclpy.lifecycle.Node (LifecycleNode).
 
         """
+        if self._node is not None:
+            raise RuntimeError("TopicBridge.setup() called twice without teardown()")
         self._node = node
 
         # Create subscriptions (start buffering immediately). One subscription
@@ -143,7 +155,7 @@ class TopicBridge:
                 get_message(spec.source.channel.type),
                 spec.source.channel.topic,
                 callback,
-                qos_profile_from_dict(spec.source.channel.qos) or 10,
+                qos_profile_from_dict(spec.source.channel.qos),
             )
             self._subscriptions.append(sub)
 
@@ -152,7 +164,7 @@ class TopicBridge:
             pub = node.create_lifecycle_publisher(
                 get_message(spec.source.channel.type),
                 spec.source.channel.topic,
-                qos_profile_from_dict(spec.source.channel.qos) or 10,
+                qos_profile_from_dict(spec.source.channel.qos),
             )
             self._act_publishers.append((spec, pub))
         self._last_sent = [None] * len(self._act_publishers)
@@ -182,8 +194,7 @@ class TopicBridge:
         self._subscriptions.clear()
 
         for _, pub in self._act_publishers:
-            if pub is not None:
-                node.destroy_publisher(pub)
+            node.destroy_publisher(pub)
         self._act_publishers.clear()
 
         self._obs_buffers.clear()
@@ -206,24 +217,34 @@ class TopicBridge:
         return self._node is not None and all(buffer.last_ts is not None for _, buffer in self._obs_buffers)
 
     def send_safety_action(self) -> None:
-        """Publish safety action (zeros or hold) per spec's safety_behavior.
+        """Publish safety actions (zeros or hold) per spec's declared ``safety``.
 
-        Only publishes on activated lifecycle publishers.
+        ``zeros`` are action-space zeros, routed through ``encode_value``'s
+        inverse operator pipeline like any command — a declared ``clamp``
+        maps them into the safe wire range by design (see
+        :class:`SafetyBehavior`). Only publishes on activated lifecycle
+        publishers. Two-phase like :meth:`publish_frame` -- every message is
+        encoded before any is published, so an encode failure can never
+        leave a partial safety frame on hardware. Securing the robot also
+        disarms the watchdog: hosts that deactivate mid-goal get identical
+        semantics without touching bridge internals. No-op before
+        ``setup()``.
         """
         if self._node is None:
             return
         stamp_ns = self._node.get_clock().now().nanoseconds
+        to_publish = []
         for i, (spec, pub) in enumerate(self._act_publishers):
-            if pub is None or not pub.is_activated:
+            if not pub.is_activated or spec.source.channel.safety == SafetyBehavior.NONE:
                 continue
-            if spec.source.channel.safety == "none":
-                continue
-            if spec.source.channel.safety == "hold" and self._last_sent[i] is not None:
+            if spec.source.channel.safety == SafetyBehavior.HOLD and self._last_sent[i] is not None:
                 arr = self._last_sent[i]
             else:
-                arr = np.zeros(max(len(spec.names), 1), dtype=np.float32)
-            msg = encode_value(spec, arr, stamp_ns)
+                arr = np.zeros(spec.dim)
+            to_publish.append((pub, encode_value(arr, spec, stamp_ns)))
+        for pub, msg in to_publish:
             pub.publish(msg)
+        self._last_action_ns = None
 
     def reset_state(self) -> None:
         """Reset internal state tracking, e.g. between episodes.
@@ -231,9 +252,13 @@ class TopicBridge:
         Clears episode-specific state without destroying ROS2 resources.
         Called between policy runs in injected mode.
         """
-        # Drop stale data from the previous episode.
-        for _, buffer in self._obs_buffers:
-            buffer.reset()
+        # Drop stale data from the previous episode — except latched
+        # (transient_local) streams: their data is not episode-scoped, and
+        # DDS redelivers latched samples only to NEW subscriptions, so a
+        # cleared buffer on a publish-once topic would never refill.
+        for spec, buffer in self._obs_buffers:
+            if not _is_latched(spec):
+                buffer.reset()
 
         self._missing_streams.clear()
         self._ingest.reset()
@@ -241,18 +266,6 @@ class TopicBridge:
         self._last_action_ns = None
         # Clear cached actions (matters for safety_behavior="hold")
         self._last_sent = [None] * len(self._act_publishers)
-
-    # -------------------- Properties --------------------
-
-    @property
-    def is_active(self) -> bool:
-        """Check if the host node is in the active lifecycle state."""
-        return lifecycle_state_label(self._node) == "active"
-
-    @property
-    def is_configured(self) -> bool:
-        """Check if the host node has been configured (inactive/active/transitioning)."""
-        return lifecycle_state_label(self._node) in LIFECYCLE_CONFIGURED_LABELS
 
     # -------------------- Observation / Action --------------------
 
@@ -263,6 +276,7 @@ class TopicBridge:
         per-spec values — e.g. the teleoperator, which omits absent streams
         instead of zero-filling them.
         """
+        # Legal only after setup(): self._node is never None here by contract.
         now_ns = self._node.get_clock().now().nanoseconds
 
         values: list[Any] = []
@@ -287,23 +301,43 @@ class TopicBridge:
         action_frame maps each action key to a combined vector. It is sliced per
         publishing stream (by selector count, declaration order) and encoded to
         ROS messages. Returns the input frame for convenience (streams whose
-        lifecycle publisher is inactive are not actually published).
+        lifecycle publisher is inactive are neither published nor recorded
+        as sent).
+
+        Publishing is two-phase -- every spec is encoded before anything is
+        published -- so an encode failure can never leave a partial frame on
+        hardware. A non-finite command (NaN/Inf from the policy) drops the
+        whole frame with a throttled error instead of raising: actions simply
+        stop flowing, so the existing watchdog applies each channel's declared
+        ``safety`` behavior, and a recovered policy resumes seamlessly.
+        ``_last_sent`` (the ``safety: hold`` source) only ever holds
+        fully-validated frames.
         """
+        # Legal only after setup(): self._node is never None here by contract.
         stamp_ns = self._node.get_clock().now().nanoseconds
         # Raises on a key/length mismatch instead of silently truncating.
         per_spec = self._act_layout.split(action_frame)
 
-        for i, (spec, pub) in enumerate(self._act_publishers):
-            if pub is None:
+        # Phase 1: encode everything. Any raise here leaves nothing published.
+        try:
+            messages = [encode_value(per_spec[i], spec, stamp_ns) for i, (spec, _) in enumerate(self._act_publishers)]
+        except NonFiniteActionError as e:
+            self._node.get_logger().error(f"Dropping action frame: {e}", throttle_duration_sec=1.0)
+            return action_frame
+
+        # Phase 2: publish, skipping inactive lifecycle publishers explicitly
+        # (their publish() is a silent no-op) so the `safety: hold` cache and
+        # the watchdog arm only ever reflect commands that reached the wire.
+        published = False
+        for i, (_, pub) in enumerate(self._act_publishers):
+            if not pub.is_activated:
                 continue
-            arr = per_spec[i]
-            msg = encode_value(spec, arr, stamp_ns)
+            pub.publish(messages[i])
+            self._last_sent[i] = per_spec[i]
+            published = True
 
-            # Lifecycle publisher handles active/inactive state.
-            pub.publish(msg)
-            self._last_sent[i] = arr
-
-        self._last_action_ns = stamp_ns
+        if published:
+            self._last_action_ns = stamp_ns
         return action_frame
 
     # -------------------- Private --------------------
@@ -312,11 +346,11 @@ class TopicBridge:
         """Check if watchdog should be enabled."""
         if not self._action_specs:
             return False
-        return not all(spec.source.channel.safety == "none" for spec in self._action_specs)
+        return not all(spec.source.channel.safety == SafetyBehavior.NONE for spec in self._action_specs)
 
     def _on_watchdog(self) -> None:
         """Check if actions have stopped and send safety action if needed."""
-        if not self.is_active:
+        if lifecycle_state_label(self._node) != "active":
             return
         if self._last_action_ns is None:
             return
@@ -335,18 +369,17 @@ class TopicBridge:
 
         if now_ns - self._last_action_ns > timeout_ns:
             self._node.get_logger().warning("Action timeout, sending safety action")
-            self.send_safety_action()
-            self._last_action_ns = None
+            self.send_safety_action()  # also disarms until the next published frame
 
     def _on_observation(self, msg, spec: ObservationStreamSpec, buffer: StreamBuffer, index: int) -> None:
         """Handle an incoming observation message via the shared ingest policy."""
-        self._ingest.ingest(msg, spec, buffer, index, fallback_ns=self._node.get_clock().now().nanoseconds)
+        self._ingest.ingest(msg, spec, buffer, index, receive_ns=self._node.get_clock().now().nanoseconds)
 
     def _log_stream_state(self, index: int, spec: ObservationStreamSpec, is_missing: bool) -> None:
         """Log only on state transitions (missing or recovered)."""
         was_missing = index in self._missing_streams
         if is_missing and not was_missing:
-            self._node.get_logger().warning(f"Stream '{spec.key}' ({spec.source.channel.topic}) missing - using zeros")
+            self._node.get_logger().warning(f"Stream '{spec.key}' ({spec.source.channel.topic}) missing")
             self._missing_streams.add(index)
         elif not is_missing and was_missing:
             self._node.get_logger().info(f"Stream '{spec.key}' ({spec.source.channel.topic}) recovered")

@@ -12,24 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Timeline enforcement at ingest, and align-driven buffers everywhere.
+"""StreamIngest policy: timeline enforcement, decode guarding, warn-once state.
 
 The contract chose a timeline per source (validated at load); a message that
 still arrives without it must be dropped — never ingested on a fabricated
-timeline. And every resolved spec (actions included) carries its own align,
-so the bag path builds every buffer from the spec instead of fabricating
-hold buffers for non-observations.
+timeline. A message that fails decode is likewise dropped (warn-once, with a
+recovery notice) instead of killing the caller. And every resolved spec
+(actions included) carries its own align, so the bag path builds every buffer
+from the spec instead of fabricating hold buffers for non-observations.
+
+Pure unit tests: fakes are SimpleNamespace, no rclpy anywhere (pinned by the
+subprocess import-purity test at the bottom).
 """
 
+import subprocess
+import sys
 import types
-
-import pytest
 
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.ingest import StreamIngest
-from rosetta.robots.ros2.ros2_utils import provided_timelines
 
 
 def _obs(align):
@@ -47,47 +50,114 @@ def _obs(align):
     )
 
 
-def _joint_state(stamp_ns=None):
+def _joint_state(stamp_ns=None, joint="j1"):
     header = types.SimpleNamespace(
         stamp=types.SimpleNamespace(
             sec=0 if stamp_ns is None else stamp_ns // 1_000_000_000,
             nanosec=0 if stamp_ns is None else stamp_ns % 1_000_000_000,
         )
     )
-    return types.SimpleNamespace(header=header, name=["j1"], position=[1.0])
+    return types.SimpleNamespace(header=header, name=[joint], position=[1.0])
 
 
-def test_missing_timeline_drops_message_then_recovers():
-    import rosetta.robots.ros2.decoders  # noqa: F401  register codecs
+def _ingest():
+    warns, infos = [], []
+    return StreamIngest(warn=warns.append, info=infos.append), warns, infos
 
+
+# -------------------- Timeline enforcement --------------------
+
+
+def test_missing_timeline_drops_message_with_one_warning():
     spec = _obs(Align("hold", "header"))
     buffer = StreamBuffer.from_spec(spec)
-    warns, infos = [], []
-    ingest = StreamIngest(warn=warns.append, info=infos.append)
+    ingest, warns, _ = _ingest()
 
-    # Uninitialized header stamp: dropped with one warning, nothing buffered.
-    ingest.ingest(_joint_state(), spec, buffer, index=0, fallback_ns=5_000)
-    ingest.ingest(_joint_state(), spec, buffer, index=0, fallback_ns=6_000)
+    # Uninitialized header stamps: dropped, nothing buffered, warned once.
+    ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=5_000)
+    ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=6_000)
     assert buffer.last_ts is None
-    assert len(warns) == 1 and "header" in warns[0]
+    assert len(warns) == 1
+    assert "header" in warns[0]
 
+
+def test_stamped_message_recovers_and_lands_on_header_timeline():
+    spec = _obs(Align("hold", "header"))
+    buffer = StreamBuffer.from_spec(spec)
+    ingest, _, infos = _ingest()
+
+    ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=5_000)
     # A stamped message recovers the stream (with a notice) and lands on the
     # header timeline, not the receive time.
-    ingest.ingest(_joint_state(stamp_ns=3_000_000_000), spec, buffer, index=0, fallback_ns=7_000)
+    ingest.ingest(_joint_state(stamp_ns=3_000_000_000), spec, buffer, index=0, receive_ns=7_000)
     assert buffer.last_ts == 3_000_000_000
-    assert len(infos) == 1 and "recovered" in infos[0]
+    assert len(infos) == 1
+    assert "recovered" in infos[0]
 
 
 def test_receive_timeline_uses_receive_time():
-    import rosetta.robots.ros2.decoders  # noqa: F401  register codecs
-
     spec = _obs(Align("hold", "receive"))
     buffer = StreamBuffer.from_spec(spec)
-    ingest = StreamIngest(warn=lambda m: None, info=lambda m: None)
+    ingest, _, _ = _ingest()
 
     # Header stamp present but ignored: the contract chose 'receive'.
-    ingest.ingest(_joint_state(stamp_ns=3_000_000_000), spec, buffer, index=0, fallback_ns=42_000)
+    ingest.ingest(_joint_state(stamp_ns=3_000_000_000), spec, buffer, index=0, receive_ns=42_000)
     assert buffer.last_ts == 42_000
+
+
+def test_reset_rearms_timeline_warning():
+    spec = _obs(Align("hold", "header"))
+    buffer = StreamBuffer.from_spec(spec)
+    ingest, warns, _ = _ingest()
+
+    ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=5_000)
+    ingest.reset()
+    ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=6_000)
+    assert len(warns) == 2
+
+
+# -------------------- Decode guarding --------------------
+#
+# The real registry JointState decoder raises when the selected joint is
+# absent from the message — no mocks needed to drive the decode-failure path.
+
+
+def test_decode_failure_drops_message_with_one_warning():
+    spec = _obs(Align("hold", "receive"))
+    buffer = StreamBuffer.from_spec(spec)
+    ingest, warns, _ = _ingest()
+
+    ingest.ingest(_joint_state(joint="other"), spec, buffer, index=0, receive_ns=1_000)
+    ingest.ingest(_joint_state(joint="other"), spec, buffer, index=0, receive_ns=2_000)
+    assert buffer.last_ts is None
+    assert len(warns) == 1
+    assert "Decode failed" in warns[0]
+
+
+def test_decode_recovery_pushes_and_notices():
+    spec = _obs(Align("hold", "receive"))
+    buffer = StreamBuffer.from_spec(spec)
+    ingest, _, infos = _ingest()
+
+    ingest.ingest(_joint_state(joint="other"), spec, buffer, index=0, receive_ns=1_000)
+    ingest.ingest(_joint_state(joint="j1"), spec, buffer, index=0, receive_ns=2_000)
+    assert buffer.last_ts == 2_000
+    assert len(infos) == 1
+    assert "recovered" in infos[0]
+
+
+def test_reset_rearms_decode_warning():
+    spec = _obs(Align("hold", "receive"))
+    buffer = StreamBuffer.from_spec(spec)
+    ingest, warns, _ = _ingest()
+
+    ingest.ingest(_joint_state(joint="other"), spec, buffer, index=0, receive_ns=1_000)
+    ingest.reset()
+    ingest.ingest(_joint_state(joint="other"), spec, buffer, index=0, receive_ns=2_000)
+    assert len(warns) == 2
+
+
+# -------------------- Align-driven buffers --------------------
 
 
 def test_action_align_drives_its_buffer():
@@ -96,6 +166,7 @@ def test_action_align_drives_its_buffer():
         key="action",
         names=["position.j1"],
         fps=30,
+        dtype="float64",
         source=Source(
             channel=Channel(topic="/cmd", type="sensor_msgs/msg/JointState"),
             align=Align("drop", "receive"),
@@ -111,9 +182,18 @@ def test_action_align_drives_its_buffer():
     assert buffer.sample(1_000_000_000 + 2 * step_ns) is None
 
 
-def test_provided_timelines_by_type():
-    pytest.importorskip("rosidl_runtime_py")
-    assert provided_timelines("sensor_msgs/msg/JointState") == {"receive", "header"}
-    assert provided_timelines("std_msgs/msg/Float64") == {"receive"}
-    with pytest.raises(ValueError, match="NoSuchThing"):
-        provided_timelines("sensor_msgs/msg/NoSuchThing")
+# -------------------- Import purity --------------------
+
+
+def test_ingest_imports_without_rclpy():
+    """StreamIngest and its whole import graph stay rclpy-free (CLAUDE.md unit
+    standard). Runs in a subprocess: the shared pytest process has rclpy
+    loaded by other test modules."""
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import rosetta.robots.ros2.ingest; assert 'rclpy' not in sys.modules",
+        ],
+        check=True,
+    )

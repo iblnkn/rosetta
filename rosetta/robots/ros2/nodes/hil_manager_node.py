@@ -41,8 +41,8 @@ import threading
 import time
 
 from rcl_interfaces.msg import ParameterDescriptor
-from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.action import ActionClient, ActionServer
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 from rosetta_interfaces.srv import StartHILEpisode
 from rosidl_runtime_py.utilities import get_message
@@ -57,6 +57,7 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 from rosetta.frames.codecs import decode_value, encode_value
+from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.nodes.node_utils import (
     finish_goal,
     positive_rate_descriptor,
@@ -65,25 +66,6 @@ from rosetta.robots.ros2.nodes.node_utils import (
 )
 from rosetta.robots.ros2.ros2_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
-
-# ---------- Helpers ----------
-
-
-def _resolve_selector(obj, path: str):
-    """
-    Resolve a dotted selector, supporting numeric array indices.
-
-    Unlike dot_get, this handles paths like "buttons.5" -> obj.buttons[5],
-    which is needed for Joy message event mappings.
-    """
-    cur = obj
-    for p in path.split("."):
-        if p.isdigit() and hasattr(cur, "__getitem__"):
-            cur = cur[int(p)]
-        else:
-            cur = getattr(cur, p)
-    return cur
-
 
 # ---------- Constants ----------
 
@@ -107,9 +89,13 @@ class HilManagerNode(RosettaLifecycleNode):
     muxing through a single ManageEpisode action interface.
     """
 
-    # An episode winds down three child goals (policy, reward, recorder),
-    # each with its own cancel/result timeouts — give it longer than the
-    # default before deactivate/shutdown proceeds without it.
+    # Longer than the base default: episode teardown cancels up to three
+    # child goals. 10 s covers children that answer promptly; a child that
+    # eats its full cancel+result timeouts (~45 s worst case across all
+    # three) is already logged per-child and deliberately NOT waited for —
+    # deactivate warns and proceeds to the safety action, the episode thread
+    # keeps winding the children down, and cleanup stays refused until
+    # _busy releases.
     STOP_WORK_TIMEOUT_SEC = 10.0
 
     def __init__(self, **kwargs):
@@ -214,7 +200,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
         # -------------------- State --------------------
         # One-episode-at-a-time comes from the base work gate (busy guard +
-        # per-claim stop event), claimed in _on_goal / _handle_start_episode /
+        # per-claim stop event), claimed in _on_goal / _on_start_episode /
         # _start_episode_from_button.
         self._contract = None
 
@@ -252,10 +238,16 @@ class HilManagerNode(RosettaLifecycleNode):
         self._policy_goal_handle = None
         self._reward_goal_handle = None
         self._recorder_goal_handle = None
+        # Live recorder message count, fed by _on_recorder_feedback.
+        self._recorder_messages_written = 0
 
-        # Callback groups
+        # Callback groups. Teleop events get their own mutually-exclusive
+        # group: edge detection is order-sensitive (a press processed after
+        # its release fires a spurious one-shot), and the reentrant groups
+        # give no ordering guarantee across executor threads.
         self._action_cbg = ReentrantCallbackGroup()
         self._sub_cbg = ReentrantCallbackGroup()
+        self._events_cbg = MutuallyExclusiveCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -398,7 +390,7 @@ class HilManagerNode(RosettaLifecycleNode):
                 events_spec.channel.topic,
                 lambda msg: self._on_teleop_events(msg, events_spec),
                 qos,
-                callback_group=self._sub_cbg,
+                callback_group=self._events_cbg,
             )
             self._mux_subs.append(sub)
             self.get_logger().info(f"Teleop events: {events_spec.channel.topic}")
@@ -411,34 +403,35 @@ class HilManagerNode(RosettaLifecycleNode):
         self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
 
         # --- Service wrapper (for callers that don't support actions) ---
+        # Node-private (~/) names, matching the episode recorder's convention.
         self._episode_service = self.create_service(
             StartHILEpisode,
-            "start_episode",
-            self._handle_start_episode,
+            "~/start_episode",
+            self._on_start_episode,
             callback_group=self._action_cbg,
         )
         self._stop_service = self.create_service(
             Trigger,
-            "stop_episode",
-            self._handle_stop_episode,
+            "~/stop_episode",
+            self._on_stop_episode,
             callback_group=self._action_cbg,
         )
         self._intervention_service = self.create_service(
             SetBool,
-            "set_intervention",
-            self._handle_set_intervention,
+            "~/set_intervention",
+            self._on_set_intervention,
             callback_group=self._action_cbg,
         )
         self._reward_override_service = self.create_service(
             SetBool,
-            "set_reward_override",
-            self._handle_set_reward_override,
+            "~/set_reward_override",
+            self._on_set_reward_override,
             callback_group=self._action_cbg,
         )
         self._clear_reward_service = self.create_service(
             Trigger,
-            "clear_reward_override",
-            self._handle_clear_reward_override,
+            "~/clear_reward_override",
+            self._on_clear_reward_override,
             callback_group=self._action_cbg,
         )
 
@@ -466,57 +459,32 @@ class HilManagerNode(RosettaLifecycleNode):
             self.destroy_subscription(sub)
         self._mux_subs = []
 
-        for _, pub in self._command_publishers.values():
-            self.destroy_publisher(pub)
-        self._command_publishers = {}
+        for attr in ("_command_publishers", "_reward_publishers", "_teleop_feedback_publishers"):
+            for _, pub in getattr(self, attr).values():
+                self.destroy_publisher(pub)
+            setattr(self, attr, {})
 
-        for _, pub in self._reward_publishers.values():
-            self.destroy_publisher(pub)
-        self._reward_publishers = {}
-
-        for _, pub in self._teleop_feedback_publishers.values():
-            self.destroy_publisher(pub)
-        self._teleop_feedback_publishers = {}
-
-        if self._policy_client is not None:
-            self._policy_client.destroy()
-            self._policy_client = None
-
-        if self._reward_client is not None:
-            self._reward_client.destroy()
-            self._reward_client = None
-
-        if self._recorder_client is not None:
-            self._recorder_client.destroy()
-            self._recorder_client = None
-
-        if self._action_server is not None:
-            self._action_server.destroy()
-            self._action_server = None
+        for attr in ("_policy_client", "_reward_client", "_recorder_client", "_action_server"):
+            entity = getattr(self, attr)
+            if entity is not None:
+                entity.destroy()
+                setattr(self, attr, None)
 
         if self._intervention_pub is not None:
             self.destroy_publisher(self._intervention_pub)
             self._intervention_pub = None
 
-        if self._episode_service is not None:
-            self.destroy_service(self._episode_service)
-            self._episode_service = None
-
-        if self._stop_service is not None:
-            self.destroy_service(self._stop_service)
-            self._stop_service = None
-
-        if self._intervention_service is not None:
-            self.destroy_service(self._intervention_service)
-            self._intervention_service = None
-
-        if self._reward_override_service is not None:
-            self.destroy_service(self._reward_override_service)
-            self._reward_override_service = None
-
-        if self._clear_reward_service is not None:
-            self.destroy_service(self._clear_reward_service)
-            self._clear_reward_service = None
+        for attr in (
+            "_episode_service",
+            "_stop_service",
+            "_intervention_service",
+            "_reward_override_service",
+            "_clear_reward_service",
+        ):
+            service = getattr(self, attr)
+            if service is not None:
+                self.destroy_service(service)
+                setattr(self, attr, None)
 
         self._contract = None
 
@@ -530,9 +498,10 @@ class HilManagerNode(RosettaLifecycleNode):
             if self._control_source != "policy":
                 return
 
-        if original_topic in self._command_publishers:
-            _, pub = self._command_publishers[original_topic]
-            pub.publish(msg)
+        # Publisher exists by construction: sub and publisher come from the
+        # same contract entry.
+        _, pub = self._command_publishers[original_topic]
+        pub.publish(msg)
 
     def _on_teleop_input(self, msg, teleop_spec, action_spec, target_topic: str) -> None:
         """Decode a teleop input message and republish it as the executed action.
@@ -557,9 +526,8 @@ class HilManagerNode(RosettaLifecycleNode):
             )
             return
 
-        if target_topic in self._command_publishers:
-            _, pub = self._command_publishers[target_topic]
-            pub.publish(ros_msg)
+        _, pub = self._command_publishers[target_topic]
+        pub.publish(ros_msg)
 
     def _on_teleop_feedback_origin(self, msg, obs_spec, feedback_spec, pub) -> None:
         """Decode an observation message and forward it to the human device as feedback."""
@@ -578,9 +546,8 @@ class HilManagerNode(RosettaLifecycleNode):
                 return
             self._current_reward = float(msg.data)
 
-        if original_topic in self._reward_publishers:
-            _, pub = self._reward_publishers[original_topic]
-            pub.publish(msg)
+        _, pub = self._reward_publishers[original_topic]
+        pub.publish(msg)
 
     def _on_teleop_events(self, msg, events_spec) -> None:
         """
@@ -629,7 +596,7 @@ class HilManagerNode(RosettaLifecycleNode):
         self.get_logger().debug(f"Joy received: buttons={list(msg.buttons)}")
         for event_name, selector in events_spec.select.items():
             try:
-                pressed = bool(_resolve_selector(msg, selector))
+                pressed = bool(resolve_indexed(msg, selector))
             except (AttributeError, IndexError, ValueError) as e:
                 self.get_logger().warning(f"Selector '{selector}' failed: {e}")
                 continue
@@ -694,13 +661,14 @@ class HilManagerNode(RosettaLifecycleNode):
     def _start_episode_from_button(self) -> None:
         """Start a new episode from the start_episode teleop event.
 
-        Mirrors _handle_start_episode (the StartHILEpisode service path):
+        Mirrors _on_start_episode (the StartHILEpisode service path):
         same work-gate claim, same background thread via _run_episode_detached.
         There's no caller to report accept/reject back to, so a failed claim
-        just logs (via the base) and no-ops -- a button press is
-        fire-and-forget.
+        just logs and no-ops -- a button press is fire-and-forget.
         """
-        if not self._try_claim_work():
+        reason = self._try_claim_work()
+        if reason is not None:
+            self.get_logger().warning(f"Episode button ignored: {reason}")
             return
 
         prompt = self.get_parameter("default_episode_prompt").value
@@ -714,16 +682,7 @@ class HilManagerNode(RosettaLifecycleNode):
     # ====================================================================
     # Action server callbacks
     # ====================================================================
-
-    def _on_goal(self, _goal_request) -> GoalResponse:
-        """Accept or reject a ManageEpisode goal."""
-        return GoalResponse.ACCEPT if self._try_claim_work() else GoalResponse.REJECT
-
-    def _on_cancel(self, _goal_handle) -> CancelResponse:
-        """Accept cancel request for ManageEpisode."""
-        self.get_logger().info("Received cancel request")
-        self._signal_stop()
-        return CancelResponse.ACCEPT
+    # Goal/cancel callbacks come from the base: claim-or-reject, goal-id-routed cancel.
 
     def _execute(self, goal_handle) -> ManageEpisode.Result:
         """Execute a full HIL episode via the action interface."""
@@ -731,8 +690,10 @@ class HilManagerNode(RosettaLifecycleNode):
         max_duration = goal_handle.request.max_duration_s
         reward_threshold = goal_handle.request.success_reward_threshold
 
-        try:
-            fields, _cancelled = self._run_episode(prompt, max_duration, reward_threshold, goal_handle=goal_handle)
+        with self._goal_work(goal_handle) as stop_event:
+            fields, _cancelled = self._run_episode(
+                prompt, max_duration, reward_threshold, stop_event, goal_handle=goal_handle
+            )
 
             result = ManageEpisode.Result()
             result.success = fields["success"]
@@ -748,12 +709,8 @@ class HilManagerNode(RosettaLifecycleNode):
             # rcl-legal but would report the wrong terminal state).
             finish_goal(goal_handle, result)
             return result
-        finally:
-            # Release on EVERY exit path — a leaked guard would reject all
-            # subsequent episodes until node restart.
-            self._busy.release()
 
-    def _handle_start_episode(
+    def _on_start_episode(
         self, request: StartHILEpisode.Request, response: StartHILEpisode.Response
     ) -> StartHILEpisode.Response:
         """Service: start a HIL episode and return immediately.
@@ -766,9 +723,10 @@ class HilManagerNode(RosettaLifecycleNode):
         """
         # Claim the slot before returning so a concurrent start (service or
         # action goal) is rejected; the episode thread releases it.
-        if not self._try_claim_work():
+        reason = self._try_claim_work()
+        if reason is not None:
             response.accepted = False
-            response.message = "Episode already in progress" if self._accepting_work else "Node not active"
+            response.message = f"Rejected: {reason}"
             return response
 
         threading.Thread(
@@ -786,20 +744,18 @@ class HilManagerNode(RosettaLifecycleNode):
         return response
 
     def _run_episode_detached(self, prompt: str, max_duration: float, reward_threshold: float) -> None:
-        """Thread target for the service path: run, log the result, release."""
-        try:
-            fields, _ = self._run_episode(prompt, max_duration, reward_threshold)
+        """Thread target for the service/button path: run under the work guard, log the result."""
+        # goal_handle=None: no cancel routing; stop comes from the
+        # stop_episode service, an end_* button, or deactivate.
+        with self._goal_work(None) as stop_event:
+            fields, _ = self._run_episode(prompt, max_duration, reward_threshold, stop_event)
             self.get_logger().info(
                 f"Episode finished ({fields['termination_reason'] or 'error'}): "
                 f"{fields['message']} bag={fields['bag_path']!r} "
                 f"reward={fields['final_reward']} msgs={fields['messages_written']}"
             )
-        finally:
-            # Mirror of the action path's finally — a leaked guard would
-            # reject all subsequent episodes until node restart.
-            self._busy.release()
 
-    def _handle_stop_episode(self, _request, response: Trigger.Response) -> Trigger.Response:
+    def _on_stop_episode(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Service: signal the active episode to exit its feedback loop."""
         self._signal_stop()
         response.success = True
@@ -807,7 +763,7 @@ class HilManagerNode(RosettaLifecycleNode):
         self.get_logger().info("Stop requested via service")
         return response
 
-    def _handle_set_intervention(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
+    def _on_set_intervention(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
         """Service: switch mux between policy (False) and teleop (True)."""
         with self._mux_lock:
             self._control_source = "teleop" if request.data else "policy"
@@ -816,7 +772,7 @@ class HilManagerNode(RosettaLifecycleNode):
         self.get_logger().info(response.message)
         return response
 
-    def _handle_set_reward_override(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
+    def _on_set_reward_override(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
         """Service: apply a human reward override. True = positive, False = negative."""
         reward_val = (
             self.get_parameter("human_reward_positive").value
@@ -832,7 +788,7 @@ class HilManagerNode(RosettaLifecycleNode):
         self.get_logger().info(response.message)
         return response
 
-    def _handle_clear_reward_override(self, _request, response: Trigger.Response) -> Trigger.Response:
+    def _on_clear_reward_override(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Service: release the human reward override."""
         with self._mux_lock:
             self._human_reward_override = False
@@ -846,22 +802,23 @@ class HilManagerNode(RosettaLifecycleNode):
         prompt: str,
         max_duration: float,
         reward_threshold: float,
+        stop_event: threading.Event,
         goal_handle=None,
     ) -> tuple[dict, bool]:
         """
         Core HIL episode logic shared by the action and service interfaces.
 
-        ``goal_handle`` is the ManageEpisode server goal when driven via the
-        action interface (enables live feedback and cancel detection in the
-        feedback loop); the service interface passes None.
+        ``stop_event`` is this episode's claim-time event, passed in by the
+        ``_goal_work`` block that owns the claim. ``goal_handle`` is the
+        ManageEpisode server goal when driven via the action interface
+        (enables live feedback and cancel detection in the feedback loop);
+        the service interface passes None.
 
         Returns
         -------
             (fields dict, cancelled bool) where fields contains result values.
 
         """
-        stop_event = self._stop_event  # this episode's event, armed at claim time
-
         if max_duration <= 0.0:
             max_duration = self.get_parameter("default_max_duration").value
 
@@ -887,10 +844,14 @@ class HilManagerNode(RosettaLifecycleNode):
             "messages_written": 0,
         }
 
+        self._recorder_messages_written = 0
         try:
             if enable_recording:
                 recorder_gh = self._send_child_goal(
-                    self._recorder_client, RecordEpisode.Goal(prompt=prompt), "Episode recorder"
+                    self._recorder_client,
+                    RecordEpisode.Goal(prompt=prompt),
+                    "Episode recorder",
+                    feedback_callback=self._on_recorder_feedback,
                 )
                 if recorder_gh is None:
                     fields["message"] = "Failed to start episode recorder"
@@ -903,7 +864,10 @@ class HilManagerNode(RosettaLifecycleNode):
                 policy_gh = self._send_child_goal(self._policy_client, RunPolicy.Goal(prompt=prompt), "Robot policy")
                 if policy_gh is None:
                     fields["message"] = "Failed to start robot policy"
-                    self._cancel_child(self._recorder_goal_handle, "Episode recorder")
+                    # wait_result: the recorder's goal slot must be free (and
+                    # its bag finalized) before a retry sends the next goal —
+                    # the failure path is exactly where a retry follows.
+                    self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
                     return fields, cancelled
                 self._policy_goal_handle = policy_gh
             else:
@@ -913,7 +877,8 @@ class HilManagerNode(RosettaLifecycleNode):
                 )
 
             reward_gh = None
-            if enable_reward and self._reward_client is not None:
+            # The client exists iff enable_reward (read-only param, set in _setup).
+            if enable_reward:
                 reward_gh = self._send_child_goal(
                     self._reward_client, RunPolicy.Goal(prompt=prompt), "Reward classifier"
                 )
@@ -979,31 +944,28 @@ class HilManagerNode(RosettaLifecycleNode):
         """
         Run the episode feedback loop until a termination condition is met.
 
-        ``stop_event`` is this episode's claim-time event — set by cancel,
-        the stop_episode service, an end_success/end_failure press, or
-        deactivate/shutdown.
+        ``stop_event`` is this episode's claim-time event — set by an action
+        cancel (routed here by the base), the stop_episode service, an
+        end_success/end_failure press, or deactivate/shutdown. Waiting on it
+        (rather than sleeping and polling) makes a stop take effect
+        immediately instead of up to one feedback interval late.
 
         Returns:
             Termination reason string.
 
         """
-        feedback_interval = 1.0 / self.get_parameter("feedback_rate_hz").value
-        start_time = time.time()
+        interval = 1.0 / self.get_parameter("feedback_rate_hz").value
+        # monotonic: an NTP step must not stretch or cut the episode timeout.
+        start = time.monotonic()
 
-        while True:
-            elapsed = time.time() - start_time
-
-            # Check termination conditions
-            stop = stop_event.is_set()
+        while not stop_event.wait(interval):
+            elapsed = time.monotonic() - start
             with self._mux_lock:
                 reward = self._current_reward
                 source = self._control_source
 
             if goal_handle is not None and goal_handle.is_cancel_requested:
                 return "cancelled"
-
-            if stop:
-                return "human_stop"
 
             if max_duration > 0.0 and elapsed >= max_duration:
                 return "timeout"
@@ -1024,26 +986,30 @@ class HilManagerNode(RosettaLifecycleNode):
                 feedback.current_reward = reward
                 feedback.control_source = source
                 feedback.status = "running"
-                feedback.messages_written = 0  # recorder feedback is not wired through
+                feedback.messages_written = self._recorder_messages_written
                 goal_handle.publish_feedback(feedback)
 
-            time.sleep(feedback_interval)
+        # The stop event fired. An action cancel also sets it (goal-id
+        # routing in the base), so disambiguate or termination_reason would
+        # report every cancel as a human stop.
+        return "cancelled" if goal_handle is not None and goal_handle.is_cancel_requested else "human_stop"
 
     # ====================================================================
     # Child action helpers
     # ====================================================================
 
-    def _send_child_goal(self, client, goal, name: str):
+    def _send_child_goal(self, client, goal, name: str, *, feedback_callback=None):
         """Send a goal to a child action server; return the handle or None.
 
         One implementation for all three children (recorder, policy, reward
-        classifier) — they only differ in client, goal type, and log name.
+        classifier) — they only differ in client, goal type, log name, and
+        an optional feedback callback.
         """
         if not client.wait_for_server(timeout_sec=ACTION_CLIENT_TIMEOUT_SEC):
             self.get_logger().error(f"{name} action server not available")
             return None
 
-        future = client.send_goal_async(goal)
+        future = client.send_goal_async(goal, feedback_callback=feedback_callback)
         if not _wait_for_future(future, GOAL_RESPONSE_TIMEOUT_SEC):
             self.get_logger().error(f"{name} goal send timed out")
             return None
@@ -1085,6 +1051,11 @@ class HilManagerNode(RosettaLifecycleNode):
             self.get_logger().warning(f"Failed to cancel {name}: {e}")
             return None
 
+    def _on_recorder_feedback(self, fb) -> None:
+        """Track the recorder's live message count for ManageEpisode feedback."""
+        # Single int write: GIL-atomic, no lock needed.
+        self._recorder_messages_written = fb.feedback.messages_written
+
     def _stop_recorder(self):
         """Cancel the recorder and wait for its result (which includes bag_path)."""
         result = self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
@@ -1093,10 +1064,16 @@ class HilManagerNode(RosettaLifecycleNode):
         return result
 
     def _cancel_all_children(self) -> None:
-        """Best-effort cancel of all child action goals."""
+        """Best-effort cancel of all child action goals.
+
+        All three wait for the result: the children's goal slots must be
+        free before the next episode (a retry after this error path is the
+        common case), and the recorder result additionally marks its bag
+        finalized.
+        """
         self._cancel_child(self._policy_goal_handle, "Robot policy", wait_result=True)
         self._cancel_child(self._reward_goal_handle, "Reward classifier", wait_result=True)
-        self._cancel_child(self._recorder_goal_handle, "Episode recorder")
+        self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
 
 
 def main(args=None):

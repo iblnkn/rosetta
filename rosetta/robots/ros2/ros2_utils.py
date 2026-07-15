@@ -14,16 +14,20 @@
 
 """Shared ROS2 utilities for the bridge, codecs, and adapters.
 
-QoS profiles from contract dicts, lifecycle state labels, dotted message
-field access (decoders/encoders/teleop), and message timestamp extraction.
-Node-only helpers (BusyGuard, finish_goal, distro gates, QoS introspection,
-wait_until) live in rosetta.robots.ros2.nodes.node_utils.
+QoS profiles from contract dicts and lifecycle state labels. Timeline
+production and message timestamp extraction live in
+rosetta.robots.ros2.timelines, dotted message field access in
+rosetta.robots.ros2.field_access (both pure Python -- ingest and the codecs
+need them without rclpy). Node-only helpers (BusyGuard, finish_goal, QoS
+introspection, wait_until, spin_lifecycle_node) live in
+rosetta.robots.ros2.nodes.node_utils.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.qos import (
     DurabilityPolicy,
     HistoryPolicy,
@@ -32,41 +36,67 @@ from rclpy.qos import (
 )
 
 if TYPE_CHECKING:
-    from rosetta.contract.specs import StreamSpec
-
+    from rclpy.lifecycle import LifecycleNode
 
 # =============================================================================
 # QoS Utilities
 # =============================================================================
 
 
-def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile | None:
-    """
-    Convert a dictionary to a ROS QoS profile.
+_QOS_POLICIES: dict[str, dict[str, Any]] = {
+    "reliability": {"reliable": ReliabilityPolicy.RELIABLE, "best_effort": ReliabilityPolicy.BEST_EFFORT},
+    "history": {"keep_last": HistoryPolicy.KEEP_LAST, "keep_all": HistoryPolicy.KEEP_ALL},
+    "durability": {"volatile": DurabilityPolicy.VOLATILE, "transient_local": DurabilityPolicy.TRANSIENT_LOCAL},
+}
 
-    Supported keys:
+_QOS_DEFAULTS = {"reliability": "reliable", "history": "keep_last", "durability": "volatile"}
+
+
+def _qos_depth(value: Any) -> int:
+    # Same integer strictness as the contract loader's _parse_strict_int:
+    # integral floats are accepted (YAML writers produce 10.0), everything
+    # else that isn't a plain int is an error.
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Invalid qos depth {value!r}: must be a non-negative integer")
+    return value
+
+
+def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile:
+    """
+    Convert a contract ``qos`` mapping to a ROS QoS profile.
+
+    Supported keys (anything else is an error):
     - reliability: "reliable" (default) or "best_effort"
     - history: "keep_last" (default) or "keep_all"
     - durability: "volatile" (default) or "transient_local"
-    - depth: int (default 10)
+    - depth: non-negative int (default 10)
+
+    ``None`` and ``{}`` yield the default profile — the same profile rclpy
+    builds for the int-depth shorthand, ``QoSProfile(depth=10)``.
+
+    Raises
+    ------
+        ValueError: On an unknown key, an unrecognized policy value, or a
+            bad depth. Contract loading runs this on every declared qos
+            mapping, so a typo dies at load with contract context instead
+            of silently becoming the default policy.
+
     """
-    if not d:
-        return None
+    d = d or {}
+    unknown = sorted(d.keys() - (_QOS_POLICIES.keys() | {"depth"}))
+    if unknown:
+        raise ValueError(f"Unknown qos key(s) {unknown}. Allowed: {sorted(_QOS_POLICIES.keys() | {'depth'})}")
 
-    rel = str(d.get("reliability", "reliable")).lower()
-    hist = str(d.get("history", "keep_last")).lower()
-    dur = str(d.get("durability", "volatile")).lower()
-    depth = int(d.get("depth", 10))
+    policies = {}
+    for key, allowed in _QOS_POLICIES.items():
+        value = str(d.get(key, _QOS_DEFAULTS[key])).lower().strip()
+        if value not in allowed:
+            raise ValueError(f"Invalid qos {key} '{value}'. Must be one of: {sorted(allowed)}")
+        policies[key] = allowed[value]
 
-    reliability = ReliabilityPolicy.BEST_EFFORT if rel == "best_effort" else ReliabilityPolicy.RELIABLE
-    history = HistoryPolicy.KEEP_ALL if hist == "keep_all" else HistoryPolicy.KEEP_LAST
-    durability = DurabilityPolicy.TRANSIENT_LOCAL if dur == "transient_local" else DurabilityPolicy.VOLATILE
-    return QoSProfile(
-        reliability=reliability,
-        history=history,
-        depth=depth,
-        durability=durability,
-    )
+    return QoSProfile(depth=_qos_depth(d.get("depth", 10)), **policies)
 
 
 # =============================================================================
@@ -76,7 +106,7 @@ def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile | None:
 LIFECYCLE_CONFIGURED_LABELS = frozenset({"inactive", "active", "activating", "deactivating"})
 
 
-def lifecycle_state_label(node) -> str:
+def lifecycle_state_label(node: LifecycleNode) -> str:
     """Current lifecycle state label of a rclpy LifecycleNode ('active', ...).
 
     Reads rclpy's private ``_state_machine`` because rclpy exposes no public
@@ -88,151 +118,12 @@ def lifecycle_state_label(node) -> str:
     return node._state_machine.current_state[1]
 
 
-# =============================================================================
-# Dotted Attribute Access
-# =============================================================================
-#
-# Resolve a contract selector string (e.g. "position.elbow") against a ROS
-# message. The dotted-selector *syntax* is the framework-agnostic contract
-# convention (see rosetta.contract.schema); this is the ROS *interpretation* of
-# it -- plain attribute walking (parallel-array messages like JointState have
-# dedicated codecs instead). A non-ROS binding (protobuf, dict-backed
-# dataset, ...) would resolve the same selector against its own message
-# structure, so this lives in the ros2 adapter, not in core.
+def require_transition_success(result: TransitionCallbackReturn, transition: str) -> None:
+    """Raise when a ``trigger_*()`` lifecycle transition reports failure.
 
-
-def dot_get(obj, path: str):
+    ``trigger_*()`` returns the transition callback's return code; the
+    callback already logged why it failed (rclpy itself drops the
+    traceback), so all that is left here is to refuse to continue.
     """
-    Resolve a dotted attribute path on a ROS message.
-
-    Example:
-    -------
-        dot_get(msg, "linear.x") -> msg.linear.x
-
-    Parallel-array messages (JointState, JointTrajectory, MultiDOF) have
-    dedicated codecs and never route through here.
-
-    """
-    cur = obj
-    for p in path.split("."):
-        cur = getattr(cur, p)
-    return cur
-
-
-def dot_set(obj, path: str, value: float) -> None:
-    """
-    Set a dotted attribute on a ROS message.
-
-    Example:
-    -------
-        dot_set(msg, "linear.x", 2.0) -> msg.linear.x = 2.0
-
-    Parallel-array messages (JointState, JointTrajectory, MultiDOF) have
-    dedicated codecs and never route through here.
-
-    """
-    parts = path.split(".")
-    cur = obj
-    for p in parts[:-1]:
-        cur = getattr(cur, p)
-    setattr(cur, parts[-1], float(value))
-
-
-# =============================================================================
-# Timestamp Utilities
-# =============================================================================
-
-
-def stamp_from_header_ns(msg) -> int | None:
-    """
-    Extract nanosecond timestamp from a ROS message header.
-
-    Returns
-    -------
-        Positive integer nanoseconds, or None if unavailable/zero.
-
-    """
-    try:
-        st = msg.header.stamp
-    except AttributeError:
-        return None
-
-    try:
-        sec = int(st.sec)
-        nsec = int(st.nanosec)
-    except (TypeError, ValueError, AttributeError):
-        return None
-
-    # Accept timestamps >= 0 (simulation starts at time 0)
-    # Only reject if both sec and nanosec are 0 (uninitialized)
-    if sec == 0 and nsec == 0:
-        return None
-
-    return sec * 1_000_000_000 + nsec
-
-
-# =============================================================================
-# Timelines
-# =============================================================================
-#
-# Data arriving on a channel can carry several timestamps at once — the
-# receive time, a header stamp, conceivably a publish time or others. The
-# robot interface (here) is responsible for producing those timelines under
-# names; align only *selects* one by name (`align.timeline` in the contract).
-# A new timeline is a new entry in these two structures, nothing else.
-
-# timeline name -> extractor(msg, receive_ns) -> int | None (None = the
-# message is missing this timeline, e.g. an uninitialized header stamp).
-TIMELINE_EXTRACTORS: dict[str, Any] = {
-    "receive": lambda msg, receive_ns: receive_ns,
-    "header": lambda msg, receive_ns: stamp_from_header_ns(msg),
-}
-
-
-def provided_timelines(msg_type: str) -> set[str]:
-    """
-    Timelines a ros2 channel of ``msg_type`` provides, by name.
-
-    Every channel provides ``receive``; a message type carrying a std_msgs
-    Header also provides ``header``. Contract loading validates
-    ``align.timeline`` against this set.
-
-    Raises
-    ------
-        ValueError: If ``msg_type`` does not name an importable message type.
-
-    """
-    from rosidl_runtime_py.utilities import get_message
-
-    try:
-        msg_cls = get_message(msg_type)
-    except (AttributeError, ModuleNotFoundError, ValueError) as e:
-        raise ValueError(f"Unknown message type '{msg_type}': {e}") from e
-
-    timelines = {"receive"}
-    if "header" in msg_cls.get_fields_and_field_types():
-        timelines.add("header")
-    return timelines
-
-
-def get_message_timestamp_ns(msg, spec: "StreamSpec", receive_ns: int) -> int | None:
-    """
-    Extract the timestamp of ``spec``'s chosen timeline from a message.
-
-    Args:
-    ----
-        msg: ROS message
-        spec: Stream spec; ``spec.source.align.timeline`` names the timeline
-        receive_ns: When the message arrived (node clock live, bag time offline)
-
-    Returns:
-    -------
-        Timestamp in nanoseconds, or None when the message does not carry
-        the named timeline (e.g. an uninitialized header stamp). There is no
-        silent fallback — a missing timeline is the caller's signal to drop.
-
-    """
-    extractor = TIMELINE_EXTRACTORS.get(spec.source.align.timeline)
-    if extractor is None:
-        return None
-    return extractor(msg, receive_ns)
+    if result != TransitionCallbackReturn.SUCCESS:
+        raise RuntimeError(f"Lifecycle transition '{transition}' failed (see node log)")

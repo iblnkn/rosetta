@@ -27,6 +27,3 @@ episode_recorder:
 
     # Rate at which to publish recording feedback (Hz)
     feedback_rate_hz: 2.0
-
-    # Default QoS queue depth for topic subscriptions
-    default_qos_depth: 10

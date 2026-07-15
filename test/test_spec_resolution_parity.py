@@ -22,6 +22,8 @@ derivation, image geometry, and the projections' forced values. These tests
 pin exactly that, plus the identity guarantee itself.
 """
 
+import pytest
+from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (
     Align,
     Channel,
@@ -30,6 +32,7 @@ from rosetta.contract.schema import (
     Source,
 )
 from rosetta.contract.specs import (
+    _derive_namespaces,
     iter_action_specs,
     iter_observation_specs,
     iter_reward_as_action_specs,
@@ -132,7 +135,7 @@ def test_observation_source_reads_through_and_computed_fields_derive():
 
     # Computed fields: each derivation, pinned against a non-default input.
     assert state.key == "observation.state"  # entry-level, carried onto the spec
-    assert state.names == ["position.shoulder", "position.elbow"]  # from select
+    assert state.names == ("position.shoulder", "position.elbow")  # from select
     assert state.fps == 37  # contract root
     assert state.dtype == "float64"  # explicit channel dtype wins precedence
     assert [o.name for o in state.operators] == ["rad2deg"]  # built from apply
@@ -147,7 +150,7 @@ def test_action_computed_fields_and_per_source_align():
     assert arm.source is ACTION.sources[0]
     assert gripper.source is ACTION.sources[1]
 
-    assert arm.names == ["data.0", "data.1"]
+    assert arm.names == ("data.0", "data.1")
     assert arm.dtype == "float64"  # custom-decoder tier of the precedence rule
     assert [o.name for o in arm.operators] == ["rad2deg"]
 
@@ -164,7 +167,7 @@ def test_reward_as_action_projection_forced_values():
 
     # Projection overrides live in COMPUTED fields only:
     assert spec.key == "action"  # forced, != the reward entry's key
-    assert spec.names == ["data"]  # synthesized when select is empty
+    assert spec.names == ("data",)  # synthesized when select is empty
 
     # Declaration facts read through untouched — including kind, which the
     # old flat design silently dropped (defaulted to "continuous"). A
@@ -175,3 +178,165 @@ def test_reward_as_action_projection_forced_values():
     # reading through source matches the old forced "none"/None.
     assert spec.source.channel.safety == "none"
     assert spec.source.channel.encoder is None
+
+
+def test_depth_named_rgb_topic_loads():
+    """No name heuristic: a depth-named topic under an image key is legal —
+    actual depth images are rejected at decode time, where the message's
+    encoding field is authoritative (see test_image_decoders)."""
+    depth_named_obs = FrameEntry(
+        key="observation.images.wrist",
+        sources=(
+            Source(
+                channel=Channel(topic="/wrist/depth_module/rgb/image_raw", type="sensor_msgs/msg/Image"),
+                align=Align("hold", "header"),
+                apply=(("resize", [24, 32]),),
+            ),
+        ),
+    )
+    specs = list(iter_observation_specs(make_contract(observations=[depth_named_obs])))
+    assert specs[0].dtype == "video"
+
+
+def test_image_observation_without_resize_rejected():
+    """Every image observation must declare its output geometry -- without one
+    there is no static shape for the dataset feature/zero-fill, so this must
+    fail at load, not at first frame assembly."""
+    no_resize_obs = FrameEntry(
+        key="observation.images.wrist",
+        sources=(
+            Source(
+                channel=Channel(topic="/wrist/image_raw", type="sensor_msgs/msg/Image"),
+                align=Align("hold", "header"),
+            ),
+        ),
+    )
+    with pytest.raises(ContractValidationError, match="resize"):
+        list(iter_observation_specs(make_contract(observations=[no_resize_obs])))
+
+
+def test_third_party_operator_with_output_hw_satisfies_image_gate():
+    """The image-geometry gate reads Operator.output_hw, not the name 'resize',
+    so any plugin declaring a fixed output size can fulfill it."""
+    from rosetta.contract.operators import (
+        OPERATOR_REGISTRY,
+        Invertibility,
+        Operator,
+        register_operator,
+    )
+
+    @register_operator("_test_scale", kind=Invertibility.FORWARD_ONLY)
+    class _Scale(Operator):
+        def __init__(self, args, ctx):
+            del args, ctx
+            self.output_hw = (8, 8)
+
+        def forward(self, arr):
+            return arr
+
+    scaled_obs = FrameEntry(
+        key="observation.images.wrist",
+        sources=(
+            Source(
+                channel=Channel(topic="/wrist/image_raw", type="sensor_msgs/msg/Image"),
+                align=Align("hold", "header"),
+                apply=(("_test_scale", None),),
+            ),
+        ),
+    )
+    try:
+        (spec,) = iter_observation_specs(make_contract(observations=[scaled_obs]))
+        assert spec.image_resize == (8, 8)
+    finally:
+        OPERATOR_REGISTRY.pop("_test_scale", None)
+
+
+def test_resize_on_non_image_stream_rejected():
+    """resize on a state vector would crash on every message at runtime
+    (`h, w = img.shape[:2]` on a 1-D array); the operator's ctx.is_image gate
+    turns it into a spec-resolution error instead."""
+    state_obs = FrameEntry(
+        key="observation.state",
+        sources=(
+            Source(
+                channel=Channel(topic="/joint_states", type="sensor_msgs/msg/JointState"),
+                align=Align("hold", "receive"),
+                select=["position.j1"],
+                apply=(("resize", [24, 32]),),
+            ),
+        ),
+    )
+    with pytest.raises(ContractValidationError, match="image"):
+        list(iter_observation_specs(make_contract(observations=[state_obs])))
+
+
+def test_last_geometry_operator_wins():
+    """Pipelines run front-to-back, so the LAST declared output_hw is the
+    stream's final geometry."""
+    image_obs = FrameEntry(
+        key="observation.images.wrist",
+        sources=(
+            Source(
+                channel=Channel(topic="/wrist/image_raw", type="sensor_msgs/msg/Image"),
+                align=Align("hold", "header"),
+                apply=(("resize", [48, 64]), ("resize", [24, 32])),
+            ),
+        ),
+    )
+    (spec,) = iter_observation_specs(make_contract(observations=[image_obs]))
+    assert spec.image_resize == (24, 32)
+
+
+def test_string_stream_with_apply_rejected_at_load():
+    """Operators transform numeric arrays; declaring `apply` on a string
+    stream must fail at spec resolution, not silently skip the pipeline at
+    decode time."""
+    string_obs = FrameEntry(
+        key="observation.environment_state",
+        sources=(
+            Source(
+                channel=Channel(topic="/status", type="std_msgs/msg/String"),
+                align=Align("hold", "receive"),
+                apply=(("clamp", {"min": 0.0, "max": 1.0}),),
+            ),
+        ),
+    )
+    with pytest.raises(ContractValidationError, match="string"):
+        list(iter_observation_specs(make_contract(observations=[string_obs])))
+
+
+def test_derive_namespaces_compound_tier():
+    """Three topics where no single segment distinguishes all of them (index
+    0 is {a,a,b}, index 1 is {x,y,x}, index 2 is {1,1,2} -- each has a
+    duplicate) must fall through to the depth-2 compound-prefix tier."""
+    topics = ["/a/x/1", "/a/y/1", "/b/x/2"]
+    assert _derive_namespaces(topics) == {
+        "/a/x/1": "a.x",
+        "/a/y/1": "a.y",
+        "/b/x/2": "b.x",
+    }
+
+
+@pytest.mark.parametrize(
+    ("topics", "expected"),
+    [
+        # First-segment tier: earliest segment index where all topics differ.
+        (["/arm/state", "/base/state"], {"/arm/state": "arm", "/base/state": "base"}),
+        (["/arm/pos", "/arm/vel"], {"/arm/pos": "pos", "/arm/vel": "vel"}),
+        # Uneven depths: the short topic contributes an empty segment at the
+        # winning index and ends up with no namespace ('' -> None downstream).
+        (["/cmd_vel", "/cmd_vel/filtered"], {"/cmd_vel": "", "/cmd_vel/filtered": "filtered"}),
+        # Single topic: no namespace needed.
+        (["/only"], {"/only": ""}),
+    ],
+)
+def test_derive_namespaces_tiers(topics, expected):
+    assert _derive_namespaces(topics) == expected
+
+
+def test_derive_namespaces_identical_normalization_rejected():
+    """Distinct topic strings that normalize to the same segments ('/a/b' vs
+    'a/b') have no unique namespace at any tier; colliding prefixes must be a
+    load error, not silent duplicate feature names."""
+    with pytest.raises(ContractValidationError, match="identical paths"):
+        _derive_namespaces(["/a/b", "a/b"])

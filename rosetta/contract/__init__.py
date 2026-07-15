@@ -23,13 +23,21 @@ Everything else in Rosetta executes what this package declares. (At runtime,
 select/apply are pure per-message transforms and commute with alignment, so
 they run once per message at ingest — observationally identical.)
 
-Modules: :mod:`.schema` is what the contract *says* (the typed document
-model of the YAML, validation, ``load_contract``); :mod:`.specs` is what the
-runtime *consumes* (the ``StreamSpec`` family and the ``iter_*_specs``
-resolution that produces them); :mod:`.operators` is the ``apply``-pipeline
-framework (registry, invertibility tiers, round-trip gate) and
-:mod:`.builtin_operators` the in-tree plugins (``rad2deg``, ``resize``,
-``clamp``) registered into it; :mod:`.errors`.
+Modules: :mod:`.model` is the pure document model (enums, dataclasses, the
+section descriptor table — no YAML, no parsing); :mod:`.schema` is what the
+contract *says* (parsing, ``load_contract``, and full load-time validation —
+it re-exports the model types, so import them from here); :mod:`.specs` is
+what the runtime *consumes* (the ``StreamSpec`` family and the
+``iter_*_specs`` resolution that produces them — resolution carries the
+registry-backed validation rules, and ``load_contract`` drains it eagerly so
+a returned contract is fully valid in this environment); :mod:`.operators`
+is the ``apply``-pipeline framework (registry, invertibility tiers,
+round-trip gate) and :mod:`.builtin_operators` the in-tree plugins
+(``rad2deg``, ``resize``, ``clamp``) registered into it; :mod:`.plugins` is
+the shared entry-point loader behind the operator/codec registries;
+:mod:`.sidecar` names the contract's on-disk sidecar placement
+(``rosetta_contract.yaml``) and resolves it best-effort from a checkpoint or
+dataset, local or Hub; :mod:`.errors`.
 
 Together with :mod:`rosetta.frames`, this package is Rosetta's waist: the
 robot side (:mod:`rosetta.robots`) and the policy side

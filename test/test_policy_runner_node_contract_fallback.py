@@ -12,120 +12,127 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""_resolve_fallback_contract_path chases pretrained_name_or_path ->
-train_config.json -> dataset.{repo_id,root} -> the dataset's contract
-sidecar. Every missing link must degrade to "", never raise (the caller
-falls back to today's required-contract_path error)."""
+"""on_configure wiring of the contract fallback: with no contract_path, the
+node hands pretrained_name_or_path to find_contract_for_pretrained and fails
+the transition when the chase comes back empty. Failures are ERROR, not
+FAILURE: _setup() raises and the base routes through on_error so partial
+construction is torn down. The chase itself is pure and covered in
+test_contract_fallback_chase.py."""
 
-import json
-
-from rosetta.robots.ros2.nodes import policy_runner_node as node_mod
+import rosetta.robots.ros2.nodes.policy_runner_node as node_mod
+from rclpy.lifecycle import TransitionCallbackReturn
+from rclpy.parameter import Parameter
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
 
 
-class _FakeLogger:
-    def info(self, _msg):
-        pass
-
-    def warning(self, _msg):
-        pass
-
-    def error(self, _msg):
-        pass
-
-
-class _FakeParam:
-    def __init__(self, value):
-        self.value = value
-
-
-class _FakeSelf:
-    """Enough of PolicyRunnerNode for _resolve_fallback_contract_path to run unbound."""
-
-    def __init__(self, pretrained_name_or_path: str):
-        self._pretrained = pretrained_name_or_path
-
-    def get_parameter(self, name):
-        assert name == "pretrained_name_or_path"
-        return _FakeParam(self._pretrained)
-
-    def get_logger(self):
-        return _FakeLogger()
-
-
-def _resolve(pretrained_name_or_path: str) -> str:
-    return PolicyRunnerNode._resolve_fallback_contract_path(_FakeSelf(pretrained_name_or_path))
-
-
-def test_empty_pretrained_path_yields_no_fallback():
-    assert _resolve("") == ""
-
-
-def test_full_chain_resolves_to_dataset_contract(monkeypatch, tmp_path):
-    train_config = tmp_path / "checkpoint" / "train_config.json"
-    train_config.parent.mkdir(parents=True)
-    train_config.write_text(json.dumps({"dataset": {"repo_id": "my_data", "root": str(tmp_path / "dataset")}}))
-
-    contract_sidecar = tmp_path / "dataset" / "meta" / "rosetta_contract.yaml"
-    contract_sidecar.parent.mkdir(parents=True)
-    contract_sidecar.write_text("robot_type: x\n")
-
-    def _fake_resolve_repo_file(path_or_repo_id, filename, repo_type):
-        if repo_type == "model":
-            assert path_or_repo_id == str(tmp_path / "checkpoint")
-            assert filename == "train_config.json"
-            return train_config
-        assert repo_type == "dataset"
-        assert path_or_repo_id == str(tmp_path / "dataset")
-        assert filename == "meta/rosetta_contract.yaml"
-        return contract_sidecar
-
-    monkeypatch.setattr(node_mod, "resolve_repo_file", _fake_resolve_repo_file)
-
-    assert _resolve(str(tmp_path / "checkpoint")) == str(contract_sidecar)
-
-
-def test_missing_train_config_yields_no_fallback(monkeypatch, tmp_path):
-    monkeypatch.setattr(node_mod, "resolve_repo_file", lambda *_a, **_k: None)
-    assert _resolve(str(tmp_path / "checkpoint")) == ""
-
-
-def test_missing_dataset_contract_yields_no_fallback(monkeypatch, tmp_path):
-    train_config = tmp_path / "train_config.json"
-    train_config.write_text(json.dumps({"dataset": {"repo_id": "my_data", "root": None}}))
-
-    def _fake_resolve_repo_file(_path_or_repo_id, filename, repo_type):
-        if repo_type == "model":
-            return train_config
-        return None  # dataset unreachable / no sidecar
-
-    monkeypatch.setattr(node_mod, "resolve_repo_file", _fake_resolve_repo_file)
-
-    assert _resolve(str(tmp_path)) == ""
-
-
-def test_malformed_train_config_yields_no_fallback(monkeypatch, tmp_path):
-    train_config = tmp_path / "train_config.json"
-    train_config.write_text("not json")
-    monkeypatch.setattr(node_mod, "resolve_repo_file", lambda *_a, **_k: train_config)
-
-    assert _resolve(str(tmp_path)) == ""
-
-
-def test_dataset_repo_id_used_when_root_is_none(monkeypatch, tmp_path):
-    """A Hub-hosted (not locally-rooted) dataset falls back to repo_id."""
-    train_config = tmp_path / "train_config.json"
-    train_config.write_text(json.dumps({"dataset": {"repo_id": "org/my_data", "root": None}}))
-
+def test_configure_without_contract_chases_pretrained_then_fails(monkeypatch):
     seen = {}
 
-    def _fake_resolve_repo_file(path_or_repo_id, filename, repo_type):
-        if repo_type == "model":
-            return train_config
-        seen["path_or_repo_id"] = path_or_repo_id
-        return tmp_path / "contract.yaml"
+    def _fake_chase(pretrained, *, warn):
+        seen["pretrained"] = pretrained
 
-    monkeypatch.setattr(node_mod, "resolve_repo_file", _fake_resolve_repo_file)
+    monkeypatch.setattr(node_mod, "find_contract_for_pretrained", _fake_chase)
 
-    _resolve(str(tmp_path))
-    assert seen["path_or_repo_id"] == "org/my_data"
+    node = PolicyRunnerNode(parameter_overrides=[Parameter("pretrained_name_or_path", value="org/ckpt")])
+    try:
+        result = node.on_configure(None)
+    finally:
+        node.destroy_node()
+
+    assert result == TransitionCallbackReturn.ERROR
+    assert seen == {"pretrained": "org/ckpt"}
+
+
+MINIMAL_CONTRACT = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+actions:
+  action:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+"""
+
+
+def test_configure_with_unknown_framework_fails(tmp_path):
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(MINIMAL_CONTRACT)
+
+    node = PolicyRunnerNode(
+        parameter_overrides=[
+            Parameter("contract_path", value=str(contract_path)),
+            Parameter("framework", value="nonexistent"),
+        ]
+    )
+    try:
+        result = node.on_configure(None)
+    finally:
+        node.destroy_node()
+
+    assert result == TransitionCallbackReturn.ERROR
+
+
+class _SetupOnlyRunner:
+    """Minimal PolicyRunner stand-in for configure/cleanup wiring tests."""
+
+    def setup(self, node, contract):
+        pass
+
+    def request_stop(self):
+        pass
+
+    def teardown(self):
+        pass
+
+
+def test_is_classifier_wires_reward_specs_as_actions(monkeypatch, tmp_path):
+    """is_classifier=True must build the bridge from the reward section, not actions."""
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(MINIMAL_CONTRACT)
+
+    calls = []
+    monkeypatch.setattr(node_mod, "iter_reward_as_action_specs", lambda c: calls.append("reward") or [])
+    monkeypatch.setattr(node_mod, "iter_action_specs", lambda c: calls.append("action") or [])
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: _SetupOnlyRunner())
+
+    node = PolicyRunnerNode(
+        parameter_overrides=[
+            Parameter("contract_path", value=str(contract_path)),
+            Parameter("is_classifier", value=True),
+        ]
+    )
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert calls == ["reward"]
+    finally:
+        node.on_cleanup(None)
+        node.destroy_node()
+
+
+def test_sidecar_contract_scanned_for_inline_codecs_before_load(monkeypatch, tmp_path):
+    """The hub-trust audit is only honest if it runs BEFORE load_contract:
+    load_contract's parse already imports every inline codec path."""
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(MINIMAL_CONTRACT)
+
+    order = []
+    real_scan = node_mod.scan_inline_codec_paths
+    real_load = node_mod.load_contract
+    monkeypatch.setattr(node_mod, "find_contract_for_pretrained", lambda p, *, warn: contract_path)
+    monkeypatch.setattr(node_mod, "scan_inline_codec_paths", lambda p: order.append("scan") or real_scan(p))
+    monkeypatch.setattr(node_mod, "load_contract", lambda p: order.append("load") or real_load(p))
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: _SetupOnlyRunner())
+
+    node = PolicyRunnerNode(parameter_overrides=[Parameter("pretrained_name_or_path", value="org/ckpt")])
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
+        assert order == ["scan", "load"]
+    finally:
+        node.on_cleanup(None)
+        node.destroy_node()

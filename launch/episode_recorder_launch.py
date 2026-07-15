@@ -44,17 +44,11 @@ Usage:
 import os
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
-from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
-from launch.events import matches_action
-from launch.substitutions import EqualsSubstitution, LaunchConfiguration
-from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
-from lifecycle_msgs.msg import Transition
-
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import LifecycleNode
+from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config
 
 
 def launch_setup(context, *args, **kwargs):
@@ -66,23 +60,14 @@ def launch_setup(context, *args, **kwargs):
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
     log_level = LaunchConfiguration("log_level").perform(context)
 
-    # Build parameters list
-    parameters = [params_file]  # Load YAML first
-
-    # Build override dict with only non-empty values
-    overrides = {"contract_path": contract_path}  # Always override contract
-
-    if bag_base_dir:  # Only add if non-empty
+    # YAML first; overrides carry only the non-empty launch args (empty =
+    # keep the params-file value).
+    overrides = {"contract_path": contract_path}
+    if bag_base_dir:
         overrides["bag_base_dir"] = bag_base_dir
+    if use_sim_time:
+        overrides["use_sim_time"] = typed_config(context, "use_sim_time", bool)
 
-    if use_sim_time:  # Only add if non-empty
-        # Convert string to boolean
-        overrides["use_sim_time"] = use_sim_time.lower() in ("true", "1", "yes")
-
-    if overrides:
-        parameters.append(overrides)
-
-    # Create the lifecycle node
     episode_recorder_node = LifecycleNode(
         package="rosetta",
         executable="episode_recorder_node",
@@ -90,49 +75,11 @@ def launch_setup(context, *args, **kwargs):
         namespace="",
         output="screen",
         emulate_tty=True,
-        parameters=parameters,
+        parameters=[params_file, overrides],
         arguments=["--ros-args", "--log-level", log_level],
     )
 
-    # Auto-configure event (triggered on process start)
-    configure_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_action(episode_recorder_node),
-            transition_id=Transition.TRANSITION_CONFIGURE,
-        ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("configure"), "true")),
-    )
-
-    # Auto-activate event (triggered after configure completes)
-    activate_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_action(episode_recorder_node),
-            transition_id=Transition.TRANSITION_ACTIVATE,
-        ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("activate"), "true")),
-    )
-
-    # Chain events: process start -> configure -> activate
-    configure_event_handler = RegisterEventHandler(
-        OnProcessStart(
-            target_action=episode_recorder_node,
-            on_start=[configure_event],
-        )
-    )
-
-    activate_event_handler = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=episode_recorder_node,
-            goal_state="inactive",  # trigger when node reaches INACTIVE (configure finished)
-            entities=[activate_event],
-        )
-    )
-
-    return [
-        episode_recorder_node,
-        configure_event_handler,
-        activate_event_handler,
-    ]
+    return [episode_recorder_node, *autostart_handlers(episode_recorder_node)]
 
 
 def generate_launch_description():

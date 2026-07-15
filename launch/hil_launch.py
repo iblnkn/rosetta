@@ -50,26 +50,44 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
-from launch.events import matches_action
 from launch.substitutions import (
     EqualsSubstitution,
     LaunchConfiguration,
     PythonExpression,
 )
 from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
-from lifecycle_msgs.msg import Transition
+from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config, yaml_params
 
 
-def _yaml_params(path, node_name):
-    """Load a ROS2 parameter YAML and return the node's ros__parameters dict."""
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    return data.get(node_name, {}).get("ros__parameters", {})
+def _validate_remaps(context):
+    """Fail at launch when the remap topology doesn't match the contract.
+
+    The mux only works if the policy's remapped output topic is derived from
+    a topic the contract actually declares — a mismatch (e.g. an overridden
+    contract_path with a different action topic) would let the policy publish
+    straight to the real command topic with no error anywhere.
+    """
+    from rosetta.contract.schema import load_contract
+
+    contract = load_contract(LaunchConfiguration("contract_path").perform(context))
+    action_topics = sorted({src.channel.topic for entry in contract.actions for src in entry.sources})
+    remap_from = LaunchConfiguration("action_remap_from").perform(context)
+    if remap_from not in action_topics:
+        raise RuntimeError(
+            f"action_remap_from '{remap_from}' is not an action topic of the contract "
+            f"(action topics: {action_topics}); the HIL mux would never intercept policy output."
+        )
+    if typed_config(context, "enable_reward_classifier", bool):
+        reward_topics = sorted({src.channel.topic for entry in contract.rewards for src in entry.sources})
+        reward_from = LaunchConfiguration("reward_remap_from").perform(context)
+        if reward_from not in reward_topics:
+            raise RuntimeError(
+                f"reward_remap_from '{reward_from}' is not a reward topic of the contract "
+                f"(reward topics: {reward_topics}); the reward mux would never intercept classifier output."
+            )
+    return []
 
 
 def generate_launch_description():
@@ -98,15 +116,15 @@ def generate_launch_description():
     hil_cfg = _section("hil_manager")
     contract_path_default = hil_full.get("contract_path", default_contract)
     client_cfg = {
-        **_yaml_params(default_rosetta_params, "policy_runner"),
+        **yaml_params(default_rosetta_params, "policy_runner"),
         **_section("robot_policy"),
     }
     recorder_cfg = {
-        **_yaml_params(default_recorder_params, "episode_recorder"),
+        **yaml_params(default_recorder_params, "episode_recorder"),
         **_section("episode_recorder"),
     }
     reward_cfg = {
-        **_yaml_params(default_rosetta_params, "policy_runner"),
+        **yaml_params(default_rosetta_params, "policy_runner"),
         **_section("reward_classifier"),
     }
 
@@ -177,23 +195,27 @@ def generate_launch_description():
             default_value=str(client_cfg["obs_similarity_atol"]),
             description="Observation filtering tolerance (-1.0 to disable)",
         ),
-        # --- Action mux remapping (launch-specific, no YAML source) ---
-        DeclareLaunchArgument(
-            "action_remap_from",
-            default_value="/leader_arm/joint_states",
-            description="Original action topic to remap (from contract)",
-        ),
-        DeclareLaunchArgument(
-            "action_remap_to",
-            default_value="/hil/policy/leader_arm/joint_states",
-            description="Remapped action topic for policy output",
-        ),
-        # --- HIL manager (defaults from hil_manager.yaml) ---
+        # --- Action mux remapping ---
+        # remap_from must be an action topic of the contract (validated at
+        # launch); remap_to derives from prefix + remap_from so the pair
+        # cannot silently disagree. The prefix is declared first: a derived
+        # default resolves when its argument is declared.
         DeclareLaunchArgument(
             "policy_remap_prefix",
             default_value=hil_cfg["policy_remap_prefix"],
-            description="Topic prefix for remapped policy output (must match remap_to derivation)",
+            description="Topic prefix for remapped policy output",
         ),
+        DeclareLaunchArgument(
+            "action_remap_from",
+            default_value="/leader_arm/joint_states",
+            description="Original action topic to remap (must match the contract)",
+        ),
+        DeclareLaunchArgument(
+            "action_remap_to",
+            default_value=[LaunchConfiguration("policy_remap_prefix"), LaunchConfiguration("action_remap_from")],
+            description="Remapped action topic for policy output (default: prefix + action_remap_from)",
+        ),
+        # --- HIL manager (defaults from hil_manager.yaml) ---
         DeclareLaunchArgument(
             "enable_reward_classifier",
             default_value=str(hil_cfg["enable_reward_classifier"]).lower(),
@@ -214,8 +236,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "default_episode_prompt",
             default_value=hil_cfg["default_episode_prompt"],
-            description="Task prompt used when an episode is started via the start_episode "
-            "teleop event.",
+            description="Task prompt used when an episode is started via the start_episode teleop event.",
         ),
         DeclareLaunchArgument(
             "feedback_rate_hz",
@@ -232,41 +253,43 @@ def generate_launch_description():
             default_value=str(hil_cfg["human_reward_negative"]),
             description="Reward value for human negative override",
         ),
-        # --- Reward classifier (defaults from hil_manager.yaml) ---
+        # --- Reward classifier (defaults from hil_manager.yaml; the installed
+        # file is the source of truth — a missing key is a config error, not
+        # something to paper over with a second default here) ---
         DeclareLaunchArgument(
             "reward_classifier_contract_path",
-            default_value=reward_cfg.get("contract_path", ""),
+            default_value=reward_cfg["contract_path"],
             description="Contract YAML for reward classifier (defaults to contract_path)",
         ),
         DeclareLaunchArgument(
             "reward_classifier_pretrained_name_or_path",
-            default_value=reward_cfg.get("pretrained_name_or_path", ""),
+            default_value=reward_cfg["pretrained_name_or_path"],
             description="Path to trained reward classifier model",
         ),
         DeclareLaunchArgument(
             "reward_classifier_policy_type",
-            default_value=reward_cfg.get("policy_type", "reward_classifier"),
+            default_value=reward_cfg["policy_type"],
             description="Policy type for reward classifier model",
         ),
         DeclareLaunchArgument(
             "reward_classifier_server_address",
-            default_value=reward_cfg.get("server_address", "127.0.0.1:8081"),
+            default_value=reward_cfg["server_address"],
             description="Reward classifier policy server address (host:port)",
-        ),
-        DeclareLaunchArgument(
-            "reward_remap_from",
-            default_value="/reward",
-            description="Original reward topic to remap (from contract rewards section)",
-        ),
-        DeclareLaunchArgument(
-            "reward_remap_to",
-            default_value="/hil/reward/reward",
-            description="Remapped reward topic for classifier output",
         ),
         DeclareLaunchArgument(
             "reward_remap_prefix",
             default_value=hil_cfg["reward_remap_prefix"],
             description="Topic prefix for remapped reward classifier output",
+        ),
+        DeclareLaunchArgument(
+            "reward_remap_from",
+            default_value="/reward",
+            description="Original reward topic to remap (must match the contract rewards section)",
+        ),
+        DeclareLaunchArgument(
+            "reward_remap_to",
+            default_value=[LaunchConfiguration("reward_remap_prefix"), LaunchConfiguration("reward_remap_from")],
+            description="Remapped reward topic for classifier output (default: prefix + reward_remap_from)",
         ),
         # --- Episode recorder (defaults from episode_recorder.yaml) ---
         DeclareLaunchArgument(
@@ -291,6 +314,12 @@ def generate_launch_description():
     # ==================================================================
     # Remaps action output so HIL manager can mux between policy and teleop.
 
+    # Base parameters are the MERGED dicts, not the node's params-file path:
+    # a params file's bare top-level `policy_runner:` key only matches the
+    # root-namespace node, so it is silently inert for the namespaced HIL
+    # nodes — every YAML key not re-threaded as a launch arg (e.g.
+    # server_startup_timeout_sec) never arrived. A dict applies
+    # unconditionally; the launch-arg dict layered after it still wins.
     robot_policy_node = LifecycleNode(
         package="rosetta",
         executable="policy_runner_node",
@@ -302,7 +331,7 @@ def generate_launch_description():
             (LaunchConfiguration("action_remap_from"), LaunchConfiguration("action_remap_to")),
         ],
         parameters=[
-            default_rosetta_params,
+            client_cfg,
             {
                 "contract_path": LaunchConfiguration("contract_path"),
                 "pretrained_name_or_path": LaunchConfiguration("pretrained_name_or_path"),
@@ -349,7 +378,7 @@ def generate_launch_description():
             (LaunchConfiguration("reward_remap_from"), LaunchConfiguration("reward_remap_to")),
         ],
         parameters=[
-            default_rosetta_params,
+            reward_cfg,
             {
                 "contract_path": reward_contract,
                 "pretrained_name_or_path": LaunchConfiguration("reward_classifier_pretrained_name_or_path"),
@@ -381,7 +410,7 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         parameters=[
-            default_recorder_params,
+            recorder_cfg,
             {
                 "contract_path": LaunchConfiguration("contract_path"),
                 "bag_base_dir": LaunchConfiguration("bag_base_dir"),
@@ -405,6 +434,10 @@ def generate_launch_description():
         output="screen",
         emulate_tty=True,
         parameters=[
+            # hil_cfg as base delivers EVERY hil_manager-section key (the
+            # hand-copied allowlist this replaces silently dropped
+            # default_max_duration and anything added later).
+            hil_cfg,
             {
                 "contract_path": LaunchConfiguration("contract_path"),
                 "enable_reward_classifier": LaunchConfiguration("enable_reward_classifier"),
@@ -416,9 +449,6 @@ def generate_launch_description():
                 "human_reward_positive": LaunchConfiguration("human_reward_positive"),
                 "human_reward_negative": LaunchConfiguration("human_reward_negative"),
                 "feedback_rate_hz": LaunchConfiguration("feedback_rate_hz"),
-                "policy_action_name": hil_cfg["policy_action_name"],
-                "reward_classifier_action_name": hil_cfg["reward_classifier_action_name"],
-                "recorder_action_name": hil_cfg["recorder_action_name"],
             },
         ],
         arguments=["--ros-args", "--log-level", LaunchConfiguration("log_level")],
@@ -427,56 +457,13 @@ def generate_launch_description():
     # ==================================================================
     # Lifecycle auto-configure / auto-activate
     # ==================================================================
-    # Chain: process start -> configure -> activate for each node
-
     # reward_classifier_node is conditional, but that's safe here: neither
     # OnProcessStart nor OnStateTransition ever fires for an unlaunched node.
-    nodes = [
-        robot_policy_node,
-        episode_recorder_node,
-        hil_manager_node,
-        reward_classifier_node,
+    lifecycle_events = [
+        handler
+        for node in (robot_policy_node, episode_recorder_node, hil_manager_node, reward_classifier_node)
+        for handler in autostart_handlers(node)
     ]
-
-    lifecycle_events = []
-
-    for node in nodes:
-        configure_event = EmitEvent(
-            event=ChangeState(
-                lifecycle_node_matcher=matches_action(node),
-                transition_id=Transition.TRANSITION_CONFIGURE,
-            ),
-            condition=IfCondition(EqualsSubstitution(LaunchConfiguration("configure"), "true")),
-        )
-
-        activate_event = EmitEvent(
-            event=ChangeState(
-                lifecycle_node_matcher=matches_action(node),
-                transition_id=Transition.TRANSITION_ACTIVATE,
-            ),
-            condition=IfCondition(EqualsSubstitution(LaunchConfiguration("activate"), "true")),
-        )
-
-        lifecycle_events.append(
-            RegisterEventHandler(
-                OnProcessStart(
-                    target_action=node,
-                    on_start=[configure_event],
-                )
-            )
-        )
-        # Activate only once configure actually finished (node reached
-        # INACTIVE) — chaining on the EmitEvent action completing would race
-        # the transition and could request activate mid-configure.
-        lifecycle_events.append(
-            RegisterEventHandler(
-                OnStateTransition(
-                    target_lifecycle_node=node,
-                    goal_state="inactive",
-                    entities=[activate_event],
-                )
-            )
-        )
 
     # ==================================================================
     # Assemble launch description
@@ -485,6 +472,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             *launch_args,
+            OpaqueFunction(function=_validate_remaps),
             robot_policy_node,
             reward_classifier_node,
             episode_recorder_node,

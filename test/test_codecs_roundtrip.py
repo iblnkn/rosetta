@@ -25,6 +25,7 @@ a round-trip case -- closing the historical 1-of-N gap for good.
 
 import numpy as np
 import pytest
+from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import (
     iter_action_specs,
@@ -267,16 +268,15 @@ actions:
     ],
 )
 def test_selector_encoders_require_select(tmp_path, msg_type):
-    # select declares which field each value lands in; a select-less
-    # multi-field action has no defensible default. (The encoder raises before
-    # message construction, but contract load introspects the type.)
+    # select declares which field each value lands in; a select-less channel
+    # of a selector-driven type fails at CONTRACT LOAD (requires_select
+    # registration), not at first publish.
     try:
         get_message(msg_type)
     except Exception:
         pytest.skip(f"{msg_type} message package unavailable")
-    spec = _selectless_action_spec(tmp_path, msg_type)
-    with pytest.raises(ValueError, match="requires select"):
-        encode_value([0.5], spec)
+    with pytest.raises(ContractValidationError, match="add 'select:'"):
+        _selectless_action_spec(tmp_path, msg_type)
 
 
 def test_scalar_encoder_rejects_multiwide_spec(tmp_path):

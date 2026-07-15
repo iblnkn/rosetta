@@ -48,17 +48,11 @@ Usage:
 import os
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import DeclareLaunchArgument, EmitEvent, OpaqueFunction, RegisterEventHandler
-from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart
-from launch.events import matches_action
-from launch.substitutions import EqualsSubstitution, LaunchConfiguration
-from launch_ros.actions import LifecycleNode
-from launch_ros.event_handlers import OnStateTransition
-from launch_ros.events.lifecycle import ChangeState
-from lifecycle_msgs.msg import Transition
-
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import LifecycleNode
+from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config
 
 
 def launch_setup(context, *args, **kwargs):
@@ -67,35 +61,26 @@ def launch_setup(context, *args, **kwargs):
     params_file = LaunchConfiguration("params_file").perform(context)
     contract_path = LaunchConfiguration("contract_path").perform(context)
     pretrained_name_or_path = LaunchConfiguration("pretrained_name_or_path").perform(context)
+    policy_type = LaunchConfiguration("policy_type").perform(context)
     server_address = LaunchConfiguration("server_address").perform(context)
     launch_local_server = LaunchConfiguration("launch_local_server").perform(context)
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
     log_level = LaunchConfiguration("log_level").perform(context)
 
-    # Build parameters list
-    parameters = [params_file]  # Load YAML first
-
-    # Build override dict with only non-empty values
-    overrides = {"contract_path": contract_path}  # Always override contract
-
-    if pretrained_name_or_path:  # Only add if non-empty
+    # YAML first; overrides carry only the non-empty launch args (empty =
+    # keep the params-file value).
+    overrides = {"contract_path": contract_path}
+    if pretrained_name_or_path:
         overrides["pretrained_name_or_path"] = pretrained_name_or_path
-
-    if server_address:  # Only add if non-empty
+    if policy_type:
+        overrides["policy_type"] = policy_type
+    if server_address:
         overrides["server_address"] = server_address
+    if launch_local_server:
+        overrides["launch_local_server"] = typed_config(context, "launch_local_server", bool)
+    if use_sim_time:
+        overrides["use_sim_time"] = typed_config(context, "use_sim_time", bool)
 
-    if launch_local_server:  # Only add if non-empty
-        # Convert string to boolean
-        overrides["launch_local_server"] = launch_local_server.lower() in ("true", "1", "yes")
-
-    if use_sim_time:  # Only add if non-empty
-        # Convert string to boolean
-        overrides["use_sim_time"] = use_sim_time.lower() in ("true", "1", "yes")
-
-    if overrides:
-        parameters.append(overrides)
-
-    # Create the lifecycle node
     policy_runner_node = LifecycleNode(
         package="rosetta",
         executable="policy_runner_node",
@@ -103,49 +88,11 @@ def launch_setup(context, *args, **kwargs):
         namespace="",
         output="screen",
         emulate_tty=True,
-        parameters=parameters,
+        parameters=[params_file, overrides],
         arguments=["--ros-args", "--log-level", log_level],
     )
 
-    # Auto-configure event (triggered on process start)
-    configure_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_action(policy_runner_node),
-            transition_id=Transition.TRANSITION_CONFIGURE,
-        ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("configure"), "true")),
-    )
-
-    # Auto-activate event (triggered after configure completes)
-    activate_event = EmitEvent(
-        event=ChangeState(
-            lifecycle_node_matcher=matches_action(policy_runner_node),
-            transition_id=Transition.TRANSITION_ACTIVATE,
-        ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("activate"), "true")),
-    )
-
-    # Chain events: process start -> configure -> activate
-    configure_event_handler = RegisterEventHandler(
-        OnProcessStart(
-            target_action=policy_runner_node,
-            on_start=[configure_event],
-        )
-    )
-
-    activate_event_handler = RegisterEventHandler(
-        OnStateTransition(
-            target_lifecycle_node=policy_runner_node,
-            goal_state="inactive",  # trigger when node reaches INACTIVE (configure finished)
-            entities=[activate_event],
-        )
-    )
-
-    return [
-        policy_runner_node,
-        configure_event_handler,
-        activate_event_handler,
-    ]
+    return [policy_runner_node, *autostart_handlers(policy_runner_node)]
 
 
 def generate_launch_description():
@@ -174,6 +121,11 @@ def generate_launch_description():
             "pretrained_name_or_path",
             default_value="",  # Empty = use value from params file
             description="Path or HF repo ID of trained policy (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "policy_type",
+            default_value="",  # Empty = use value from params file
+            description="Policy architecture, must match the checkpoint (empty = use params file value)",
         ),
         # Server configuration
         DeclareLaunchArgument(

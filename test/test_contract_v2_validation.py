@@ -21,7 +21,6 @@ pins one rule.
 """
 
 import pytest
-
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 
@@ -351,3 +350,468 @@ teleop:
 """
     )
     _expect_error(tmp_path, text, "inputs")
+
+
+def test_duplicate_teleop_target_rejected(tmp_path):
+    """Two inputs driving one action topic would collide on the synthesized
+    teleop.input.<key> recording column."""
+    text = (
+        BASE
+        + """
+teleop:
+  input:
+    - target: /cmd
+      channel: {topic: /leader_a, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+    - target: /cmd
+      channel: {topic: /leader_b, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+"""
+    )
+    _expect_error(tmp_path, text, "duplicate target")
+
+
+def test_duplicate_teleop_feedback_origin_rejected(tmp_path):
+    text = (
+        BASE
+        + """
+teleop:
+  feedback:
+    - origin: /joint_states
+      channel: {topic: /fb_a, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+    - origin: /joint_states
+      channel: {topic: /fb_b, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+"""
+    )
+    _expect_error(tmp_path, text, "duplicate origin")
+
+
+def test_teleop_target_owned_by_multiple_entries_rejected(tmp_path):
+    """A topic shared by two action entries makes the owning recording column
+    ambiguous, so a teleop target may not reference it."""
+    text = (
+        BASE
+        + """
+  action.alt:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [velocity.j1]
+teleop:
+  input:
+    - target: /cmd
+      channel: {topic: /leader, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+"""
+    )
+    _expect_error(tmp_path, text, "belongs to multiple action entries")
+
+
+def test_unknown_teleop_event_name_rejected(tmp_path):
+    """A typo'd event name would otherwise load fine and be a button that
+    silently does nothing."""
+    text = (
+        BASE
+        + """
+teleop:
+  events:
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
+    select: {succes: buttons.0}
+"""
+    )
+    _expect_error(tmp_path, text, "unknown event name")
+
+
+def test_declared_key_colliding_with_synthesized_teleop_key_rejected(tmp_path):
+    """specs.py synthesizes teleop.input.<owning key> recording columns; a
+    user-declared key of the same name would silently merge with it."""
+    text = (
+        BASE
+        + """
+signals:
+  teleop.input.action:
+    channel: {topic: /sig, type: std_msgs/msg/Float64, dtype: float64}
+    align: {strategy: hold, timeline: receive}
+teleop:
+  input:
+    - target: /cmd
+      channel: {topic: /leader, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [position.j1]
+"""
+    )
+    _expect_error(tmp_path, text, "synthesized teleop recording key")
+
+
+def test_null_section_rejected(tmp_path):
+    _expect_error(tmp_path, BASE + "signals:\n", "present but null")
+
+
+def test_null_teleop_role_rejected(tmp_path):
+    _expect_error(tmp_path, BASE + "teleop:\n  input:\n", "present but null")
+
+
+def test_image_key_in_actions_rejected(tmp_path):
+    text = (
+        BASE
+        + """
+  observation.images.x:
+    channel: {topic: /cmd2, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+"""
+    )
+    _expect_error(tmp_path, text, "observations")
+
+
+# ---------------------------------------------------------------------------
+# YAML strictness: duplicate keys are load errors; anchors/aliases still work
+# ---------------------------------------------------------------------------
+
+_DUP_FRAME_KEY = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /a, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+  observation.state:
+    channel: {topic: /b, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+actions:
+  action:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+"""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(BASE + "fps: 31\n", id="top-level"),
+        pytest.param(_DUP_FRAME_KEY, id="frame-key"),
+        pytest.param(
+            BASE.replace("{topic: /joint_states, type", "{topic: /joint_states, topic: /x, type", 1), id="channel-block"
+        ),
+    ],
+)
+def test_duplicate_mapping_key_rejected(text, tmp_path):
+    """PyYAML silently keeps the last duplicate key — an entire frame entry
+    could vanish from a copy-paste edit. The strict loader rejects it."""
+    _expect_error(tmp_path, text, "duplicate key")
+
+
+def test_qos_anchor_alias_supported_and_not_shared(tmp_path):
+    """Anchors/aliases (the x-qos convention) still work under the strict
+    loader, and aliased qos blocks are copied per channel, not shared."""
+    text = "x-qos:\n  state: &state_qos {depth: 7}\n" + BASE.replace(
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, qos: *state_qos}",
+    ).replace(
+        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState, qos: *state_qos}",
+    )
+    c = _load(tmp_path, text)
+    obs_qos = c.observations[0].sources[0].channel.qos
+    act_qos = c.actions[0].sources[0].channel.qos
+    assert obs_qos == act_qos == {"depth": 7}
+    assert obs_qos is not act_qos
+
+
+# ---------------------------------------------------------------------------
+# Header scalars: strict integers, non-empty strings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["3.9", "true", "'30'", "[30]"])
+def test_fps_rejects_non_integers(bad, tmp_path):
+    _expect_error(tmp_path, BASE.replace("fps: 30", f"fps: {bad}"), "integer")
+
+
+def test_fps_accepts_integral_float(tmp_path):
+    assert _load(tmp_path, BASE.replace("fps: 30", "fps: 30.0")).fps == 30
+
+
+@pytest.mark.parametrize("bad", ["12.5", "true", "abc", "[5]"])
+def test_tolerance_ms_rejects_non_integers(bad, tmp_path):
+    text = BASE.replace(
+        "{strategy: hold, timeline: receive}", f"{{strategy: asof, timeline: receive, tolerance_ms: {bad}}}", 1
+    )
+    _expect_error(tmp_path, text, "integer")
+
+
+@pytest.mark.parametrize("bad", ["0", "''", "'  '", "false"])
+def test_falsy_robot_type_rejected_with_clear_wording(bad, tmp_path):
+    _expect_error(tmp_path, BASE.replace("robot_type: test", f"robot_type: {bad}"), "non-empty")
+
+
+# ---------------------------------------------------------------------------
+# Channel field hygiene
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["'(-1,)f4'", "','"])
+def test_pathological_dtype_strings_rejected_cleanly(bad, tmp_path):
+    """np.dtype raises ValueError/SyntaxError (not just TypeError) for these;
+    they must surface as ContractValidationError, not a raw exception."""
+    text = BASE.replace("type: sensor_msgs/msg/JointState}", f"type: sensor_msgs/msg/JointState, dtype: {bad}}}", 1)
+    _expect_error(tmp_path, text, "dtype")
+
+
+def test_non_string_topic_rejected(tmp_path):
+    # No coercion: `topic: 123` is a typo'd contract, not a string in disguise.
+    _expect_error(tmp_path, BASE.replace("topic: /cmd,", "topic: 123,", 1), "'topic'")
+
+
+def test_empty_type_rejected(tmp_path):
+    _expect_error(tmp_path, BASE.replace("type: sensor_msgs/msg/JointState}", "type: ''}", 1), "'type'")
+
+
+def test_non_mapping_qos_rejected(tmp_path):
+    text = BASE.replace(
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, qos: 5}",
+    )
+    _expect_error(tmp_path, text, "qos.*mapping")
+
+
+def test_qos_typo_value_rejected_at_load(tmp_path):
+    # Interface-attested check: a typo'd policy value must die at load, not
+    # silently become the default policy (best-effort camera vs reliable sub
+    # = zero messages, invisibly).
+    pytest.importorskip("rclpy")
+    text = BASE.replace(
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, qos: {reliability: best-effort}}",
+    )
+    _expect_error(tmp_path, text, r"observation\.state\.qos.*Invalid qos reliability")
+
+
+def test_qos_unknown_key_rejected_at_load(tmp_path):
+    pytest.importorskip("rclpy")
+    text = BASE.replace(
+        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState, qos: {depht: 5}}",
+    )
+    _expect_error(tmp_path, text, "Unknown qos key")
+
+
+# ---------------------------------------------------------------------------
+# Codec paths: validated (and imported) at load
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "match"),
+    [
+        pytest.param("nofunc", "Expected format", id="no-colon"),
+        pytest.param("':f'", "Expected format", id="empty-module"),
+        pytest.param("'m:'", "Expected format", id="empty-function"),
+        pytest.param("no_such_module_xyz:f", "Cannot import", id="unimportable-module"),
+        pytest.param("json:nope", "not found", id="missing-attribute"),
+    ],
+)
+def test_invalid_codec_paths_rejected(path, match, tmp_path):
+    text = BASE.replace(
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
+        f"channel: {{topic: /joint_states, type: sensor_msgs/msg/JointState, decoder: {path}}}",
+    )
+    _expect_error(tmp_path, text, match)
+
+
+def test_whitespace_codec_path_treated_as_absent(tmp_path):
+    text = BASE.replace(
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
+        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, decoder: '   '}",
+    )
+    assert _load(tmp_path, text).observations[0].sources[0].channel.decoder is None
+
+
+# ---------------------------------------------------------------------------
+# apply: strict item shapes, names validated against the registry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("apply_yaml", "match"),
+    [
+        pytest.param("apply: {rad2deg: null}", "must be a list", id="non-list"),
+        pytest.param("apply: [{a: 1, b: 2}]", "single-key", id="multi-key-mapping"),
+        pytest.param("apply: [3]", "string or single-key", id="bad-item-type"),
+        pytest.param("apply: [warp_drive]", "Unknown operator", id="unknown-operator"),
+    ],
+)
+def test_malformed_apply_rejected(apply_yaml, match, tmp_path):
+    text = BASE.replace(
+        "    select: [position.j1]\nactions:", f"    select: [position.j1]\n    {apply_yaml}\nactions:", 1
+    )
+    _expect_error(tmp_path, text, match)
+
+
+# ---------------------------------------------------------------------------
+# Empty-collection policy: explicitly present but empty is an error everywhere
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("extra", "match"),
+    [
+        pytest.param("signals: {}\n", "present but empty", id="frame-section"),
+        pytest.param("tasks: {}\n", "present but empty", id="tasks"),
+        pytest.param("adjunct: []\n", "present but empty", id="adjunct"),
+        pytest.param("teleop: {}\n", "present but empty", id="teleop-mapping"),
+        pytest.param("teleop: []\n", "must be a mapping", id="teleop-list"),
+        pytest.param("teleop:\n  input: []\n", "empty source list", id="teleop-input"),
+        pytest.param("teleop:\n  feedback: []\n", "empty source list", id="teleop-feedback"),
+    ],
+)
+def test_present_but_empty_sections_rejected(extra, match, tmp_path):
+    _expect_error(tmp_path, BASE + extra, match)
+
+
+def test_empty_select_rejected(tmp_path):
+    _expect_error(tmp_path, BASE.replace("select: [position.j1]", "select: []", 1), "present but empty")
+
+
+def test_non_string_select_entry_rejected(tmp_path):
+    _expect_error(tmp_path, BASE.replace("select: [position.j1]", "select: [1]", 1), "string field path")
+
+
+def test_duplicate_select_rejected(tmp_path):
+    # Duplicates silently corrupt: the decoder returns the value twice while
+    # the encoder's by-name maps last-win, so widths disagree end to end.
+    _expect_error(
+        tmp_path,
+        BASE.replace("select: [position.j1]", "select: [position.j1, position.j1]", 1),
+        "duplicates",
+    )
+
+
+def test_empty_events_select_rejected(tmp_path):
+    text = (
+        BASE
+        + """
+teleop:
+  events:
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
+    select: {}
+"""
+    )
+    _expect_error(tmp_path, text, "present but empty")
+
+
+# ---------------------------------------------------------------------------
+# Loader I/O branches
+# ---------------------------------------------------------------------------
+
+
+def test_missing_file_raises_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_contract(tmp_path / "nope.yaml")
+
+
+def test_unparseable_yaml_rejected(tmp_path):
+    _expect_error(tmp_path, "{:", "Invalid YAML")
+
+
+def test_non_mapping_document_rejected(tmp_path):
+    _expect_error(tmp_path, "- a\n- b\n", "must be a YAML mapping")
+
+
+# ---------------------------------------------------------------------------
+# Timelines are open names: selected verbatim, no case folding
+# ---------------------------------------------------------------------------
+
+
+def test_timeline_not_case_folded(tmp_path):
+    pytest.importorskip("rosidl_runtime_py")
+    _expect_error(tmp_path, BASE.replace("timeline: receive}", "timeline: Receive}", 1), "Receive")
+
+
+# ---------------------------------------------------------------------------
+# Interface-attested checks: bare channels validated too; deferred without ROS
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param("tasks:\n  task:\n    channel: {topic: /p, type: std_msgs/msg/NoSuchThing}\n", id="tasks"),
+        pytest.param("adjunct:\n  - channel: {topic: /d, type: std_msgs/msg/NoSuchThing}\n", id="adjunct"),
+        pytest.param(
+            "teleop:\n  events:\n    channel: {topic: /joy, type: std_msgs/msg/NoSuchThing}\n"
+            "    select: {is_intervention: buttons.0}\n",
+            id="teleop-events",
+        ),
+    ],
+)
+def test_bare_channel_unknown_type_rejected_at_load(extra, tmp_path):
+    """Bare channels (no align) used to skip type validation entirely,
+    deferring a typo'd type to subscription time in on_configure."""
+    pytest.importorskip("rosidl_runtime_py")
+    _expect_error(tmp_path, BASE + extra, "NoSuchThing")
+
+
+def test_interface_checks_defer_without_interface(tmp_path, monkeypatch):
+    """In a non-ROS tooling env the interface can't attest types/timelines;
+    those checks defer to runtime instead of failing the load."""
+    import rosetta.contract.schema as schema_mod
+
+    monkeypatch.setattr(schema_mod, "_load_interface_capability", lambda name: None)
+    c = _load(tmp_path, BASE + "tasks:\n  task:\n    channel: {topic: /p, type: std_msgs/msg/NoSuchThing}\n")
+    assert c.tasks[0].channel.type == "std_msgs/msg/NoSuchThing"
+
+
+# ---------------------------------------------------------------------------
+# Eager validation: spec-resolution rules fire at load, not first iteration
+# ---------------------------------------------------------------------------
+
+
+def test_image_without_resize_rejected_at_load(tmp_path):
+    text = BASE.replace(
+        "actions:",
+        """  observation.images.cam:
+    channel: {topic: /cam, type: sensor_msgs/msg/Image}
+    align: {strategy: hold, timeline: receive}
+actions:""",
+        1,
+    )
+    _expect_error(tmp_path, text, "output geometry")
+
+
+def test_undecodable_observation_type_rejected_at_load(tmp_path):
+    """sensor_msgs/msg/Temperature is a real type with no registered decoder."""
+    text = BASE.replace("type: sensor_msgs/msg/JointState}", "type: sensor_msgs/msg/Temperature}", 1).replace(
+        "select: [position.j1]\nactions:", "select: [temperature]\nactions:", 1
+    )
+    _expect_error(tmp_path, text, "No decoder registered")
+
+
+def test_unencodable_action_type_rejected_at_load(tmp_path):
+    """sensor_msgs/msg/Image decodes but has no encoder; as an action it must
+    fail at load, not first publish."""
+    old_action = (
+        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState}\n"
+        "    align: {strategy: hold, timeline: receive}\n"
+        "    select: [position.j1]"
+    )
+    new_action = "channel: {topic: /cmd, type: sensor_msgs/msg/Image}\n    align: {strategy: hold, timeline: receive}"
+    _expect_error(tmp_path, BASE.replace(old_action, new_action), "No encoder registered")
+
+
+def test_frame_key_shared_across_sections_rejected(tmp_path):
+    """observations.foo + signals.foo would silently merge into one recording
+    column while narrower views (iter_policy_specs) disagree about its
+    contents; a frame key must belong to exactly one section."""
+    text = (
+        BASE
+        + """
+signals:
+  observation.state:
+    channel: {topic: /battery, type: std_msgs/msg/Float32, dtype: float32}
+    align: {strategy: hold, timeline: receive}
+"""
+    )
+    _expect_error(tmp_path, text, "exactly one section")

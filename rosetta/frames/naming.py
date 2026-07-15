@@ -16,28 +16,18 @@
 Frame-key naming helpers shared across the framework adapters.
 
 Frame dicts are keyed by contract keys (``observation.images.cam``,
-``observation.state``, ``action``, ...). These helpers classify and sanitize
-those keys so every framework adapter derives the same names instead of
-re-deriving them in parallel.
+``observation.state``, ``action``, ...). These helpers sanitize those keys so
+every framework adapter derives the same names instead of re-deriving them in
+parallel. A key's ROLE (state vs action) is never taken from its spelling. It
+comes from the spec's type (``KeyLayout.is_action``).
 """
 
 import re
 
-
-def classify_key(key: str) -> str:
-    """Classify a contract key by prefix.
-
-        observation.images.*  -> 'image'
-        action*               -> 'action'
-        everything else       -> 'state'
-
-    Shared by the framework adapters so they don't each re-derive it.
-    """
-    if key.startswith("observation.images."):
-        return "image"
-    if key.startswith("action"):
-        return "action"
-    return "state"
+#: Contract-key prefix marking an image stream. Single source of truth: schema
+#: validation, spec resolution, and the adapters all test against this instead
+#: of re-deriving the literal.
+IMAGE_KEY_PREFIX = "observation.images."
 
 
 def sanitize_field_name(name: str) -> str:
@@ -52,4 +42,4 @@ def camera_short_name(key: str) -> str:
     Sanitized because adapters embed it in filenames (e.g. WebDataset tar
     members, where a dot would split the sample key).
     """
-    return sanitize_field_name(key.removeprefix("observation.images."))
+    return sanitize_field_name(key.removeprefix(IMAGE_KEY_PREFIX))

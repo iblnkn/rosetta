@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ROS2 lifecycle nodes (recorder, HIL manager, policy client, keyboard)."""
+"""ROS2 nodes: episode recorder, HIL manager, policy runner (lifecycle), plus the keyboard controller (plain node)."""

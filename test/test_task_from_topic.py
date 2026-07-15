@@ -28,13 +28,12 @@ pytest.importorskip("rosbag2_py")
 import rosbag2_py
 import yaml
 from rclpy.serialization import serialize_message
-from sensor_msgs.msg import JointState
-from std_msgs.msg import String
-
-import rosetta.robots.ros2.decoders  # noqa: F401  register codecs
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from rosetta.robots.ros2.offline.bag_frames import BAG_METADATA_KEY, BAG_PROMPT_KEY, iter_bag_frames
+from rosetta.robots.ros2.bag_metadata import BAG_METADATA_KEY, BAG_PROMPT_KEY
+from rosetta.robots.ros2.offline.bag_frames import iter_bag_frames
+from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 
 FPS = 10
 STEP_NS = int(1e9 / FPS)

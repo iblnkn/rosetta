@@ -32,7 +32,12 @@ import numpy as np
 
 
 def decode_battery(msg, spec):
-    """std_msgs/Float64MultiArray -> the pack cells we care about (first 4)."""
+    """std_msgs/Float64MultiArray -> the pack cells we care about (first 4).
+
+    The entry's ``select`` labels these four values and declares the stream's
+    width; a decoder must return exactly ``len(spec.names)`` values (checked
+    by decode_value).
+    """
     del spec
     return np.asarray(msg.data[:4], dtype=np.float32)
 

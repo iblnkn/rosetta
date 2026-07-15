@@ -19,15 +19,14 @@ contract-only, both together, and neither (no-op, no file required).
 """
 
 import yaml
-
-from rosetta.robots.ros2.nodes.episode_recorder_node import (
+from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_HASH_KEY,
     BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,
     BAG_METADATA_KEY,
     BAG_PROMPT_KEY,
-    EpisodeRecorderNode,
 )
+from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 
 
 class _FakeLogger:

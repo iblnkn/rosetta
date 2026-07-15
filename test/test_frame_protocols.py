@@ -26,7 +26,7 @@ The architecture promises two properties this file pins down:
 import subprocess
 import sys
 
-from rosetta.frames.protocols import FrameIO, FrameSink, FrameSource
+from rosetta.frames.protocols import FrameIO
 
 NO_RCLPY_PROBE = """
 import sys
@@ -54,8 +54,6 @@ def test_topic_bridge_satisfies_frame_stream():
     from rosetta.robots.ros2.topic_bridge import TopicBridge
 
     bridge = TopicBridge([], [], fps=10)
-    assert isinstance(bridge, FrameSource)
-    assert isinstance(bridge, FrameSink)
     assert isinstance(bridge, FrameIO)
 
 
