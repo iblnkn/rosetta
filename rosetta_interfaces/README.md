@@ -8,8 +8,8 @@ actions, rewards) is plain ROS2 topics defined by the contract YAML.
 | Interface | Kind | Server | Purpose |
 |-----------|------|--------|---------|
 | `RecordEpisode` | action | `episode_recorder` | Record a demonstration to a rosbag |
-| `RunPolicy` | action | `rosetta_client` | Run policy (or classifier) inference |
-| `ManageEpisode` | action | `rosetta_hil_manager` | Orchestrate a human-in-the-loop episode |
+| `RunPolicy` | action | `policy_runner` | Run policy (or classifier) inference |
+| `ManageEpisode` | action | `hil_manager` | Orchestrate a human-in-the-loop episode |
 | `StartHILEpisode` | service | `hil_manager` | Start a HIL episode (returns once started) |
 | `StartRecording` | service | `episode_recorder` | Lightweight start of recording |
 
@@ -106,11 +106,11 @@ int32 messages_written              # Messages recorded so far
 Start a HIL episode and return once it has started (the episode itself runs
 asynchronously — a synchronous response would hold an executor thread for the
 whole episode). Results (bag path, final reward, termination reason) come from
-the `ManageEpisode` action result or the node log; stop via the `stop_episode`
-Trigger service.
+the `ManageEpisode` action result or the node log; stop via the
+`/hil_manager/stop_episode` Trigger service.
 
 ```bash
-ros2 service call /start_episode \
+ros2 service call /hil_manager/start_episode \
     rosetta_interfaces/srv/StartHILEpisode \
     "{prompt: 'pick up the red block', max_duration_s: 60.0, success_reward_threshold: 1.0}"
 ```
