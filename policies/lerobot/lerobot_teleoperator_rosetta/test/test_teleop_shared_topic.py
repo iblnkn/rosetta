@@ -25,11 +25,14 @@ from pathlib import Path
 
 import pytest
 import rclpy
-from sensor_msgs.msg import JointState
-
 from lerobot_teleoperator_rosetta.config_rosetta_teleop import RosettaTeleopConfig
 from lerobot_teleoperator_rosetta.rosetta_teleop import RosettaTeleop
+from sensor_msgs.msg import JointState
 
+# Two inputs read the SAME leader topic (the buffer-clobbering regression this
+# file pins) while driving two different actions — each action topic may be
+# driven by at most one teleop input, so the arm/gripper split is the legal
+# shape for one leader device feeding two commands.
 CONTRACT_YAML = """
 robot_type: test
 robot_interface: ros2
@@ -40,16 +43,22 @@ observations:
     align: {strategy: hold, timeline: receive}
     select: [position.j1]
 actions:
-  action:
-    channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
+  action.arm:
+    channel: {topic: /arm/cmd, type: sensor_msgs/msg/JointState}
     align: {strategy: hold, timeline: receive}
-    select: [position.j1]
+    select: [position.j1, position.j2]
+  action.grip:
+    channel: {topic: /grip/cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.grip]
 teleop:
   input:
-    - channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
+    - target: /arm/cmd
+      channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
       align: {strategy: hold, timeline: receive}
       select: [position.j1, position.j2]
-    - channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
+    - target: /grip/cmd
+      channel: {topic: /leader/joint_states, type: sensor_msgs/msg/JointState}
       align: {strategy: hold, timeline: receive}
       select: [position.grip]
 """
