@@ -42,7 +42,7 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.node_host import NodeHost
-from rosetta.robots.ros2.ros2_utils import qos_profile_from_dict, require_transition_success
+from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict, require_transition_success
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
 from rosidl_runtime_py.utilities import get_message
 
@@ -133,10 +133,11 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
         A stream with no data yet is omitted, not zero-filled: a fake zero
         teleop value would command motion. ``sample_values`` returns one entry
         per input spec in declaration order, so it lines up with ``input_specs``
-        position by position.
+        position by position (the bridge is constructed from this same list;
+        ``strict=True`` asserts that invariant).
         """
         action: dict[str, Any] = {}
-        for spec, value in zip(self._config.input_specs, self.bridge.sample_values(), strict=False):
+        for spec, value in zip(self._config.input_specs, self.bridge.sample_values(), strict=True):
             if value is None:
                 continue
             for i, name in enumerate(spec.namespaced_names):
