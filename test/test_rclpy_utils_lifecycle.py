@@ -17,7 +17,7 @@ state machine, shared by TopicBridge and the teleop node."""
 
 from types import SimpleNamespace
 
-from rosetta.robots.ros2.ros2_utils import (
+from rosetta.robots.ros2.rclpy_utils import (
     LIFECYCLE_CONFIGURED_LABELS,
     lifecycle_state_label,
 )

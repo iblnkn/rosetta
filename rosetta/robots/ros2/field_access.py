@@ -15,15 +15,15 @@
 """Dotted-selector resolution against ROS messages (get/set).
 
 Resolve a contract selector string (e.g. "position.elbow") against a ROS
-message. The dotted-selector *syntax* is the framework-agnostic contract
-convention (see rosetta.contract.schema); this is the ROS *interpretation* of
-it -- plain attribute walking (parallel-array messages like JointState have
-dedicated codecs instead). A non-ROS binding (protobuf, dict-backed
-dataset, ...) would resolve the same selector against its own message
-structure, so this lives in the ros2 adapter, not in core.
+message. The dotted-selector syntax is the framework-agnostic contract
+convention (see rosetta.contract.schema). This module is its ROS
+interpretation: plain attribute walking. Parallel-array messages like
+JointState are the exception and get dedicated codecs. A non-ROS binding
+(protobuf, dict-backed dataset) would resolve the same selector against its
+own message structure, so this lives in the ros2 adapter, not in core.
 
-Pure Python by design -- no rclpy/rosidl imports (numpy only). The codec
-modules (decoders/encoders) depend on this, and their ROS-less importability
+Pure Python by design, numpy only, no rclpy or rosidl imports. The codec
+modules (decoders/encoders) depend on this, so their ROS-less importability
 is what keeps contract loading free of a ROS environment.
 """
 
@@ -38,13 +38,10 @@ def dot_get(obj, path: str):
     """
     Resolve a dotted attribute path on a ROS message.
 
-    Example:
-    -------
-        dot_get(msg, "linear.x") -> msg.linear.x
+    Example: dot_get(msg, "linear.x") returns msg.linear.x
 
     Parallel-array messages (JointState, JointTrajectory, MultiDOF) have
     dedicated codecs and never route through here.
-
     """
     cur = obj
     for p in path.split("."):
@@ -56,15 +53,12 @@ def resolve_indexed(obj, path: str):
     """
     Resolve a dotted path where numeric segments index into sequences.
 
-    Example:
-    -------
-        resolve_indexed(msg, "buttons.5") -> msg.buttons[5]
+    Example: resolve_indexed(msg, "buttons.5") returns msg.buttons[5]
 
     Unlike :func:`dot_get`, a purely-numeric segment is a sequence index.
-    Used by teleop event selectors (Joy buttons/axes); lives here so the
+    Used by the HIL Joy event handler (buttons/axes). Lives here so the
     indexed-selector grammar has one home. Negative indices are rejected for
     the same reason as :func:`parse_joy_selector`.
-
     """
     cur = obj
     for p in path.split("."):
@@ -80,15 +74,10 @@ def resolve_indexed(obj, path: str):
 
 def dot_set(obj, path: str, value: float) -> None:
     """
-    Set a dotted attribute on a ROS message.
-
-    Example:
-    -------
-        dot_set(msg, "linear.x", 2.0) -> msg.linear.x = 2.0
+    Set a dotted attribute on a ROS message, coercing the value to float.
 
     Parallel-array messages (JointState, JointTrajectory, MultiDOF) have
     dedicated codecs and never route through here.
-
     """
     parts = path.split(".")
     cur = obj
@@ -177,8 +166,8 @@ def build_field_map(
     """
     Map selectors of a parallel-array message to fields (encode side).
 
-    Returns ``(field -> {name -> vector index}, first-occurrence name order)``
-    — the scatter plan every parallel-array encoder builds before filling the
+    Returns ``(field -> {name -> vector index}, first-occurrence name order)``,
+    the scatter plan every parallel-array encoder builds before filling the
     message's name list and per-field arrays.
     """
     field_to_names: dict[str, dict[str, int]] = {}

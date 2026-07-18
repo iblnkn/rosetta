@@ -64,7 +64,7 @@ from rosetta.robots.ros2.nodes.node_utils import (
     spin_lifecycle_node,
     wait_until,
 )
-from rosetta.robots.ros2.ros2_utils import qos_profile_from_dict
+from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 
 # ---------- Constants ----------

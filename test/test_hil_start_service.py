@@ -52,7 +52,7 @@ def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
 
     resp = _call(node)
     assert resp.accepted is True  # returned while the episode still runs
-    assert node._busy.busy
+    assert node.busy
 
     # Concurrent start while the episode runs is rejected.
     resp2 = _call(node)
@@ -60,7 +60,7 @@ def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
     assert "already busy" in resp2.message
 
     release.set()
-    assert wait_until(lambda: not node._busy.busy, timeout=5.0)
+    assert wait_until(lambda: not node.busy, timeout=5.0)
 
 
 def test_guard_released_when_episode_raises(node, monkeypatch):
@@ -73,7 +73,7 @@ def test_guard_released_when_episode_raises(node, monkeypatch):
     resp = _call(node)
     assert resp.accepted is True
     # The leak regression: the thread's finally must release the guard.
-    assert wait_until(lambda: not node._busy.busy, timeout=5.0)
+    assert wait_until(lambda: not node.busy, timeout=5.0)
 
 
 def test_inactive_node_rejects_without_claiming(node):
@@ -81,7 +81,7 @@ def test_inactive_node_rejects_without_claiming(node):
     resp = _call(node)
     assert resp.accepted is False
     assert "node not active" in resp.message
-    assert not node._busy.busy
+    assert not node.busy
 
 
 def _fields():

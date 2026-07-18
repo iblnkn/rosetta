@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-Bag frame source: backend-neutral frame production from rosbag2 recordings.
+Bag frame source: framework-neutral frame production from rosbag2 recordings.
 
-The offline side of the backend-neutral interface. It reads rosbag2 files,
+The offline counterpart to the live TopicBridge. It reads rosbag2 files,
 decodes and resamples them through the contract (the same StreamBuffer used by
 live inference, for train/inference parity), and yields frame dicts
 ({contract_key: np.ndarray | str, "is_first"/"is_last"/"is_terminal": (1,) bool,
@@ -166,8 +166,10 @@ def _sample_frame(
     return layout.assemble([buffer.sample(tick_ns) for _, buffer in entries])
 
 
-# Warmup ticks are skipped silently up to these bounds; beyond them the skip is
-# surfaced as a warning (late sensor, wrong topic, clock skew are all worth a look).
+# A completed warmup is always logged once. It escalates from info to warning
+# when the skipped tick count exceeds the larger of WARMUP_WARN_SECONDS worth of
+# frames or WARMUP_WARN_FRACTION of the whole bag. A long warmup points at a late
+# sensor, a wrong topic name, or clock skew, all worth a look.
 WARMUP_WARN_SECONDS = 1.0
 WARMUP_WARN_FRACTION = 0.1
 
@@ -348,7 +350,7 @@ def iter_bag_frames(
                     msg = deserialize_message(data, get_message(spec.source.channel.type))
                 ingest.ingest(msg, spec, buffer, i, receive_ns=bag_ns)
 
-    # Emit remaining frames
+    # Drain ticks past the last message.
     while tick_idx < n_ticks:
         frame = _try_emit()
         if frame is not None:

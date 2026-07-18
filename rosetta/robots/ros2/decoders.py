@@ -15,8 +15,8 @@
 """
 ROS message decoders for converting ROS messages to numpy arrays.
 
-Each decoder is self-contained and registered with @register_decoder.
-If you need to decode a message type that isn't here, add a new decoder.
+Register a new decoder with @register_decoder to support a message type
+that isn't handled here yet.
 
 Decoders declare their output dtype at registration time. This is the
 single source of truth for what LeRobot dtype the decoder produces.
@@ -161,12 +161,7 @@ def decode_ros_image(msg) -> np.ndarray:
 
 @register_decoder("sensor_msgs/msg/Image", dtype="video")
 def _dec_image(msg: Any, spec: StreamSpec) -> np.ndarray:
-    """
-    Decode sensor_msgs/Image to full-resolution HWC uint8 RGB.
-
-    Resizing is handled by the ``resize`` operator in the entry's ``apply`` pipeline,
-    not here.
-    """
+    """Decode sensor_msgs/Image to full-resolution HWC uint8 RGB."""
     _ = spec  # Encoding comes from the message itself; nothing to select.
     return decode_ros_image(msg)
 

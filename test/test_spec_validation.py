@@ -366,14 +366,15 @@ def test_single_teleop_input_gets_no_namespace():
 
 
 # ---------------------------------------------------------------------------
-# Camera short-name uniqueness (adapters key camera dicts by the sanitized name)
+# Camera keys: core keeps dotted names first-class, no flattened-name guard
 # ---------------------------------------------------------------------------
 
 
-def test_camera_short_name_collision_rejected():
-    """'cam.left' and 'cam_left' both sanitize to 'cam_left'; downstream camera
-    dicts are keyed by that name, so one camera would silently overwrite the
-    other (or cross-wire at deployment). Load-time error instead."""
+def test_core_accepts_flatten_colliding_camera_keys():
+    """'cam.left' and 'cam_left' collide only once flattened, which only a backend
+    whose sink needs flat identifiers does (vla_foundry/WebDataset). Core keeps
+    dotted names first-class and resolves both — the collision guard lives in that
+    backend now, not here."""
     c = _contract(
         observations=[
             _entry(
@@ -382,23 +383,6 @@ def test_camera_short_name_collision_rejected():
             ),
             _entry(
                 "observation.images.cam_left",
-                _source("/c2", "sensor_msgs/msg/Image", apply=[("resize", [4, 4])]),
-            ),
-        ]
-    )
-    with pytest.raises(ContractValidationError, match="cam_left"):
-        list(iter_observation_specs(c))
-
-
-def test_distinct_camera_names_pass():
-    c = _contract(
-        observations=[
-            _entry(
-                "observation.images.cam.left",
-                _source("/c1", "sensor_msgs/msg/Image", apply=[("resize", [4, 4])]),
-            ),
-            _entry(
-                "observation.images.cam.right",
                 _source("/c2", "sensor_msgs/msg/Image", apply=[("resize", [4, 4])]),
             ),
         ]

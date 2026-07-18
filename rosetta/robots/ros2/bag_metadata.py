@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bag metadata custom_data: the recorder/porter seam.
+"""Bag metadata custom_data helpers: the recorder/porter seam.
 
-The episode recorder writes the operator prompt and the embedded contract into
-rosbag2's metadata.yaml ``custom_data`` block; the bag porter reads them back.
-The key constants and read/write helpers live here, one home for the
-writer/reader pair, so a drifted key literal cannot make the porter silently
-stop finding prompts or contracts in new bags (readers default to "" by design).
+The episode recorder writes the operator prompt and embedded contract into
+rosbag2's metadata.yaml ``custom_data`` block. The bag porter reads them back.
+Keeping the key constants and the read/write helpers in one module means a
+drifted key literal cannot silently stop the porter from finding prompts or
+contracts in new bags. Readers default to empty on any absence.
 
 ROS-free (yaml/pathlib only).
 """
@@ -48,8 +48,9 @@ def read_bag_metadata(bag_dir: Path) -> dict[str, Any]:
 def read_custom_field(meta: dict[str, Any], key: str) -> str:
     """One custom_data value from loaded bag metadata ("" when absent).
 
-    Tolerates absent/null blocks: bags recorded outside rosetta legitimately
-    have no custom_data, and the porter treats that as "no prompt/hash".
+    Bags recorded outside rosetta legitimately carry no custom_data, and the
+    porter treats that as no prompt and no contract. The isinstance guard also
+    swallows a custom_data that parsed as a non-mapping, returning "".
     """
     custom = (meta.get(BAG_METADATA_KEY) or {}).get(BAG_CUSTOM_DATA_KEY) or {}
     if not isinstance(custom, dict):
@@ -60,8 +61,9 @@ def read_custom_field(meta: dict[str, Any], key: str) -> str:
 def update_custom_data(meta_path: Path, entries: dict[str, str]) -> None:
     """Read-modify-write ``entries`` into an existing metadata.yaml's custom_data.
 
-    Raises on a missing/unreadable file — retry policy (rosbag2 writes
-    metadata.yaml asynchronously at bag close) belongs to the caller.
+    Raises on a missing or unreadable file. rosbag2 writes metadata.yaml
+    asynchronously at bag close, so the file may not exist on early attempts.
+    The retry policy for that race belongs to the caller.
     """
     with meta_path.open("r") as f:
         meta = yaml.safe_load(f) or {}

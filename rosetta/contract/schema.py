@@ -125,11 +125,11 @@ def _load_interface_capability(robot_interface: str) -> Any | None:
     """
     if importlib.util.find_spec("rclpy") is None:
         return None
-    from ..robots.ros2 import ros2_utils, timelines
+    from ..robots.ros2 import rclpy_utils, timelines
 
     return SimpleNamespace(
         provided_timelines=timelines.provided_timelines,
-        qos_profile_from_dict=ros2_utils.qos_profile_from_dict,
+        qos_profile_from_dict=rclpy_utils.qos_profile_from_dict,
     )
 
 

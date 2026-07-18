@@ -14,10 +14,10 @@
 
 """Shared helpers for rosetta's lifecycle-node launch files.
 
-Imported only by the files under ``launch/`` — never by the contract/frames
-layers, so launch/rclpy stay out of the contract import graph. The lifecycle
-autostart chain used to be hand-copied into every launch file; it lives here
-once so a fix (or a new gotcha) can't silently apply to only some of them.
+Imported only by the files under ``launch/``, never by the contract/frames
+layers, so launch and rclpy stay out of the contract import graph. The
+lifecycle autostart chain lives here once instead of being copied into every
+launch file, so a fix or a new gotcha applies to all of them at once.
 """
 
 from __future__ import annotations
@@ -35,11 +35,13 @@ from lifecycle_msgs.msg import Transition
 
 
 def typed_config(context, name: str, data_type):
-    """Resolve a LaunchConfiguration with launch's own type coercion.
+    """Resolve a LaunchConfiguration and coerce it to ``data_type``.
 
-    Replaces hand-rolled ``value.lower() in ("true", "1", "yes")`` parsing:
-    launch's coercion accepts the same spellings ``IfCondition`` does and
-    raises on garbage instead of silently reading it as False.
+    Use this instead of hand-parsing ``value.lower() in ("true", "1", ...)``.
+    Launch's coercion accepts the same spellings ``IfCondition`` does and
+    raises on unparseable input instead of silently reading it as False. The
+    substitution must be normalized before ``perform_typed_substitution``, so
+    both calls are required.
     """
     normalized = normalize_typed_substitution(LaunchConfiguration(name), data_type)
     return perform_typed_substitution(context, normalized, data_type)
@@ -49,10 +51,10 @@ def yaml_params(path: str, node_name: str) -> dict:
     """One node's ``ros__parameters`` mapping from a plain params YAML file.
 
     For launch files that merge parameter dicts in Python (hil_launch's
-    layered defaults). Nodes launched in a namespace also need this instead
-    of passing the file path: a params file's bare top-level node key only
-    matches the root-namespace node name, so the file is silently inert for
-    a namespaced node — a dict applies unconditionally.
+    layered defaults). Namespaced nodes also need this instead of passing the
+    file path. A params file's bare top-level node key only matches the
+    root-namespace node name, so the file is silently inert for a namespaced
+    node. A dict applies unconditionally.
     """
     with open(path) as f:
         data = yaml.safe_load(f) or {}

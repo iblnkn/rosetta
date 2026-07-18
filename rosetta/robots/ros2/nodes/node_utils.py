@@ -14,16 +14,16 @@
 
 """Helpers used only by the lifecycle nodes in rosetta.robots.ros2.nodes.
 
-Node-side concerns: goal/service mutual exclusion (BusyGuard), rcl-legal
-action termination (finish_goal), QoS introspection/conversion for bag topic
-metadata, polling waits (wait_until), and the shared node entry point
-(spin_lifecycle_node). Message/QoS/timestamp helpers shared with the wider
-ros2 layer stay in rosetta.robots.ros2.ros2_utils.
+Node-side concerns: rcl-legal action termination (finish_goal), QoS
+introspection/conversion for bag topic metadata, polling waits (wait_until),
+and the shared node entry point (spin_lifecycle_node). QoS-dict parsing and
+lifecycle-state helpers shared with the wider ros2 layer stay in
+rosetta.robots.ros2.rclpy_utils. Work-slot mutual exclusion lives on
+RosettaLifecycleNode itself (the ``busy`` property + work gate).
 """
 
 from __future__ import annotations
 
-import threading
 import time
 from typing import Callable
 
@@ -65,41 +65,8 @@ def positive_rate_descriptor(description: str) -> ParameterDescriptor:
 
 
 # =============================================================================
-# Goal / service concurrency
+# Goal termination
 # =============================================================================
-
-
-class BusyGuard:
-    """Accept-time mutual exclusion for one-goal-at-a-time nodes.
-
-    Under a MultiThreadedExecutor with a ReentrantCallbackGroup, two goal
-    requests can race a bare ``self._active is not None`` check (the field is
-    only set later, in the execute callback). Call :meth:`try_acquire` inside
-    the goal/service *accept* callback — an atomic check-and-set — and
-    :meth:`release` when the work fully ends (or fails to start).
-    """
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._busy = False
-
-    def try_acquire(self) -> bool:
-        """Atomically claim the guard; False if already claimed."""
-        with self._lock:
-            if self._busy:
-                return False
-            self._busy = True
-            return True
-
-    def release(self) -> None:
-        """Release the guard. Idempotent."""
-        with self._lock:
-            self._busy = False
-
-    @property
-    def busy(self) -> bool:
-        with self._lock:
-            return self._busy
 
 
 def finish_goal(
@@ -140,14 +107,18 @@ def finish_goal(
 
 
 def extract_qos_numeric_values(q: QoSProfile) -> dict[str, int]:
-    """
-    Extract numeric RMW QoS policy values from a QoSProfile.
+    """Flatten a QoSProfile's policy enums to their raw RMW integer codes.
 
-    The enum ``.value`` attributes are the underlying RMW numeric values.
+    rclpy exposes each policy as an enum whose ``.value`` is the underlying
+    RMW numeric constant. rosbag2's QoS setters want those ints, so read
+    them out here once.
+
+    Args:
+        q: Source rclpy QoS profile.
 
     Returns:
-        dict with keys: depth, history, reliability, durability, liveliness
-        All values are integers matching RMW QoS policy constants.
+        Mapping with keys ``depth``, ``history``, ``reliability``,
+        ``durability``, ``liveliness``. Every value is an int RMW policy code.
 
     """
     return {
@@ -197,12 +168,20 @@ def qos_to_rosbag2(q: QoSProfile) -> Rosbag2QoS:
 
 
 def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1) -> bool:
-    """
-    Block until ``predicate()`` is true or ``timeout`` seconds elapse.
+    """Block until ``predicate()`` returns true or ``timeout`` seconds elapse.
 
-    Polls at ``poll``-second intervals. Used by lifecycle ``on_deactivate``
-    callbacks to wait briefly for in-progress work to wind down. Returns True
-    if the predicate became true, False if it timed out.
+    Used by lifecycle ``on_deactivate`` callbacks to give in-progress work a
+    bounded window to wind down before the transition proceeds.
+
+    Args:
+        predicate: Condition polled once per interval.
+        timeout: Maximum seconds to wait.
+        poll: Seconds slept between checks.
+
+    Returns:
+        The final ``predicate()`` value. True if it became true in time,
+        False on timeout.
+
     """
     deadline = time.monotonic() + timeout
     while not predicate() and time.monotonic() < deadline:
@@ -218,13 +197,13 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
     """Run a lifecycle node until interrupted, driving the shutdown transition on exit.
 
-    ``destroy_node()`` never runs ``on_shutdown`` — only the lifecycle state
-    machine does — so ``trigger_shutdown()`` is called explicitly to let the
+    ``destroy_node()`` never runs ``on_shutdown``. Only the lifecycle state
+    machine does. So ``trigger_shutdown()`` is called explicitly to let the
     node finalize resources (e.g. close an open bag writer, send a safety
     action) on Ctrl+C. rclpy's default SIGINT handler would shut the context
-    down BEFORE user code can react, making that transition impossible
-    exactly when it matters, so signal handling is disabled and
-    KeyboardInterrupt is the shutdown trigger instead.
+    down before user code can react, making that transition impossible exactly
+    when it matters. Signal handling is disabled and KeyboardInterrupt is the
+    shutdown trigger instead.
     """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_factory()

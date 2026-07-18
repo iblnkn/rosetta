@@ -38,6 +38,11 @@ class FrameIO(Protocol):
 
     What a :class:`~rosetta.policies.PolicyRunner` receives per goal: sample
     observations out, publish actions in, reset between episodes.
+
+    This is the policy-facing surface only. A concrete implementation may
+    expose richer robot-side methods beyond the protocol (e.g. TopicBridge's
+    ``sample_values()``, the pre-assembly per-spec view); those never cross
+    the robot/policy boundary.
     """
 
     def sample_frame(self) -> dict[str, Any]:

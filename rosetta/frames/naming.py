@@ -12,34 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Frame-key naming helpers shared across the framework adapters.
+"""Frame-key naming helpers shared across the framework adapters.
 
 Frame dicts are keyed by contract keys (``observation.images.cam``,
-``observation.state``, ``action``, ...). These helpers sanitize those keys so
-every framework adapter derives the same names instead of re-deriving them in
-parallel. A key's ROLE (state vs action) is never taken from its spelling. It
-comes from the spec's type (``KeyLayout.is_action``).
+``observation.state``, ``action``, ...). Two derivations live here.
+:func:`camera_name` strips the image prefix to the semantic camera name and
+keeps dots (``observation.images.wrist.right`` -> ``wrist.right``). LeRobot and
+GR00T consume that name directly. :func:`sanitize_field_name` flattens a name to
+a bare ``[A-Za-z0-9_]`` identifier for sinks that need it, such as vla_foundry's
+WebDataset tar members where a dot would split the sample key.
+
+A key's role (state vs action) never comes from its spelling. It comes from the
+spec's type, via ``KeyLayout.is_action`` in :mod:`rosetta.frames.layout`.
 """
 
 import re
 
-#: Contract-key prefix marking an image stream. Single source of truth: schema
-#: validation, spec resolution, and the adapters all test against this instead
-#: of re-deriving the literal.
+#: Contract-key prefix marking an image stream.
 IMAGE_KEY_PREFIX = "observation.images."
 
 
 def sanitize_field_name(name: str) -> str:
-    """Reduce a contract key to a dot-free [A-Za-z0-9_] name."""
+    """Flatten a name to a dot-free ``[A-Za-z0-9_]`` identifier.
+
+    Every character outside that set becomes ``_``. Used by sinks that cannot
+    carry dots, such as vla_foundry's WebDataset tar members.
+
+    Args:
+        name: A contract key or camera name.
+
+    Returns:
+        The name with each non-identifier character replaced by ``_``.
+
+    """
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
 
-def camera_short_name(key: str) -> str:
-    """Short camera name for an ``observation.images.*`` key.
+def camera_name(key: str) -> str:
+    """Semantic camera name for an ``observation.images.*`` key.
 
-    Shared by the framework adapters so they agree on the derivation.
-    Sanitized because adapters embed it in filenames (e.g. WebDataset tar
-    members, where a dot would split the sample key).
+    Strips the image prefix and returns the remainder verbatim, dots included
+    (``observation.images.wrist.right`` -> ``wrist.right``). This is the
+    framework-neutral identifier. LeRobot and GR00T use it as-is and keep the
+    dotted hierarchy. A backend whose sink needs a flat identifier, such as
+    vla_foundry's WebDataset tar members, flattens it via
+    :func:`sanitize_field_name`.
+
+    A key without the prefix is returned unchanged, since ``removeprefix`` is a
+    no-op when the prefix is absent.
+
+    Args:
+        key: A contract frame key.
+
+    Returns:
+        The camera name with dots preserved.
+
     """
-    return sanitize_field_name(key.removeprefix(IMAGE_KEY_PREFIX))
+    return key.removeprefix(IMAGE_KEY_PREFIX)

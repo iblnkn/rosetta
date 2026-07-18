@@ -12,35 +12,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""StreamIngest: the shared message-ingest policy for live bridge and bag porter.
+"""Shared message-ingest policy for the live bridge and the bag porter.
 
 Everything between "a serialized message arrived" and "a value sits in the
 stream buffer" lives here: timeline extraction, decode, and push. The live
-bridge and the bag porter both go through this one implementation — like
-FrameLayout for frame assembly — so recorded and live frames agree by
-construction instead of by parallel copies.
+bridge and the bag porter both call this one implementation, so recorded and
+live frames agree by construction instead of by parallel copies.
 
-Pipeline-order note: the contract reads channel -> align -> select -> apply,
-where align chooses the timeline at sample time. Select/apply are pure
-per-message transforms, so they commute with align — running them here at
+Pipeline-order note: the contract reads channel, align, select, apply, where
+align chooses the timeline at sample time. Select and apply are pure
+per-message transforms, so they commute with align. Running them here at
 ingest (once per message, before buffering) is observationally identical to
 running them after the tick pick, and cheaper.
 
-Timeline policy: ``spec.source.align.timeline`` names the timeline the contract
-chose; contract loading already validated the channel provides it. A message
-that still arrives without it (e.g. an uninitialized header stamp) is
-dropped with a once-per-stream warning (plus a recovery notice) — never
-ingested on a fabricated timeline.
+Timeline policy: ``spec.source.align.timeline`` names the timeline the
+contract chose. Contract loading already validated that the channel provides
+it. A message that still arrives without it (e.g. an uninitialized header
+stamp) is dropped with a once-per-stream warning plus a recovery notice. It
+is never ingested on a fabricated timeline.
 
-Decode policy (identical live and offline): a malformed message must not
-kill the caller — live that would take down the whole inference node's
-executor, and offline the port must produce exactly the frames the live
-bridge would have served. Drop the message with a once-per-stream warning
-(plus a recovery notice); the stream then behaves like a missing stream
-(zero-fill + transition logging downstream).
+Decode policy (identical live and offline): a malformed message must not kill
+the caller. Live, an exception would take down the whole inference node's
+executor. Offline, the port must produce exactly the frames the live bridge
+would have served. Drop the message with a once-per-stream warning plus a
+recovery notice. The stream then behaves like a missing stream (zero-fill
+plus transition logging downstream).
 
-Stream identity is the spec's position in the resolved spec list — specs are
-unhashable and (key, topic) is not unique (one topic may feed several specs).
+Stream identity is the spec's position in the resolved spec list. Specs are
+unhashable and (key, topic) is not unique, since one topic may feed several
+specs.
 """
 
 from __future__ import annotations
@@ -78,9 +78,10 @@ class StreamIngest:
         """Extract the chosen timeline's timestamp, decode, and push one message.
 
         ``receive_ns`` is the receive time (node clock live, bag timestamp
-        offline) — the 'receive' timeline's value for this message. The two
-        are receive-time approximations, not the same instant, so only
-        'header'-timeline streams replay bit-exactly offline.
+        offline), which is the 'receive' timeline's value for this message.
+        The live and offline receive times are both approximations of when the
+        message arrived, not the same instant, so only 'header'-timeline
+        streams replay bit-exactly offline.
         """
         ts_ns = get_message_timestamp_ns(msg, spec, receive_ns)
         if ts_ns is None:

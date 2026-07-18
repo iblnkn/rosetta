@@ -16,7 +16,7 @@
 
 The standalone-mode plumbing shared by the LeRobot robot and teleoperator
 adapters, which embed a node in a process rosetta does not own (LeRobot's).
-Each host initializes its own rclpy Context — never the global one — so
+Each host initializes its own rclpy Context, never the global one, so
 multiple hosts in one process (robot + teleoperator) and any other rclpy
 user start and stop independently. Initializing a non-default context also
 installs no signal handlers, leaving SIGINT/SIGTERM to the host process.
@@ -50,7 +50,7 @@ class NodeHost:
         """The hosted node, or None before start()/after stop().
 
         Raises instead of returning a node whose spin thread has died: a
-        dead executor means subscriptions, timers, and the safety watchdog
+        dead executor means subscriptions, timers, and any safety watchdog
         have all silently stopped, so serving the node as if it were healthy
         would let callers keep reading ever-staler data.
         """
@@ -64,8 +64,8 @@ class NodeHost:
         A second call returns the existing node and ignores the factory.
         The factory receives the host's private context and must pass it to
         the node constructor. The executor exists for subscriptions, timers,
-        and external lifecycle service requests — lifecycle trigger_*() calls
-        are synchronous local calls and do not need it.
+        and external lifecycle service requests. Direct trigger_*() calls are
+        synchronous and local, so they do not need it.
 
         If anything below raises, stop() rolls back whatever was already
         built instead of leaking the context: a retry on this same instance
@@ -105,9 +105,9 @@ class NodeHost:
         """Shut down executor, spin thread, node, and context. Safe when never started.
 
         The host is reusable afterwards: a later start() builds a fresh
-        context. Raises if the spin thread outlives the join timeout — the
-        node must never be destroyed under a still-running executor thread —
-        leaving node and context alive so a retry can re-join.
+        context. Raises if the spin thread outlives the join timeout. The
+        node must never be destroyed under a still-running executor thread,
+        so node and context stay alive for a retry to re-join.
         """
         if self._executor is not None:
             self._executor.shutdown()

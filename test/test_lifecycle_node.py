@@ -29,6 +29,7 @@ secures BEFORE teardown, cleanup refuses while work runs, and a claim always
 leaves behind a stop event that _stop_and_secure() sets.
 """
 
+import threading
 import time
 
 import numpy as np
@@ -39,7 +40,7 @@ from rclpy.lifecycle import TransitionCallbackReturn
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec
-from rosetta.robots.ros2.ros2_utils import lifecycle_state_label
+from rosetta.robots.ros2.rclpy_utils import lifecycle_state_label
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode, RosettaLifecycleNode
 from sensor_msgs.msg import JointState
 
@@ -200,10 +201,10 @@ def test_configure_failure_logs_and_recovers_via_on_error(rclpy_ctx):
 
 
 def test_cleanup_refused_while_work_in_progress(base_node):
-    assert base_node._busy.try_acquire()
+    base_node._busy = True
     assert base_node.on_cleanup(None) == TransitionCallbackReturn.FAILURE
     assert "teardown" not in base_node.calls  # resources untouched under live work
-    base_node._busy.release()
+    base_node._busy = False
     assert base_node.on_cleanup(None) == TransitionCallbackReturn.SUCCESS
 
 
@@ -218,7 +219,7 @@ def test_shutdown_from_active_stops_and_secures_before_teardown(base_node):
     def signal_and_release():
         base_node.calls.append("signal_stop")
         stop_event.set()
-        base_node._busy.release()
+        base_node._busy = False
 
     base_node._signal_stop = signal_and_release
     assert base_node.trigger_shutdown() == TransitionCallbackReturn.SUCCESS
@@ -250,7 +251,7 @@ def test_goal_work_releases_and_unbinds_on_exception(base_node):
     with pytest.raises(RuntimeError, match="boom"):
         with base_node._goal_work(Handle()):
             raise RuntimeError("boom")
-    assert not base_node._busy.busy  # a crashed execution can't brick the node
+    assert not base_node.busy  # a crashed execution can't brick the node
     assert base_node._active_goal is None
 
 
@@ -266,5 +267,29 @@ def test_claim_and_stop_serialize_on_the_work_gate(base_node):
     # is closed: no new work can be claimed after deactivation began.
     assert claimed_event.is_set()
     assert base_node._try_claim_work() is not None
-    base_node._busy.release()
+    base_node._busy = False
     assert base_node._try_claim_work() is not None  # still inactive
+
+
+def test_concurrent_claims_admit_exactly_one_winner(base_node):
+    # The goal-accept race the work gate exists to close: under a
+    # MultiThreadedExecutor + ReentrantCallbackGroup, two goal requests could
+    # both pass the busy check before either _execute ran, driving two loops
+    # against one runner/bridge. _try_claim_work's check-and-set under the gate
+    # must admit exactly one of a concurrent burst. (This pins the invariant
+    # BusyGuard's dedicated unit test used to guard before it was folded in.)
+    base_node._accepting_work = True
+    start = threading.Barrier(32)
+    wins: list[int] = []
+
+    def worker():
+        start.wait()
+        if base_node._try_claim_work() is None:
+            wins.append(1)
+
+    threads = [threading.Thread(target=worker) for _ in range(32)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(wins) == 1

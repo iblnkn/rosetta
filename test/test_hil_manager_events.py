@@ -138,9 +138,9 @@ def test_episode_goal_accept_is_mutually_exclusive(node):
     node._accepting_work = True
     assert node._on_goal(None) == GoalResponse.ACCEPT
     assert node._on_goal(None) == GoalResponse.REJECT
-    node._busy.release()
+    node._busy = False
     assert node._on_goal(None) == GoalResponse.ACCEPT
-    node._busy.release()
+    node._busy = False
 
 
 def test_start_episode_button_starts_when_idle(node, monkeypatch):
@@ -156,19 +156,19 @@ def test_start_episode_button_starts_when_idle(node, monkeypatch):
             break
         time.sleep(0.01)
     assert started == [(node.get_parameter("default_episode_prompt").value, 0.0, 0.0)]
-    node._busy.release()
+    node._busy = False
 
 
 def test_start_episode_button_noop_when_already_busy(node, monkeypatch):
     started = []
     monkeypatch.setattr(node, "_run_episode_detached", lambda *a: started.append(a))
     node._accepting_work = True
-    assert node._busy.try_acquire()  # simulate an episode already running
+    node._busy = True  # simulate an episode already running
 
     node._on_teleop_events(_joy(start_episode=1), EVENTS_SPEC)
 
     assert started == []
-    node._busy.release()
+    node._busy = False
 
 
 def test_start_episode_button_noop_when_node_inactive(node, monkeypatch):
@@ -179,7 +179,7 @@ def test_start_episode_button_noop_when_node_inactive(node, monkeypatch):
     node._on_teleop_events(_joy(start_episode=1), EVENTS_SPEC)
 
     assert started == []
-    assert not node._busy.busy
+    assert not node.busy
 
 
 def test_manage_policy_lifecycle_false_skips_policy_send_and_cancel(rclpy_ctx, monkeypatch):

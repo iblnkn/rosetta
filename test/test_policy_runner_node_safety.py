@@ -70,8 +70,8 @@ def test_safety_action_sent_last_after_runner_stops(node):
     node._bridge = fakes.make_bridge()
     node._stop_event = threading.Event()
     # Goal in flight: busy releases when the runner is told to stop.
-    node._busy.try_acquire()
-    node._runner = fakes.make_runner(on_stop=node._busy.release)
+    node._busy = True
+    node._runner = fakes.make_runner(on_stop=lambda: setattr(node, "_busy", False))
 
     node._stop_and_secure(wait_timeout=2.0)
 
@@ -83,26 +83,26 @@ def test_safety_action_still_sent_when_goal_hangs(node):
     fakes = _OrderedFakes()
     node._bridge = fakes.make_bridge()
     node._runner = fakes.make_runner()
-    node._busy.try_acquire()  # goal never ends
+    node._busy = True  # goal never ends
 
     node._stop_and_secure(wait_timeout=0.2)
 
     assert fakes.calls == ["request_stop", "safety"]  # safety is last-best-effort
-    node._busy.release()
+    node._busy = False
 
 
 def test_goal_accept_is_mutually_exclusive(node):
     node._accepting_work = True
     assert node._on_goal(None) == GoalResponse.ACCEPT
     assert node._on_goal(None) == GoalResponse.REJECT  # busy until release
-    node._busy.release()
+    node._busy = False
     assert node._on_goal(None) == GoalResponse.ACCEPT
-    node._busy.release()
+    node._busy = False
 
 
 def test_goal_rejected_before_activation(node):
     assert node._on_goal(None) == GoalResponse.REJECT  # initial state: not accepting
-    assert not node._busy.busy  # a rejected goal claims nothing
+    assert not node.busy  # a rejected goal claims nothing
 
 
 def test_cancel_in_accept_to_execute_window_is_not_lost(node):
@@ -127,7 +127,7 @@ def test_cancel_in_accept_to_execute_window_is_not_lost(node):
     with node._goal_work(Handle()) as stop_event:
         assert stop_event.is_set()  # the bind-time re-check honored the cancel
     assert fakes.calls == ["request_stop"]
-    assert not node._busy.busy  # released by _goal_work
+    assert not node.busy  # released by _goal_work
 
 
 def test_stale_cancel_does_not_stop_next_goal(node):

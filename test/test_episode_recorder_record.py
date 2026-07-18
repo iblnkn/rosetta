@@ -26,7 +26,6 @@ import threading
 from types import SimpleNamespace
 
 from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
-from rosetta.robots.ros2.nodes.node_utils import BusyGuard
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 
 
@@ -79,8 +78,7 @@ class FakeRecorder:
     _signal_stop = RosettaLifecycleNode._signal_stop
 
     def __init__(self, tmp_path, *, feedback_rate=50.0, open_error=None, metadata_error=None):
-        self._busy = BusyGuard()
-        assert self._busy.try_acquire()
+        self._busy = True  # claim held, as _arm_recording leaves it at accept time
         self._work_gate = threading.Lock()
         self._active_goal = None
         self._stop_event = threading.Event()
@@ -131,7 +129,7 @@ _record = EpisodeRecorderNode._record
 
 
 def _assert_reconciled(fake):
-    assert fake._busy.busy is False
+    assert fake._busy is False
     assert fake._stop_event is not None  # _record never touches the claim's event
     assert fake.close_calls >= 1
 
@@ -233,15 +231,9 @@ def test_stop_event_untouched_at_busy_release(tmp_path):
     must never write self._stop_event, or it could clobber the new claim's."""
     fake = FakeRecorder(tmp_path)
     claimed_event = fake._stop_event
-    observed = []
-
-    class OrderedGuard(BusyGuard):
-        def release(self):
-            observed.append(fake._stop_event)
-            super().release()
-
-    guard = OrderedGuard()
-    assert guard.try_acquire()
-    fake._busy = guard
     _record(fake, "p")
-    assert observed == [claimed_event]
+    # The claim was released (work done), but _record left self._stop_event
+    # exactly as _arm_recording set it — reassigning it would stop the wrong
+    # claim's work once the next accept arms a fresh event.
+    assert fake._busy is False
+    assert fake._stop_event is claimed_event

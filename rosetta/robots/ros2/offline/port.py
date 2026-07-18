@@ -89,12 +89,11 @@ def write_dataset(
 ) -> None:
     """Drive a DatasetWriter over ``(episode_name, frames)`` pairs.
 
-    The orchestration core, separated from bag/entry-point wiring (see
-    :func:`port`) so its logic tests against a plain fake writer: open once,
-    pump each episode with per-episode failure isolation (a failed episode is
-    discarded so buffered frames never leak into the next one), then
-    finalize. Raises ``RuntimeError`` — without finalizing — when every
-    episode failed.
+    Split from the bag and entry-point wiring in :func:`port` so this loop
+    tests against a plain fake writer. Opens once, pumps each episode with
+    per-episode failure isolation (a failed episode is discarded so its
+    buffered frames never leak into the next one), then finalizes. If every
+    episode fails, raises ``RuntimeError`` and never finalizes.
     """
     writer.open(
         contract=contract,
@@ -268,9 +267,9 @@ def main():
     if args.samples_per_shard is not None:
         writer_opts["samples_per_shard"] = args.samples_per_shard
 
-    # No exception dressing: a failure (or Ctrl-C) must exit non-zero with its
-    # traceback — convert_bags_parallel.sh reads shard exit codes under
-    # pipefail, and a swallowed interrupt would report a half-ported shard as
+    # No try/except here: a failure (or Ctrl-C) must exit non-zero with its
+    # traceback. convert_bags_parallel.sh reads shard exit codes under
+    # pipefail, so a swallowed interrupt would report a half-ported shard as
     # success.
     port(
         raw_dir=args.raw_dir,

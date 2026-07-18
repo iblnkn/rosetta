@@ -14,7 +14,7 @@
 
 """_execute: terminal transitions and the busy-release guarantee.
 
-A leaked BusyGuard rejects every subsequent goal until node restart, so the
+A leaked busy claim rejects every subsequent goal until node restart, so the
 release-on-every-exit-path behavior is the invariant these tests pin: happy
 path, runner crash (traceback logged, non-empty client message), and even a
 finish_goal that itself raises.
@@ -81,7 +81,7 @@ def test_execute_success_finishes_goal_and_releases_busy(node):
 
     assert result.success and result.message == "done"
     assert handle.terminal == "succeed"
-    assert not node._busy.busy
+    assert not node.busy
 
 
 def test_execute_runner_crash_aborts_with_typed_message(node):
@@ -97,7 +97,7 @@ def test_execute_runner_crash_aborts_with_typed_message(node):
     assert not result.success
     assert result.message == "RuntimeError: boom"  # never an empty client message
     assert handle.terminal == "abort"
-    assert not node._busy.busy
+    assert not node.busy
 
 
 def test_execute_releases_busy_even_when_finish_goal_raises(node):
@@ -109,4 +109,4 @@ def test_execute_releases_busy_even_when_finish_goal_raises(node):
     with pytest.raises(TypeError):
         node._execute(handle)
 
-    assert not node._busy.busy
+    assert not node.busy

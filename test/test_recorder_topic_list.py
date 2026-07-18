@@ -60,7 +60,7 @@ def test_conflicting_qos_raises():
 def test_same_qos_dict_derived_profiles_dedup():
     # Two sections declaring the same qos dict resolve to equal numeric
     # policies and collapse to one entry.
-    from rosetta.robots.ros2.ros2_utils import qos_profile_from_dict
+    from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 
     qos_a = qos_profile_from_dict({"reliability": "best_effort", "depth": 5})
     qos_b = qos_profile_from_dict({"reliability": "best_effort", "depth": 5})

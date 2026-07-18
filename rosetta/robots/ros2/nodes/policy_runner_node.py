@@ -28,10 +28,10 @@ deactivate AND shutdown, one teardown path) come from
 ``_teardown()`` / ``_signal_stop()`` / ``_send_safety_action()`` hooks and the
 action callbacks.
 
-The action is served under the relative name ``run_policy``; the launch-file
-namespace determines the fully qualified name (default launch: ``/run_policy``;
-the HIL launch runs two clients as ``/robot_policy/run_policy`` and
-``/reward_classifier/run_policy``).
+The action is served under the relative name ``run_policy``. The launch-file
+namespace sets the fully qualified name. The default launch gives
+``/run_policy``. The HIL launch runs two clients as ``/robot_policy/run_policy``
+and ``/reward_classifier/run_policy``.
 
 Usage:
     ros2 launch rosetta policy_runner_launch.py
@@ -80,9 +80,9 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             "",
             ParameterDescriptor(description="Path to contract YAML file", read_only=True),
         )
-        # This default and is_classifier's below are duplicated (as inert
-        # standalone-use fallbacks) in each framework adapter's own setup(),
-        # e.g. lerobot_robot_rosetta/policy_runner.py -- keep both in sync.
+        # This default, and is_classifier's below, are duplicated as inert
+        # standalone-use fallbacks in each framework adapter's own setup()
+        # (e.g. lerobot_robot_rosetta/policy_runner.py). Keep both in sync.
         self.declare_parameter(
             "pretrained_name_or_path",
             "",
@@ -129,8 +129,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
     def _setup(self) -> None:
         """Load the contract, build the bridge, resolve the framework runner.
 
-        Every failure raises: the base logs the traceback and routes through
-        on_error, which tears down whatever was partially built here.
+        Any failure raises. The base logs the traceback and routes through
+        on_error, which tears down whatever this method partially built.
         """
         contract_path = self.get_parameter("contract_path").value
         if not contract_path:
@@ -164,13 +164,12 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         else:
             act_specs = list(iter_action_specs(self._contract))
 
-        # Build the framework-neutral topic bridge on this node.
         self._bridge = TopicBridge(obs_specs, act_specs, self._contract.fps)
         self._bridge.setup(self)
 
-        # Resolve and prepare the framework policy runner. Assigned before
-        # setup() on purpose: if setup() fails partway, on_error's _teardown()
-        # can still reach the half-initialized runner.
+        # Assign self._runner before calling setup() on it: a setup() that
+        # raises partway leaves a half-initialized runner that on_error's
+        # _teardown() must still reach in order to release it.
         framework = self.get_parameter("framework").value
         self._runner = load_policy_runner(framework)
         self._runner.setup(self, self._contract)
@@ -199,10 +198,12 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._contract = None
 
     def _signal_stop(self) -> None:
-        """Set the goal's stop event AND ``request_stop()`` — always both, event first.
+        """Set the stop event, then also call the runner's ``request_stop()``.
 
-        See :meth:`PolicyRunner.request_stop` for why the pair exists. Safe
-        to call with no goal active.
+        Event first, both always. The event is the cooperative signal every
+        control loop polls. ``request_stop()`` unblocks a run stuck in I/O so
+        it observes the event promptly. See :meth:`PolicyRunner.request_stop`.
+        Safe to call with no goal active.
         """
         super()._signal_stop()
         runner = self._runner
@@ -215,10 +216,11 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             bridge.send_safety_action()
 
     def _teardown_runner(self) -> None:
-        # Null-first: a second call is a clean no-op even if teardown()
-        # raises. The exception propagates to the base's guarded handler --
-        # a framework resource that failed to release (e.g. a policy-server
-        # subprocess) is a real leak, not something to log-and-forget.
+        # Null self._runner first so a second call is a clean no-op even when
+        # teardown() raises. The exception then propagates to the base's
+        # guarded transition handler. A framework resource that failed to
+        # release (e.g. a policy-server subprocess) is a real leak, so let it
+        # surface instead of swallowing it here.
         runner, self._runner = self._runner, None
         if runner is not None:
             runner.teardown()
@@ -272,8 +274,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
                 feedback.status = snap.status
                 goal_handle.publish_feedback(feedback)
             except Exception:
-                # This daemon thread dying silently would end feedback while
-                # the goal runs on -- log loudly, then stop publishing.
+                # A silent death of this daemon thread would end feedback
+                # while the goal runs on. Log loudly, then stop publishing.
                 self.get_logger().error(f"Feedback loop stopped:\n{traceback.format_exc()}")
                 break
 

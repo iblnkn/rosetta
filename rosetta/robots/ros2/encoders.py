@@ -19,17 +19,19 @@ Each encoder is self-contained and registered with @register_encoder.
 If you need to encode a message type that isn't here, add a new encoder.
 
 Encoder signature: (action_vec, spec, stamp_ns=None) -> ROS message
-- action_vec: numpy array of action values (operator pipeline already applied,
-  and encode_value has already checked the width against spec.dim)
-- spec: ActionStreamSpec with names, msg_type
+- action_vec: numpy array of action values. The operator pipeline is already
+  applied and encode_value has already checked the width against spec.dim.
+- spec: ActionStreamSpec. Encoders read spec.names (selector paths) and
+  spec.dim (vector width). The wire message type is hard-coded per encoder,
+  not read from the spec.
 - stamp_ns: optional timestamp in nanoseconds
 
-Value transforms (deg2rad, ...) are applied by the operator pipeline in
-encode_value before the encoder runs; encoders only scatter values into fields.
+Value transforms (deg2rad, ...) run in encode_value's operator pipeline before
+the encoder is called. Encoders only scatter finished values into fields.
 
 Selector-driven encoders (Twist, TwistStamped, JointState, JointTrajectory,
-Joy, MultiDOFCommand) require ``select`` in the contract — registered with
-``requires_select=True``, so a select-less channel of these types fails at
+Joy, MultiDOFCommand) require ``select`` in the contract. They are registered
+with ``requires_select=True``, so a select-less channel of these types fails at
 contract load. Scalar std_msgs types need no select; a MultiArray still
 needs one unless the stream is genuinely 1-wide, because select declares the
 vector width (see encode_value's width gate).
@@ -84,7 +86,7 @@ def _require_scalar_spec(msg_type: str, spec: ActionStreamSpec) -> None:
     """Refuse a multi-wide spec on a single-value wire type.
 
     encode_value guarantees the vector width matches spec.dim, but only the
-    encoder knows the wire type holds exactly one value — without this,
+    encoder knows the wire type holds exactly one value. Without this check,
     ``select: [a, b, c]`` on a Float64 channel would silently publish only
     the first value.
     """
@@ -103,7 +105,7 @@ def _require_scalar_spec(msg_type: str, spec: ActionStreamSpec) -> None:
 def _make_dotted_encoder(msg_type: str, example: str, *, stamped: bool):
     """Build an encoder whose selector names are root-relative dotted paths.
 
-    Root-relative like every dotted-path codec — a stamped wrapper is NOT
+    Root-relative like every dotted-path codec. A stamped wrapper is NOT
     transparent, so contracts name the wrapped field explicitly
     (``twist.linear.x``).
     """
@@ -224,8 +226,8 @@ def _enc_joint_state(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: i
     """
     Encode to sensor_msgs/JointState.
 
-    Requires select paths like ['position.joint1', 'velocity.joint2']:
-    values map to the named field by joint name; a bare name means position.
+    Requires select paths like ['position.joint1', 'velocity.joint2']. Values
+    map to the named field by joint name. A bare name means position.
     """
     if not spec.names:
         raise ValueError("JointState encoder requires select (e.g. [position.joint1, velocity.joint2])")
@@ -241,9 +243,9 @@ def _enc_joint_state(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: i
 
     msg.name = joint_order
 
-    # Selected fields cover every joint (validated above); unselected fields
-    # stay empty, which JointState defines as "unspecified" — zero-filling
-    # them would fabricate zero velocity/effort commands.
+    # Coverage is validated above. Unselected fields stay empty, which
+    # JointState reads as "unspecified". Zero-filling them would fabricate
+    # zero velocity/effort commands.
     for field in ("position", "velocity", "effort"):
         joint_map = field_to_joints.get(field)
         values = [float(arr[joint_map[j]]) for j in joint_order] if joint_map else []
@@ -262,8 +264,8 @@ def _enc_joint_trajectory(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_
     """
     Encode to trajectory_msgs/JointTrajectory (single-point trajectory).
 
-    Requires select paths like ['position.joint1', 'velocity.joint2']:
-    values map to the named field by joint name; a bare name means position.
+    Requires select paths like ['position.joint1', 'velocity.joint2']. Values
+    map to the named field by joint name. A bare name means position.
 
     time_from_start defaults to 0 (execute immediately).
 
@@ -286,8 +288,8 @@ def _enc_joint_trajectory(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_
 
     msg.joint_names = joint_order
 
-    # Selected fields cover every joint (validated above); unselected point
-    # arrays stay empty = unspecified rather than fabricated zeros.
+    # Coverage is validated above. Unselected point arrays stay empty
+    # (unspecified) rather than fabricated zeros.
     for attr, joint_map in field_to_joints.items():
         setattr(point, attr, [float(arr[joint_map[j]]) for j in joint_order])
 
@@ -308,7 +310,7 @@ def _enc_joy(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_ns: int | Non
     Requires select paths like ['axes.0', 'axes.1', 'buttons.0']: values map
     to axes/buttons by index. Joy arrays are dense by index, so each array is
     sized to the highest selected index and unselected slots below it are
-    filled with 0.0 / 0 (the neutral Joy value) — select contiguously from
+    filled with 0.0 / 0 (the neutral Joy value). Select contiguously from
     index 0 if a consumer reads the gaps. Button values are rounded to the
     nearest integer.
     """
@@ -354,8 +356,8 @@ def _enc_multidof_command(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_
     """
     Encode to control_msgs/MultiDOFCommand.
 
-    Requires select paths like ['values.joint1', 'values_dot.joint1']:
-    values map to the named field by DOF name; a bare name means values.
+    Requires select paths like ['values.joint1', 'values_dot.joint1']. Values
+    map to the named field by DOF name. A bare name means values.
     """
     _ = stamp_ns  # Unused - message type has no header
     if not spec.names:
@@ -371,10 +373,10 @@ def _enc_multidof_command(action_vec: np.ndarray, spec: ActionStreamSpec, stamp_
 
     msg.dof_names = dof_order
 
-    # Selected fields cover every DOF (validated above); an unselected field
-    # stays empty = unspecified. control_msgs requires values/values_dot to
-    # align 1:1 with dof_names — a partial array would silently cross-wire
-    # consumers (including our own decoder) that index by DOF position.
+    # Coverage is validated above. An unselected field stays empty
+    # (unspecified). control_msgs requires values/values_dot to align 1:1
+    # with dof_names, so a partial array would silently cross-wire consumers
+    # (including our own decoder) that index by DOF position.
     values_map = field_to_dofs.get("values")
     values_dot_map = field_to_dofs.get("values_dot")
     msg.values = [float(arr[values_map[d]]) for d in dof_order] if values_map else []
