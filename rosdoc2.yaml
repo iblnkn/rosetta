@@ -1,0 +1,19 @@
+## rosdoc2 configuration for rosetta.
+## The ROS buildfarm runs rosdoc2 on released packages and publishes the
+## result to docs.ros.org/en/<distro>/p/rosetta/. This file points the
+## build at the Diátaxis doc/ tree (Sphinx + MyST, see doc/conf.py).
+## See: https://github.com/ros-infrastructure/rosdoc2
+type: 'rosdoc2 config'
+version: 1
+
+---
+
+settings:
+    generate_package_index: true
+    always_run_sphinx_apidoc: true
+
+builders:
+    - sphinx:
+        name: 'rosetta'
+        sphinx_sourcedir: 'doc'
+        output_dir: ''

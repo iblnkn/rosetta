@@ -11,3 +11,9 @@ be under the Apache 2 License, as dictated by that
    the terms of any separate license agreement you may have executed
    with Licensor regarding such Contributions.
 ~~~
+
+## Where to start
+
+The [codebase guide](doc/contributing/codebase-guide.md) maps the layers, gives a
+dependency-ordered reading tour, and flags the complexity hotspots plus safe
+starting points for a first contribution.
