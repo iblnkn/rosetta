@@ -22,8 +22,8 @@ A policy framework, to Rosetta, is anything that implements two seams:
 - :class:`PolicyRunner` — online: drive a policy against a live robot
   through a :class:`~rosetta.frames.protocols.FrameIO` (inference).
 
-Implementations live in their own adapter packages (LeRobot, vla_foundry,
-starvla, ...) and are resolved by name from setuptools entry points, so this
+Implementations live in their own adapter packages (LeRobot, ...) and are
+resolved by name from setuptools entry points, so this
 package never imports a framework — and no framework ever imports the robot
 side. The registered object must be a class with a zero-argument constructor
 implementing the protocol; the loaders validate this structurally at load

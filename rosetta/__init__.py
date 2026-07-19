@@ -22,7 +22,7 @@ pub/sub topics become clean fixed-rate **frames**
 The **robot side** (:mod:`rosetta.robots`) adapts each pub/sub ecosystem
 onto that frame stream — ROS2 today; ROS1, zenoh, MQTT tomorrow. The
 **policy side** (:mod:`rosetta.policies`) adapts each learning framework
-(LeRobot, vla_foundry, starvla, ...) to consume it, for dataset writing and
+(LeRobot, ...) to consume it, for dataset writing and
 live policy execution. Either side swaps out without touching the other,
 because both speak only frames.
 
@@ -30,8 +30,7 @@ The same frame machinery runs live inference and offline bag conversion, so
 training data matches inference input sample-for-sample by construction.
 
 Framework adapters live in their own packages and register via entry points
-(see :mod:`rosetta.policies`): ``lerobot_rosetta``, ``vla_foundry_rosetta``,
-``starvla_rosetta``.
+(see :mod:`rosetta.policies`), e.g. ``lerobot_rosetta``.
 
 Usage::
 

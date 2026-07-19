@@ -63,7 +63,7 @@ Wraps a policy framework's inference pipeline in ROS2 actions. Launch: `policy_r
 |-----------|---------|-------------|
 | `contract_path` | `contracts/so_101.yaml` | Path to contract YAML. Optional when the checkpoint's training dataset embeds one |
 | `pretrained_name_or_path` | *(see params file)* | HuggingFace model ID or local path |
-| `framework` | `lerobot` | Policy framework adapter: `lerobot`, `vla_foundry`, `starvla` |
+| `framework` | `lerobot` | Policy framework adapter, resolved by entry-point name |
 | `is_classifier` | `false` | Publish the reward section as the action output (HIL reward classifier) |
 | `server_address` | `127.0.0.1:8080` | Policy server address |
 | `policy_type` | `act` | Policy type: `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc. |

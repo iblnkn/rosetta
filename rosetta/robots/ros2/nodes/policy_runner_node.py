@@ -19,7 +19,7 @@ PolicyRunnerNode: framework-agnostic ROS2 action server for policy inference.
 The node owns the contract, the :class:`TopicBridge` (observation/action ROS2
 plumbing), and the ``run_policy`` action lifecycle. The actual policy execution
 is delegated to a :class:`~rosetta.policies.PolicyRunner` resolved by
-name from the ``framework`` parameter (e.g. ``lerobot``, ``vla_foundry``). The node
+name from the ``framework`` parameter (e.g. ``lerobot``). The node
 imports no specific policy framework.
 
 Lifecycle transitions (fail-loud configure, stop/wait/safety ordering on
@@ -98,7 +98,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             "framework",
             "lerobot",
             ParameterDescriptor(
-                description="Policy framework to use (lerobot, vla_foundry, ...)",
+                description="Policy framework to use (e.g. lerobot)",
                 read_only=True,
             ),
         )

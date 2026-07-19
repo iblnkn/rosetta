@@ -35,7 +35,7 @@ from typing import Callable, Literal
 import yaml
 
 CONTRACT_SIDECAR_FILENAME = "rosetta_contract.yaml"
-"""Bare sidecar filename; vla_foundry's tar-shard layout puts it at the output root."""
+"""Bare sidecar filename; tar-shard dataset layouts put it at the output root."""
 
 LEROBOT_CONTRACT_SIDECAR_PATH = f"meta/{CONTRACT_SIDECAR_FILENAME}"
 """Repo-relative sidecar path in the LeRobot dataset layout (extra file under ``meta/``)."""

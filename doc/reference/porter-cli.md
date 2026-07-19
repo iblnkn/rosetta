@@ -18,15 +18,15 @@ rosetta_port \
 |----------|-------------|
 | `--raw-dir` | **(Required)** Directory of bags, searched recursively |
 | `--contract` | **(Required)** Rosetta contract YAML defining the topic → feature mapping |
-| `--framework` | Dataset writer to use: `lerobot` (default), `vla_foundry`, `starvla` |
+| `--framework` | Dataset writer to use: `lerobot` (default). Other writers resolve by entry-point name |
 | `--root` | Override output directory (LeRobot defaults to `~/.cache/huggingface/lerobot`) |
 | `--repo-id` | Dataset repo ID. Defaults to the `--raw-dir` directory name |
 | `--vcodec` | Video codec selection (default `libsvtav1`, not in base LeRobot porters) |
 | `--num-shards` / `--shard-index` | Split a directory of bags across parallel porter invocations |
 | `--no-embed-contract` | Skip writing the contract into the dataset as `meta/rosetta_contract.yaml` |
-| `--push-to-hub` | Push the dataset to the Hugging Face Hub (`lerobot`/`starvla`) |
+| `--push-to-hub` | Push the dataset to the Hugging Face Hub (`lerobot`) |
 | `--hub-public` / `--hub-tags` | With `--push-to-hub`: make the repo public (private by default) / set tags (default `rosetta,rosbag`) |
-| `--past-steps`, `--future-steps`, `--image-indices`, `--samples-per-shard` | `vla_foundry` windowing and sharding options |
+| `--past-steps`, `--future-steps`, `--image-indices`, `--samples-per-shard` | Writer-specific windowing and sharding options |
 
 ## Contract embedding
 

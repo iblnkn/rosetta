@@ -372,7 +372,7 @@ def test_single_teleop_input_gets_no_namespace():
 
 def test_core_accepts_flatten_colliding_camera_keys():
     """'cam.left' and 'cam_left' collide only once flattened, which only a backend
-    whose sink needs flat identifiers does (vla_foundry/WebDataset). Core keeps
+    whose sink needs flat identifiers does (WebDataset-style tars). Core keeps
     dotted names first-class and resolves both — the collision guard lives in that
     backend now, not here."""
     c = _contract(

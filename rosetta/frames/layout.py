@@ -35,14 +35,14 @@ mechanism, not a limit to work around.
 
 Everything that assembles frames (live bridge, bag porter), splits action
 frames back into per-stream slices, or derives per-key offsets for a backend
-(LeRobot features, starVLA modality.json, vla_foundry field dims) goes through
+(LeRobot features, other adapters' schema views) goes through
 a FrameLayout, so the layouts agree by construction.
 
 The dtype vocabulary lives in ``frames.codecs`` (SUPPORTED_NUMERIC_DTYPES /
 SPECIAL_DTYPES, lerobot-compatible by choice, and rejected at load, so this
 module's own dtype check is only a backstop for hand-built specs). This module
 has no lerobot dependency. Backends derive their own schema views from
-KeyLayout (starVLA / vla_foundry grouping). lerobot_features() is the one
+KeyLayout. lerobot_features() is the one
 lerobot-format emitter, kept here so the declared feature shapes and the
 zero-fill shapes share one source of truth.
 
@@ -383,9 +383,9 @@ class FrameLayout:
         Images and strings delegate to build_feature. Numeric keys declare
         shape (key.dim,) with the namespaced selector names of every slice.
 
-        LeRobot is the only backend consuming this format. starVLA and
-        vla_foundry derive their schemas from KeyLayout directly (see their
-        grouping modules). It lives here, not in lerobot_robot_rosetta, so the
+        LeRobot is the only backend consuming this format. Other adapters
+        derive their schemas from KeyLayout directly. It lives here, not in
+        lerobot_robot_rosetta, so the
         declared image shape and zero_image_for_spec's zero-fill shape agree
         via DECODED_IMAGE_CHANNELS by construction.
         """

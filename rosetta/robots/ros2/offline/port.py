@@ -27,10 +27,6 @@ Usage:
         --raw-dir ./datasets/bags --contract contract.yaml \
         --repo-id my_org/my_dataset --root ./datasets/lerobot
 
-    # vla_foundry tar shards
-    python -m rosetta.robots.ros2.offline.port --framework vla_foundry \
-        --raw-dir ./datasets/bags --contract contract.yaml \
-        --repo-id my_dataset --root ./datasets/vla
 """
 
 from __future__ import annotations
@@ -228,25 +224,25 @@ def main():
 
     # Common and framework-specific writer options. Writers ignore options they
     # don't use.
-    parser.add_argument("--push-to-hub", action="store_true", help="[lerobot/starvla] Upload to HF Hub")
+    parser.add_argument("--push-to-hub", action="store_true", help="[lerobot] Upload to HF Hub")
     parser.add_argument(
         "--hub-public",
         dest="hub_private",
         action="store_false",
         default=True,
-        help="[lerobot/starvla] Push publicly instead of privately (default: private)",
+        help="[lerobot] Push publicly instead of privately (default: private)",
     )
     parser.add_argument(
         "--hub-tags",
         type=str,
         default=None,
-        help='[lerobot/starvla] Comma-separated HF Hub tags (default: "rosetta,rosbag")',
+        help='[lerobot] Comma-separated HF Hub tags (default: "rosetta,rosbag")',
     )
-    parser.add_argument("--vcodec", type=str, default="libsvtav1", help="[lerobot/starvla] Video codec")
-    parser.add_argument("--past-steps", type=int, default=None, help="[vla_foundry] past lowdim steps")
-    parser.add_argument("--future-steps", type=int, default=None, help="[vla_foundry] future lowdim steps")
-    parser.add_argument("--image-indices", type=str, default=None, help='[vla_foundry] comma list, e.g. "-1,0"')
-    parser.add_argument("--samples-per-shard", type=int, default=None, help="[vla_foundry] samples per tar shard")
+    parser.add_argument("--vcodec", type=str, default="libsvtav1", help="[lerobot] Video codec")
+    parser.add_argument("--past-steps", type=int, default=None, help="[writer-specific] past lowdim steps")
+    parser.add_argument("--future-steps", type=int, default=None, help="[writer-specific] future lowdim steps")
+    parser.add_argument("--image-indices", type=str, default=None, help='[writer-specific] comma list, e.g. "-1,0"')
+    parser.add_argument("--samples-per-shard", type=int, default=None, help="[writer-specific] samples per tar shard")
 
     args = parser.parse_args()
     repo_id = args.repo_id or args.raw_dir.name

@@ -175,8 +175,8 @@ class PolicyRunner(Protocol):
     two safe against a concurrent ``run()``.
 
     Each ``run()`` owns whatever execution model the framework needs. The
-    LeRobot impl delegates to ``RobotClient``'s async control loop; the
-    vla_foundry impl runs its own fps loop.
+    LeRobot impl delegates to ``RobotClient``'s async control loop; other
+    implementations run their own fps loops.
     """
 
     def setup(self, node: NodeLike, contract: Contract) -> None:

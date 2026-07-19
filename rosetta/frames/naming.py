@@ -19,8 +19,8 @@ Frame dicts are keyed by contract keys (``observation.images.cam``,
 :func:`camera_name` strips the image prefix to the semantic camera name and
 keeps dots (``observation.images.wrist.right`` -> ``wrist.right``). LeRobot and
 GR00T consume that name directly. :func:`sanitize_field_name` flattens a name to
-a bare ``[A-Za-z0-9_]`` identifier for sinks that need it, such as vla_foundry's
-WebDataset tar members where a dot would split the sample key.
+a bare ``[A-Za-z0-9_]`` identifier for sinks that need it, such as WebDataset
+tar members where a dot would split the sample key.
 
 A key's role (state vs action) never comes from its spelling. It comes from the
 spec's type, via ``KeyLayout.is_action`` in :mod:`rosetta.frames.layout`.
@@ -36,7 +36,7 @@ def sanitize_field_name(name: str) -> str:
     """Flatten a name to a dot-free ``[A-Za-z0-9_]`` identifier.
 
     Every character outside that set becomes ``_``. Used by sinks that cannot
-    carry dots, such as vla_foundry's WebDataset tar members.
+    carry dots, such as WebDataset tar members.
 
     Args:
         name: A contract key or camera name.
@@ -55,8 +55,7 @@ def camera_name(key: str) -> str:
     (``observation.images.wrist.right`` -> ``wrist.right``). This is the
     framework-neutral identifier. LeRobot and GR00T use it as-is and keep the
     dotted hierarchy. A backend whose sink needs a flat identifier, such as
-    vla_foundry's WebDataset tar members, flattens it via
-    :func:`sanitize_field_name`.
+    WebDataset tar members, flattens it via :func:`sanitize_field_name`.
 
     A key without the prefix is returned unchanged, since ``removeprefix`` is a
     no-op when the prefix is absent.

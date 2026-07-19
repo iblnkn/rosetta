@@ -77,7 +77,7 @@ Actions read the same pipeline right-to-left: recording decodes from the channel
 
 ## Field kinds (`kind`)
 
-`kind` is an optional tag on an observation or action source naming the value's representation. LeRobot ignores the tag. The vla_foundry / starVLA adapters use the tag to pick per-group normalization and rotation handling. The default leaves every existing contract unchanged.
+`kind` is an optional tag on an observation or action source naming the value's representation. LeRobot ignores the tag. Framework adapters use the tag to pick per-group normalization and rotation handling. The default leaves every existing contract unchanged.
 
 `kind` is a single token (default `continuous`):
 

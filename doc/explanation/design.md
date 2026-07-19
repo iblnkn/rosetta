@@ -16,7 +16,7 @@ Rosetta puts the translation in one place: the contract. One YAML per robot defi
 - **Both directions.** One contract records observations and serves actions. Action transforms must invert, and Rosetta verifies the round trip at load.
 - **Failure at load time.** Unknown keys, impossible timelines, wrong-dimension kinds, non-invertible action transforms: rejected before a message flows.
 
-The **robot side** (`rosetta.robots`) adapts pub/sub ecosystems (ROS2 today). The **policy side** (`rosetta.policies`) adapts learning frameworks (LeRobot, vla_foundry, starvla). Both sides speak frames, so either swaps without touching the other.
+The **robot side** (`rosetta.robots`) adapts pub/sub ecosystems (ROS2 today). The **policy side** (`rosetta.policies`) adapts learning frameworks (LeRobot today, more via entry points). Both sides speak frames, so either swaps without touching the other.
 
 ## Package architecture
 

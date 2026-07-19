@@ -7,7 +7,6 @@ from setuptools import find_packages, setup
 # The plugins/adapters are in separate packages:
 #   - lerobot_robot_rosetta: LeRobot Robot plugin
 #   - lerobot_teleoperator_rosetta: LeRobot Teleoperator plugin
-#   - starvla_rosetta / vla_foundry_rosetta: framework adapters
 package_name = "rosetta"
 
 setup(
