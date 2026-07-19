@@ -57,6 +57,7 @@ def launch_setup(context, *args, **kwargs):
     params_file = LaunchConfiguration("params_file").perform(context)
     contract_path = LaunchConfiguration("contract_path").perform(context)
     bag_base_dir = LaunchConfiguration("bag_base_dir").perform(context)
+    storage_id = LaunchConfiguration("storage_id").perform(context)
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
     log_level = LaunchConfiguration("log_level").perform(context)
 
@@ -65,6 +66,8 @@ def launch_setup(context, *args, **kwargs):
     overrides = {"contract_path": contract_path}
     if bag_base_dir:
         overrides["bag_base_dir"] = bag_base_dir
+    if storage_id:
+        overrides["storage_id"] = storage_id
     if use_sim_time:
         overrides["use_sim_time"] = typed_config(context, "use_sim_time", bool)
 
@@ -108,6 +111,11 @@ def generate_launch_description():
             "bag_base_dir",
             default_value="",  # Empty = use value from params file
             description="Directory for rosbag output (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "storage_id",
+            default_value="",  # Empty = use value from params file
+            description="Rosbag storage plugin, e.g. mcap, sqlite3 (empty = use params file value)",
         ),
         # Runtime settings
         DeclareLaunchArgument(
