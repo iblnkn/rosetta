@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lerobot_rosetta</name>
+  <version>0.1.0</version>
+  <description>Rosetta's LeRobot backend adapter - dataset writer, policy runner, and inference servers.</description>
+  <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>rosetta</depend>
+  <depend>lerobot_robot_rosetta</depend>
+  <depend>python3-numpy</depend>
+  <!-- lerobot/torch/grpcio have no rosdep keys; provided by the pixi env
+       (pixi.toml) and declared in setup.py install_requires. -->
+  <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-grpcio</exec_depend>
+
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
