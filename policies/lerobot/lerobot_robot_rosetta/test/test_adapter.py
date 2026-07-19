@@ -20,7 +20,6 @@ import numpy as np
 import pytest
 import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register decoders
 from ament_index_python.packages import get_package_share_directory
-
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta
 
