@@ -23,7 +23,7 @@ LeRobot's flattened observation/action shape: images by short key, state and
 action as individual namespaced floats.
 
 Two modes:
-    - Standalone: creates a RosettaLifecycleNode internally (own node, executor,
+    - Standalone: creates a BridgeLifecycleNode internally (own node, executor,
       spin thread).
     - Injected: attaches to a pre-built TopicBridge on an external node (via
       config._external_bridge). Used by policy_runner_node so launch topic
@@ -43,7 +43,7 @@ from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.node_host import NodeHost
-from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 
 from .config_rosetta import RosettaConfig
@@ -101,8 +101,8 @@ def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
             f"ported dataset would receive missing, misrouted, or misshaped "
             f"inputs live. Merge numeric streams under one key per role "
             f"(values concatenate in declaration order) and give every "
-            f"numeric stream a select:, or deploy with a backend that "
-            f"preserves per-key layout (vla_foundry, starvla)."
+            f"numeric stream a select:, or deploy with a framework adapter "
+            f"that preserves per-key layout."
         )
 
 
@@ -110,7 +110,7 @@ class Rosetta(Robot):
     """LeRobot Robot that adapts a framework-neutral TopicBridge.
 
     Two modes:
-        - Standalone: creates an internal RosettaLifecycleNode with its own
+        - Standalone: creates an internal BridgeLifecycleNode with its own
           executor and spin thread. Used when launched independently.
         - Injected: attaches to a pre-built TopicBridge on an external node (via
           config._external_bridge). Used by policy_runner_node so launch topic
@@ -299,7 +299,7 @@ class Rosetta(Robot):
     def _create_node(self) -> None:
         """Create the lifecycle node and start the spin thread (NodeHost)."""
         self._host.start(
-            lambda ctx: RosettaLifecycleNode(
+            lambda ctx: BridgeLifecycleNode(
                 f"rosetta_{self.config.id}",
                 self.config.observation_specs,
                 self.config.action_specs,
@@ -309,7 +309,7 @@ class Rosetta(Robot):
         )
 
     @property
-    def _node(self) -> Optional[RosettaLifecycleNode]:
+    def _node(self) -> Optional[BridgeLifecycleNode]:
         return self._host.node
 
     def disconnect(self) -> None:
