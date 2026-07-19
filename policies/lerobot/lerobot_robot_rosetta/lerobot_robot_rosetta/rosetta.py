@@ -341,7 +341,7 @@ class Rosetta(Robot):
         if self._bridge is not None:
             self._bridge.reset_state()
         elif self._node is not None:
-            self._node.reset_state()
+            self._node.bridge.reset_state()
 
     # -------------------- Observation / Action --------------------
 
@@ -354,7 +354,7 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        src = self._bridge if self._bridge is not None else self._node
+        src = self._bridge if self._bridge is not None else self._node.bridge
         return self._flatten_observation(src.sample_frame())
 
     def send_action(self, action: RobotAction) -> RobotAction:
@@ -365,7 +365,7 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        src = self._bridge if self._bridge is not None else self._node
+        src = self._bridge if self._bridge is not None else self._node.bridge
         src.publish_frame(self._unflatten_action(action))
         # Echo back the values sent, as the namespaced floats LeRobot recorded.
         return {name: action[name] for names in self._act_vector_names.values() for name in names}
