@@ -32,10 +32,10 @@ time and fail fast otherwise. An adapter registers itself like so::
     # in the adapter package's setup.py / pyproject.toml
     entry_points={
         'rosetta.dataset_writers': [
-            'lerobot = lerobot_robot_rosetta.dataset_writer:LeRobotDatasetWriter',
+            'lerobot = lerobot_rosetta.dataset_writer:LeRobotDatasetWriter',
         ],
         'rosetta.policy_runners': [
-            'lerobot = lerobot_robot_rosetta.policy_runner:LeRobotPolicyRunner',
+            'lerobot = lerobot_rosetta.policy_runner:LeRobotPolicyRunner',
         ],
     }
 

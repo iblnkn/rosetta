@@ -82,7 +82,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         )
         # This default, and is_classifier's below, are duplicated as inert
         # standalone-use fallbacks in each framework adapter's own setup()
-        # (e.g. lerobot_robot_rosetta/policy_runner.py). Keep both in sync.
+        # (e.g. lerobot_rosetta/policy_runner.py). Keep both in sync.
         self.declare_parameter(
             "pretrained_name_or_path",
             "",

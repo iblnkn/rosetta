@@ -196,7 +196,8 @@ The workspace consists of several packages; framework adapters register into `ro
 |---------|---------|
 | `rosetta` | Core library, nodes, bag conversion |
 | [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS2 action/service definitions |
-| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
+| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot backend adapter — dataset writer, policy runner, inference servers |
+| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin (discovered by LeRobot) |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
 
 ```
@@ -243,7 +244,7 @@ LeRobot's `connect()` / `disconnect()` map to ROS2 lifecycle transitions:
 
 ### Policy Inference
 
-The `policy_runner_node` delegates inference to a gRPC policy server (`lerobot_robot_rosetta.policy_server`, a thin preload/cache wrapper over LeRobot's `lerobot.async_inference.policy_server`). The server has no ROS2 dependency and can run on any machine with LeRobot and a GPU. Benefits:
+The `policy_runner_node` delegates inference to a gRPC policy server (`lerobot_rosetta.policy_server`, a thin preload/cache wrapper over LeRobot's `lerobot.async_inference.policy_server`). The server has no ROS2 dependency and can run on any machine with LeRobot and a GPU. Benefits:
 
 - Better GPU memory management
 - Support for all LeRobot policy types without code changes
@@ -563,7 +564,7 @@ ros2 action send_goal /run_policy \
 **Remote inference:** When `launch_local_server` is `false`, the node connects to a gRPC policy server at `server_address`. The server has no ROS2 dependency and can run on any machine with a GPU, completely independent of your robot's ROS2 environment. This lets a resource-constrained robot offload inference to a remote GPU server. To pre-warm the remote server so even the first goal skips the model load:
 
 ```bash
-python -m lerobot_robot_rosetta.policy_server --host=0.0.0.0 --port=8080 \
+python -m lerobot_rosetta.policy_server --host=0.0.0.0 --port=8080 \
     --policy-type=act --pretrained-name-or-path=my-org/my-policy --policy-device=cuda
 ```
 

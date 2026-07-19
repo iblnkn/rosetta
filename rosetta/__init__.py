@@ -30,8 +30,7 @@ The same frame machinery runs live inference and offline bag conversion, so
 training data matches inference input sample-for-sample by construction.
 
 Framework adapters live in their own packages and register via entry points
-(see :mod:`rosetta.policies`): ``lerobot_robot_rosetta``,
-``lerobot_teleoperator_rosetta``, ``vla_foundry_rosetta``,
+(see :mod:`rosetta.policies`): ``lerobot_rosetta``, ``vla_foundry_rosetta``,
 ``starvla_rosetta``.
 
 Usage::
