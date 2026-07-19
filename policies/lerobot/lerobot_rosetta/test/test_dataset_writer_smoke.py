@@ -72,12 +72,11 @@ def test_writer_end_to_end(tmp_path: Path):
     contract_path = tmp_path / "smoke.yaml"
     contract_path.write_text(CONTRACT_YAML)
     contract = load_contract(contract_path)
-    specs = list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
+    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
 
     writer = LeRobotDatasetWriter()
     writer.open(
         contract=contract,
-        specs=specs,
         repo_id="smoke/ds",
         root=tmp_path / "out",
         vcodec="libsvtav1",
@@ -97,10 +96,10 @@ def test_discarded_episode_does_not_leak(tmp_path: Path):
     contract_path = tmp_path / "smoke.yaml"
     contract_path.write_text(CONTRACT_YAML)
     contract = load_contract(contract_path)
-    specs = list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
+    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
 
     writer = LeRobotDatasetWriter()
-    writer.open(contract=contract, specs=specs, repo_id="smoke/ds", root=tmp_path / "out")
+    writer.open(contract=contract, repo_id="smoke/ds", root=tmp_path / "out")
 
     writer.add_frame(_frame(0))  # partial episode, then failure upstream
     writer.discard_episode()
@@ -121,12 +120,11 @@ def test_push_to_hub_private_by_default(tmp_path: Path, monkeypatch):
     contract_path = tmp_path / "smoke.yaml"
     contract_path.write_text(CONTRACT_YAML)
     contract = load_contract(contract_path)
-    specs = list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
+    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
 
     writer = LeRobotDatasetWriter()
     writer.open(
         contract=contract,
-        specs=specs,
         repo_id="smoke/ds",
         root=tmp_path / "out",
         push_to_hub=True,

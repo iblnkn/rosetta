@@ -43,12 +43,11 @@ def _open_writer(tmp_path: Path, **open_kwargs) -> tuple[LeRobotDatasetWriter, P
     contract_path = tmp_path / "smoke.yaml"
     contract_path.write_text(CONTRACT_YAML)
     contract = load_contract(contract_path)
-    specs = list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
+    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
 
     writer = LeRobotDatasetWriter()
     writer.open(
         contract=contract,
-        specs=specs,
         repo_id="smoke/ds",
         root=tmp_path / "out",
         contract_path=contract_path,
@@ -81,10 +80,10 @@ def test_no_contract_path_means_no_sidecar(tmp_path: Path):
     contract_path = tmp_path / "smoke.yaml"
     contract_path.write_text(CONTRACT_YAML)
     contract = load_contract(contract_path)
-    specs = list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
+    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
 
     writer = LeRobotDatasetWriter()
-    writer.open(contract=contract, specs=specs, repo_id="smoke/ds", root=tmp_path / "out")
+    writer.open(contract=contract, repo_id="smoke/ds", root=tmp_path / "out")
 
     sidecar = tmp_path / "out" / "smoke/ds" / "meta" / "rosetta_contract.yaml"
     assert not sidecar.exists()

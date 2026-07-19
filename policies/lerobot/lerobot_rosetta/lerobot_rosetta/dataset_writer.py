@@ -32,7 +32,7 @@ from lerobot.configs import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from rosetta.contract.schema import Contract
-from rosetta.contract.specs import StreamSpec
+from rosetta.contract.specs import StreamSpec, iter_specs
 from rosetta.frames.layout import FrameLayout
 
 
@@ -65,7 +65,6 @@ class LeRobotDatasetWriter:
         self,
         *,
         contract: Contract,
-        specs: list[StreamSpec],
         repo_id: str,
         root: Path | None = None,
         vcodec: str = "libsvtav1",
@@ -76,7 +75,12 @@ class LeRobotDatasetWriter:
         embed_contract: bool = True,
         **_opts: Any,
     ) -> None:
-        """Create the LeRobotDataset with features derived from contract specs."""
+        """Create the LeRobotDataset with features derived from the contract.
+
+        Uses the full recording view (``iter_specs``) per the DatasetWriter
+        protocol: LeRobot records every column.
+        """
+        specs = list(iter_specs(contract))
         # LeRobot uses root directly as the dataset path, so append repo_id.
         dataset_root = Path(root) / repo_id if root else None
         self._push_to_hub = push_to_hub
