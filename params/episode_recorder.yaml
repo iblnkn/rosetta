@@ -19,7 +19,19 @@ episode_recorder:
     # Record every topic on the graph (like `ros2 bag record -a`), not just
     # contract topics. Contract topics are always required; set false to
     # record only what the contract declares. Trim with exclude_topics.
+    #
+    # Auto-discovery stores ONE stream per camera. image_transport publishers
+    # are lazy — every re-encoding encodes only while subscribed, so recording
+    # all of them makes the camera node encode each frame several ways at once
+    # (enough load to halve its capture rate). Per camera: contract-declared
+    # or include_topics-matched streams win as-is; otherwise the best
+    # advertised, non-excluded stream by preference
+    # compressed > zstd > theora > compressedDepth > raw.
     record_all: true
+
+    # Regex patterns (ros2 bag record --exclude syntax) for topics to always
+    # auto-record — overrides exclude_topics and the per-camera policy above.
+    # include_topics: ["/wrist_camera/image_raw$"]
 
     # Default max episode duration in seconds (can be overridden per-episode)
     # 0 (or negative) = record until stopped, no time limit

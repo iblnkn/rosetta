@@ -35,7 +35,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import rosbag2_py
 from rcl_interfaces.msg import ParameterDescriptor
@@ -81,6 +81,53 @@ _DEFAULT_BLACKLIST = (
     r"^/rosout$",
     r"^/parameter_events$",
 )
+
+# One stored stream per camera family, best-first: any compressed form beats
+# storing raw frames; raw ("") is the fallback when no re-encoding is
+# advertised.
+_IMAGE_STREAM_PREFERENCE = ("/compressed", "/zstd", "/theora", "/compressedDepth", "")
+
+
+def image_transport_auto_skips(
+    graph: dict[str, str],
+    recorded: set[str],
+    include: Callable[[str], bool] = lambda _t: False,
+    exclude: Callable[[str], bool] = lambda _t: False,
+) -> set[str]:
+    """Family members to skip so each camera stores exactly one stream.
+
+    image_transport publishers are lazy: every re-encoding (``compressed``/
+    ``zstd``/``theora``/``compressedDepth``) encodes only while subscribed, so
+    recording all of them makes the camera node encode each frame several ways
+    at once — enough load to halve its capture rate.
+
+    A family is a raw ``sensor_msgs/msg/Image`` topic plus whatever
+    re-encodings of it are advertised. Members that are contract-``recorded``
+    or match ``include`` are pinned: they record, and the rest of the family
+    is skipped. With nothing pinned, the best non-``exclude``d member by
+    :data:`_IMAGE_STREAM_PREFERENCE` wins — a fully excluded family records
+    nothing. Topics outside any family are not this policy's business.
+
+    Args:
+        graph: Topic name -> message type for every advertised topic.
+        recorded: Topics already recorded regardless of discovery (contract).
+        include: Predicate pinning topics the user explicitly whitelisted.
+        exclude: Predicate removing candidates (the user's blacklist).
+
+    Returns:
+        Set of topic names to exclude from auto-recording.
+
+    """
+    skips: set[str] = set()
+    for base, type_str in graph.items():
+        if type_str != "sensor_msgs/msg/Image":
+            continue
+        family = [base + s for s in _IMAGE_STREAM_PREFERENCE if base + s in graph]
+        keep = {t for t in family if t in recorded or include(t)}
+        if not keep:
+            keep = {next((t for t in family if not exclude(t)), None)} - {None}
+        skips.update(t for t in family if t not in keep)
+    return skips
 
 
 def adapt_publisher_qos(publishers_info, *, warn=None) -> QoSProfile:
@@ -176,6 +223,15 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             ),
         )
         self.declare_parameter(
+            "include_topics",
+            [""],
+            ParameterDescriptor(
+                description="Regex patterns for topics to always auto-record, overriding "
+                "exclude_topics and the one-stream-per-camera policy",
+                read_only=True,
+            ),
+        )
+        self.declare_parameter(
             "default_max_duration",
             0.0,
             ParameterDescriptor(
@@ -214,6 +270,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._topics: list[tuple[str, str, QoSProfile]] = []  # (topic, type, qos)
         self._discovered_topics: list[tuple[str, str, QoSProfile]] = []
         self._exclude_regex: re.Pattern | None = None
+        self._include_regex: re.Pattern | None = None
         self._subs: dict[str, Any] = {}  # persistent subs (non-latched contract topics)
         self._episode_subs: dict[str, Any] = {}  # per-episode subs (latched contract + discovered)
         self._action_server: ActionServer | None = None
@@ -266,6 +323,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # Same convention as ``ros2 bag record --exclude``.
         user_patterns = tuple(p for p in self.get_parameter("exclude_topics").value if p)
         self._exclude_regex = re.compile("|".join(_DEFAULT_BLACKLIST + user_patterns))
+        include_patterns = tuple(p for p in self.get_parameter("include_topics").value if p)
+        self._include_regex = re.compile("|".join(include_patterns)) if include_patterns else None
 
         # Build topic list from contract
         self._topics = self._build_topic_list()
@@ -457,10 +516,27 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         known = {t[0] for t in self._topics}
         discovered: list[tuple[str, str, QoSProfile]] = []
 
-        for topic, type_list in self.get_topic_names_and_types():
+        def included(t: str) -> bool:
+            return bool(self._include_regex and self._include_regex.search(t))
+
+        def excluded(t: str) -> bool:
+            return bool(self._exclude_regex and self._exclude_regex.search(t))
+
+        topic_types = self.get_topic_names_and_types()
+        image_skips = image_transport_auto_skips(
+            {t: tl[0] for t, tl in topic_types}, known, include=included, exclude=excluded
+        )
+        if image_skips:
+            self.get_logger().info(
+                f"Skipping {len(image_skips)} redundant image_transport streams: {sorted(image_skips)}"
+            )
+
+        for topic, type_list in topic_types:
             if topic in known:
                 continue
-            if self._exclude_regex and self._exclude_regex.search(topic):
+            # include_topics pins a topic past both the camera-stream policy
+            # and exclude_topics; contract topics aren't discovery's to veto.
+            if not included(topic) and (topic in image_skips or excluded(topic)):
                 continue
             type_str = type_list[0]
             if len(type_list) > 1:
