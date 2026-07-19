@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.schema import load_contract
+from rosetta.contract.schema import load_contract, parse_contract
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "contracts"
 
@@ -112,6 +112,23 @@ def test_valid_contract_round_trips(tmp_path):
     assert src.channel.topic == "/joint_states"
     assert src.align.strategy == "hold"
     assert src.align.timeline == "receive"
+
+
+def test_parse_contract_matches_load_contract(tmp_path):
+    """load_contract(path) and parse_contract(read_text) validate identically."""
+    p = tmp_path / "c.yaml"
+    p.write_text(VALID_CONTRACT)
+    assert parse_contract(p.read_text()) == load_contract(p)
+
+
+def test_parse_contract_invalid_yaml_names_source():
+    with pytest.raises(ContractValidationError, match="my_robot.yaml"):
+        parse_contract("robot_type: [unclosed", source="my_robot.yaml")
+
+
+def test_parse_contract_default_source_label():
+    with pytest.raises(ContractValidationError, match="<contract>"):
+        parse_contract("robot_type: [unclosed")
 
 
 def test_safety_defaults_to_none(tmp_path):

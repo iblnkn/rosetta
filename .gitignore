@@ -233,3 +233,6 @@ __marimo__/
 # Temporary files or user-specific configurations
 .DS_Store # macOS
 Thumbs.db # Windows
+
+# Understand Anything analysis artifacts (machine-local, regenerable via /understand)
+.understand-anything/

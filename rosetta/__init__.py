@@ -39,7 +39,7 @@ Usage::
     from rosetta import Contract, load_contract, iter_observation_specs
 """
 
-from .contract.schema import Contract, load_contract
+from .contract.schema import Contract, load_contract, parse_contract
 from .contract.specs import (
     ActionStreamSpec,
     ObservationStreamSpec,
@@ -54,4 +54,5 @@ __all__ = [
     "iter_action_specs",
     "iter_observation_specs",
     "load_contract",
+    "parse_contract",
 ]

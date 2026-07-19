@@ -48,7 +48,7 @@ from rosetta_interfaces.srv import StartRecording
 from rosidl_runtime_py.utilities import get_message
 from std_srvs.srv import Trigger
 
-from rosetta.contract.schema import load_contract
+from rosetta.contract.schema import parse_contract
 from rosetta.contract.specs import iter_specs
 from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_KEY,
@@ -250,12 +250,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         if not contract_path:
             raise ValueError("contract_path parameter required")
 
-        self._contract = load_contract(contract_path)
-
-        if self.get_parameter("embed_contract").value:
-            self._contract_text = Path(contract_path).read_text()
-        else:
-            self._contract_text = ""
+        # Single read: the text embedded into bag metadata is byte-identical
+        # to the text the contract was parsed from, even if the file changes
+        # on disk after configure.
+        contract_text = Path(contract_path).read_text(encoding="utf-8")
+        self._contract = parse_contract(contract_text, source=contract_path)
+        self._contract_text = contract_text if self.get_parameter("embed_contract").value else ""
 
         self._bag_base = Path(self.get_parameter("bag_base_dir").value).expanduser()
         self._bag_base.mkdir(parents=True, exist_ok=True)

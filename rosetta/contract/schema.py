@@ -829,11 +829,36 @@ def load_contract(path: Path | str) -> Contract:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Contract file not found: {path}")
+    return parse_contract(path.read_text(encoding="utf-8"), source=str(path))
 
+
+def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
+    """
+    Validate contract YAML from an already-read string.
+
+    Callers that both parse a contract and keep its exact text (e.g. the
+    episode recorder embedding it into bag metadata) read the file once and
+    pass the same string here, so the text they hold is the text that was
+    validated.
+
+    Args:
+    ----
+        text: Contract YAML document.
+        source: Label used in error messages (typically the originating path).
+
+    Returns:
+    -------
+        Validated Contract dataclass.
+
+    Raises:
+    ------
+        ContractValidationError: If the contract is invalid.
+
+    """
     try:
-        data = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictYamlLoader) or {}
+        data = yaml.load(text, Loader=_StrictYamlLoader) or {}
     except yaml.YAMLError as e:
-        raise ContractValidationError(f"Invalid YAML in {path}: {e}") from e
+        raise ContractValidationError(f"Invalid YAML in {source}: {e}") from e
 
     if not isinstance(data, dict):
         raise ContractValidationError(f"Contract must be a YAML mapping, got {type(data).__name__}")
