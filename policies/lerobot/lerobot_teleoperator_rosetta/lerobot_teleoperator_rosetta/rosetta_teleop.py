@@ -48,17 +48,24 @@ from rosidl_runtime_py.utilities import get_message
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 
-EVENT_NAME_TO_ENUM = {
-    "is_intervention": TeleopEvents.IS_INTERVENTION,
-    "success": TeleopEvents.SUCCESS,
-    "terminate_episode": TeleopEvents.TERMINATE_EPISODE,
-    "rerecord_episode": TeleopEvents.RERECORD_EPISODE,
-    "failure": TeleopEvents.FAILURE,
+# Contract event names (rosetta.contract.model.TELEOP_EVENT_NAMES) mapped onto
+# lerobot's TeleopEvents. The vocabularies differ: the contract's episode-ending
+# events compose two lerobot events (a reward label plus TERMINATE_EPISODE), and
+# ``start_episode`` has no lerobot counterpart at all (lerobot's record loop
+# starts episodes itself), so the rosetta-native path (hil_manager_node) is the
+# only consumer of that event.
+EVENT_NAME_TO_ENUMS: dict[str, tuple[TeleopEvents, ...]] = {
+    "is_intervention": (TeleopEvents.IS_INTERVENTION,),
+    "success": (TeleopEvents.SUCCESS,),
+    "failure": (TeleopEvents.FAILURE,),
+    "end_success": (TeleopEvents.SUCCESS, TeleopEvents.TERMINATE_EPISODE),
+    "end_failure": (TeleopEvents.FAILURE, TeleopEvents.TERMINATE_EPISODE),
 }
 
-# One source of truth for the event key set. (The old per-site dicts dropped
-# FAILURE, so the returned key set mutated after the first failure message.)
-DEFAULT_EVENTS: dict[TeleopEvents, bool] = dict.fromkeys(EVENT_NAME_TO_ENUM.values(), False)
+# One source of truth for the event key set: every lerobot TeleopEvents member,
+# so consumers always see the full, stable key set (RERECORD_EPISODE stays
+# False — the contract has no event for it).
+DEFAULT_EVENTS: dict[TeleopEvents, bool] = dict.fromkeys(TeleopEvents, False)
 
 
 class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
@@ -94,6 +101,12 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
                 partial(self._on_events, spec=events_spec),
                 qos_profile_from_dict(events_spec.channel.qos),
             )
+            unmapped = [name for name in events_spec.select if name not in EVENT_NAME_TO_ENUMS]
+            if unmapped:
+                self.get_logger().info(
+                    f"Teleop events with no lerobot mapping, ignored on this path "
+                    f"(hil_manager_node handles them): {unmapped}"
+                )
         self.get_logger().info(
             f"Configured: {len(self._config.input_specs)} inputs, {len(self._config.feedback_specs)} feedback"
         )
@@ -116,16 +129,24 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
         indices (``buttons.0``) work, not only plain fields. An unmapped event
         name is skipped. A missing or malformed field leaves that event at its
         last value instead of killing the subscription.
+
+        Several contract events may assert the same lerobot event (``success``
+        and ``end_success`` both assert SUCCESS), so each touched lerobot event
+        gets the OR of its sources in this message.
         """
         with self._events_lock:
+            touched: dict[TeleopEvents, bool] = {}
             for event_name, selector in spec.select.items():
-                if event_name not in EVENT_NAME_TO_ENUM:
+                enums = EVENT_NAME_TO_ENUMS.get(event_name)
+                if not enums:
                     continue
                 try:
-                    value = resolve_indexed(msg, selector)
-                    self._events_state[EVENT_NAME_TO_ENUM[event_name]] = bool(value)
+                    value = bool(resolve_indexed(msg, selector))
                 except (AttributeError, IndexError, ValueError):
-                    pass
+                    continue
+                for enum in enums:
+                    touched[enum] = touched.get(enum, False) or value
+            self._events_state.update(touched)
 
     def sample_action(self) -> dict[str, Any]:
         """Flatten per-spec input samples to {namespaced_name: float}.
