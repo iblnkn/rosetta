@@ -18,7 +18,9 @@ Setup for lerobot_robot_rosetta - LeRobot Robot plugin for Rosetta.
 
 This package name follows LeRobot's auto-discovery convention:
 packages starting with 'lerobot_robot_*' are automatically discovered
-and registered by LeRobot's register_third_party_plugins().
+and registered by LeRobot's register_third_party_plugins(). It contains
+only the LeRobot-discovered Robot plugin; the rosetta-side LeRobot backend
+(dataset writer, policy runner, inference servers) lives in lerobot_rosetta.
 """
 
 import os
@@ -41,23 +43,7 @@ setup(
         "lerobot",
         "rclpy",
         "rosetta",  # Depends on rosetta.contract/frames + rosetta.robots.ros2
-        "grpcio",  # classifier_server.py
-        "torch",  # classifier_server.py
     ],
-    entry_points={
-        # Rosetta framework adapters: resolved by name by the framework-agnostic
-        # node / porter so rosetta core never imports lerobot.
-        "rosetta.policy_runners": [
-            "lerobot = lerobot_robot_rosetta.policy_runner:LeRobotPolicyRunner",
-        ],
-        "rosetta.dataset_writers": [
-            "lerobot = lerobot_robot_rosetta.dataset_writer:LeRobotDatasetWriter",
-        ],
-        "console_scripts": [
-            "rosetta_classifier_server = lerobot_robot_rosetta.classifier_server:main",
-            "rosetta_policy_server = lerobot_robot_rosetta.policy_server:main",
-        ],
-    },
     extras_require={"test": ["pytest"]},
     zip_safe=True,
     author="Isaac Blankenau",

@@ -21,6 +21,9 @@ to LeRobot's Robot interface. It is auto-discovered by LeRobot via the
 `register_third_party_plugins()` mechanism when the package name starts with
 `lerobot_robot_`.
 
+The rosetta-side LeRobot backend (dataset writer, policy runner, inference
+servers) lives in the `lerobot_rosetta` package.
+
 Usage:
     # Auto-discovered when using LeRobot - just specify type in config:
     robot:
@@ -32,13 +35,9 @@ Usage:
 """
 
 from .config_rosetta import RosettaConfig
-from .dataset_writer import LeRobotDatasetWriter
-from .policy_runner import LeRobotPolicyRunner
 from .rosetta import Rosetta
 
 __all__ = [
-    "LeRobotDatasetWriter",
-    "LeRobotPolicyRunner",
     "Rosetta",
     "RosettaConfig",
 ]
