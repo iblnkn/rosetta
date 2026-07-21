@@ -150,6 +150,7 @@ class ActionSpec:
 
     key: str
     publish_topic: str
+    hil_topic: str
     type: str
     selector: dict[str, Any] | None = None
     from_tensor: dict[str, Any] | None = None
@@ -485,6 +486,7 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> A
     return ActionSpec(
         key=data["key"],
         publish_topic=pub["topic"],
+        hil_topic=None if not pub["hil_topic"] else pub["hil_topic"],
         type=pub["type"],
         selector=data.get("selector"),
         from_tensor=data.get("from_tensor"),

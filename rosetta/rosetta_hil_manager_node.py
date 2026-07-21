@@ -103,7 +103,7 @@ class RosettaHilManagerNode(LifecycleNode):
     """
 
     def __init__(self):
-        super().__init__("hil_manager", enable_logger_service=True)
+        super().__init__("hil_manager")#, enable_logger_service=True)
 
         # -------------------- Parameters --------------------
         self.declare_parameter(
@@ -155,6 +155,13 @@ class RosettaHilManagerNode(LifecycleNode):
             "feedback_rate_hz", 30.0,
             ParameterDescriptor(description="Rate for publishing ManageEpisode feedback")
         )
+        self.declare_parameter(
+            "policy_startup_timeout_s", 50.0,
+            ParameterDescriptor(
+                description="Max seconds to wait for first policy output before starting recorder. "
+                            "If exceeded, recorder starts anyway.",
+            )
+        )
 
         # -------------------- State --------------------
         self._contract = None
@@ -176,10 +183,14 @@ class RosettaHilManagerNode(LifecycleNode):
         self._stop_requested = False
         self._start_requested = False
 
+        # Event set when the policy publishes its first output. Used to delay
+        # recorder start until the policy is actually streaming commands.
+        self._policy_first_output_event = threading.Event()
+
         # Intervention tracking stats (guarded by _mux_lock)
         self._intervention_count = 0
         self._total_intervention_duration = 0.0
-        self._current_intervention_start_time: float | None = None
+        self._current_intervention_start_time = None  # rclpy.time.Time or None
 
         # Subscriptions and publishers for muxing
         self._mux_subs: list = []
@@ -188,6 +199,9 @@ class RosettaHilManagerNode(LifecycleNode):
         self._intervention_pub = None
         self._intervention_count_pub = None
         self._intervention_duration_pub = None
+        self._recording_duration_pub = None
+        self._autonomy_ratio_pub = None
+        self._recording_start_time = None  # rclpy.time.Time or None
         self._episode_service = None
         self._stop_service = None
         self._intervention_service = None
@@ -223,7 +237,7 @@ class RosettaHilManagerNode(LifecycleNode):
         # Switching from policy to teleop - intervention starts
         if old_source == "policy" and new_control_source == "teleop":
             self._intervention_count += 1
-            self._current_intervention_start_time = time.time()
+            self._current_intervention_start_time = self.get_clock().now()
             self.get_logger().debug(
                 f"Intervention started (count: {self._intervention_count})"
             )
@@ -232,7 +246,7 @@ class RosettaHilManagerNode(LifecycleNode):
         # Switching from teleop to policy - intervention ends
         elif old_source == "teleop" and new_control_source == "policy":
             if self._current_intervention_start_time is not None:
-                duration = time.time() - self._current_intervention_start_time
+                duration = (self.get_clock().now() - self._current_intervention_start_time).nanoseconds / 1e9
                 self._total_intervention_duration += duration
                 self._current_intervention_start_time = None
                 self.get_logger().debug(
@@ -312,14 +326,28 @@ class RosettaHilManagerNode(LifecycleNode):
             pub = self.create_publisher(msg_cls, original_topic, qos)
             self._command_publishers[original_topic] = (msg_cls, pub)
 
-            # Subscribe to the remapped policy output
-            sub = self.create_subscription(
-                msg_cls, remapped_topic,
-                lambda msg, topic=original_topic: self._on_policy_output(msg, topic),
-                qos, callback_group=self._sub_cbg,
-            )
-            self._mux_subs.append(sub)
-            self.get_logger().info(f"Action mux: {remapped_topic} -> {original_topic}")
+            # If we want to insert some node intercepting the policy output BEFORE going to HIL
+            if action_spec.hil_topic is not None:  # If there's a name
+                original_hil_topic = action_spec.hil_topic
+                remapped_hil_topic = policy_remap_prefix + original_hil_topic
+
+                sub = self.create_subscription(
+                    msg_cls, remapped_hil_topic,
+                    lambda msg, topic=original_topic: self._on_policy_output(msg, topic),
+                    qos, callback_group=self._sub_cbg,
+                )
+                self._mux_subs.append(sub)
+                self.get_logger().info(f"Action mux: {remapped_hil_topic} -> {original_hil_topic}")
+
+            else:
+                # Subscribe to the remapped policy output
+                sub = self.create_subscription(
+                    msg_cls, remapped_topic,
+                    lambda msg, topic=original_topic: self._on_policy_output(msg, topic),
+                    qos, callback_group=self._sub_cbg,
+                )
+                self._mux_subs.append(sub)
+                self.get_logger().info(f"Action mux: {remapped_topic} -> {original_topic}")
 
         # --- Mux: subscribe to teleop input, publish to real command topic ---
         if self._contract.teleop:
@@ -380,6 +408,12 @@ class RosettaHilManagerNode(LifecycleNode):
         # --- Intervention stats publishers ---
         self._intervention_count_pub = self.create_publisher(Int32, "/hil_manager/intervention_count", 10)
         self._intervention_duration_pub = self.create_publisher(Float64, "/hil_manager/intervention_duration", 10)
+        
+        # --- Recording duration publisher ---
+        self._recording_duration_pub = self.create_publisher(Float64, "/hil_manager/recording_duration", 10)
+        
+        # --- Autonomy ratio publisher (recording_duration / intervention_duration) ---
+        self._autonomy_ratio_pub = self.create_publisher(Float64, "/hil_manager/autonomy_ratio", 10)
 
         # --- Service wrapper (for callers that don't support actions) ---
         self._episode_service = self.create_service(
@@ -514,6 +548,14 @@ class RosettaHilManagerNode(LifecycleNode):
             self.destroy_publisher(self._intervention_duration_pub)
             self._intervention_duration_pub = None
 
+        if self._recording_duration_pub is not None:
+            self.destroy_publisher(self._recording_duration_pub)
+            self._recording_duration_pub = None
+
+        if self._autonomy_ratio_pub is not None:
+            self.destroy_publisher(self._autonomy_ratio_pub)
+            self._autonomy_ratio_pub = None
+
         if self._episode_service is not None:
             self.destroy_service(self._episode_service)
             self._episode_service = None
@@ -549,6 +591,11 @@ class RosettaHilManagerNode(LifecycleNode):
         if original_topic in self._command_publishers:
             _, pub = self._command_publishers[original_topic]
             pub.publish(msg)
+
+            # Signal that the policy has produced its first output. This is
+            # used to delay recorder start until the policy is actually running.
+            if not self._policy_first_output_event.is_set():
+                self._policy_first_output_event.set()
 
     def _on_teleop_input(self, msg) -> None:
         """Forward teleop input to all command topics when in teleop mode."""
@@ -793,6 +840,8 @@ class RosettaHilManagerNode(LifecycleNode):
             self._stop_requested = False
             self._start_requested = False
             self._reset_intervention_stats()
+        self._policy_first_output_event.clear()
+        self._recording_start_time = None
 
         enable_reward = self.get_parameter("enable_reward_classifier").value
         cancelled = False
@@ -806,18 +855,47 @@ class RosettaHilManagerNode(LifecycleNode):
         }
 
         try:
-            recorder_gh = self._start_recorder(prompt)
-            if recorder_gh is None:
-                fields["message"] = "Failed to start episode recorder"
-                return fields, cancelled
-            self._recorder_goal_handle = recorder_gh
+            # Start policy first so we can delay the recorder until the policy
+            # is actually publishing commands.  This trims idle time off the
+            # front of the bag.
+            self._policy_first_output_event.clear()
 
             policy_gh = self._start_policy(prompt)
             if policy_gh is None:
                 fields["message"] = "Failed to start robot policy"
-                self._cancel_recorder()
                 return fields, cancelled
             self._policy_goal_handle = policy_gh
+
+            # Wait for the first policy output before starting the recorder.
+            # Falls back to starting the recorder anyway after a timeout so a
+            # silent policy doesn't hang the episode indefinitely.
+            startup_timeout = self.get_parameter("policy_startup_timeout_s").value
+            self.get_logger().info(
+                f"Waiting up to {startup_timeout}s for first policy output..."
+            )
+            if self._policy_first_output_event.wait(timeout=startup_timeout):
+                self.get_logger().info("Policy is publishing; starting recorder")
+            else:
+                self.get_logger().warning(
+                    f"No policy output after {startup_timeout}s; starting recorder anyway"
+                )
+
+            # Honor stop requests that arrived during the wait.
+            with self._mux_lock:
+                if self._stop_requested:
+                    self.get_logger().info("Stop requested before recorder start; aborting")
+                    self._cancel_policy()
+                    fields["message"] = "Stopped before recording started"
+                    fields["termination_reason"] = "human_stop"
+                    return fields, cancelled
+
+            recorder_gh = self._start_recorder(prompt)
+            if recorder_gh is None:
+                fields["message"] = "Failed to start episode recorder"
+                self._cancel_policy()
+                return fields, cancelled
+            self._recorder_goal_handle = recorder_gh
+            self._recording_start_time = self.get_clock().now()
 
             reward_gh = None
             if enable_reward and self._reward_client is not None:
@@ -923,6 +1001,28 @@ class RosettaHilManagerNode(LifecycleNode):
             
             # Publish intervention stats
             self._publish_intervention_stats()
+
+            # Publish recording duration and autonomy ratio
+            if self._recording_duration_pub is not None and self._recording_start_time is not None:
+                recording_duration = (self.get_clock().now() - self._recording_start_time).nanoseconds / 1e9
+                dur_msg = Float64()
+                dur_msg.data = recording_duration
+                self._recording_duration_pub.publish(dur_msg)
+
+                # Publish autonomy ratio (recording_duration / intervention_duration).
+                # Include any in-progress intervention in the total.
+                if self._autonomy_ratio_pub is not None:
+                    with self._mux_lock:
+                        intervention_time = self._total_intervention_duration
+                        if self._current_intervention_start_time is not None:
+                            intervention_time += (self.get_clock().now() - self._current_intervention_start_time).nanoseconds / 1e9
+                    ratio_msg = Float64()
+                    ratio_msg.data = (
+                        intervention_time / recording_duration
+                        if intervention_time > 0.0
+                        else 0.0
+                    )
+                    self._autonomy_ratio_pub.publish(ratio_msg)
 
             time.sleep(feedback_interval)
 
