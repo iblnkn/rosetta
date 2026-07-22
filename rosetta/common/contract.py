@@ -486,7 +486,7 @@ def _parse_action(data: dict[str, Any], idx: int, section: str = "actions") -> A
     return ActionSpec(
         key=data["key"],
         publish_topic=pub["topic"],
-        hil_topic=None if not pub["hil_topic"] else pub["hil_topic"],
+        hil_topic=pub.get("hil_topic") or None,
         type=pub["type"],
         selector=data.get("selector"),
         from_tensor=data.get("from_tensor"),
@@ -583,6 +583,7 @@ def _parse_teleop(data: dict[str, Any] | None) -> TeleopSpec | None:
         ActionSpec(
             key=f.key,
             publish_topic=f.publish_topic,
+            hil_topic=f.hil_topic,
             type=f.type,
             selector=f.selector,
             from_tensor=f.from_tensor,
