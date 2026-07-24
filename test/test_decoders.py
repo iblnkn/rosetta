@@ -22,6 +22,7 @@ import types
 
 import numpy as np
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_observation_specs

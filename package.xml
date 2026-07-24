@@ -26,6 +26,11 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>trajectory_msgs</exec_depend>
   <exec_depend>control_msgs</exec_depend>
+  <!-- Referenced by type string, not import: tf2_msgs by the bundled contracts
+       (stone.yaml, turtlebot3.yaml adjunct topics), rosgraph_msgs by the
+       recorder's /clock topic. Load-time contract validation resolves both. -->
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 

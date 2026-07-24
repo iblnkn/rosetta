@@ -22,6 +22,7 @@ precisely because load_contract's parse already imports those paths."""
 import sys
 
 import pytest
+
 from rosetta.contract.sidecar import (
     LEROBOT_CONTRACT_SIDECAR_PATH,
     resolve_repo_file,

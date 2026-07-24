@@ -14,7 +14,7 @@ One thing before we begin: the policy we train will be clumsy (ten demonstration
 ## What you will need
 
 - A ROS2 robot (real or simulated) with a topic controlling movement (the topic you publish to to tele-operate your robot), and a camera stream.
-- ROS2, Rosetta, and LeRobot installed. The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) devcontainer installs all three together.
+- ROS2, Rosetta, and LeRobot installed — see [Installation](../installation.md). The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) pixi workspace installs all three together; a plain ROS 2 install works too.
 - A GPU for training.
 - An afternoon.
 

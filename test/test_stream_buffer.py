@@ -15,6 +15,7 @@
 """Tests for StreamBuffer resampling policies and clock-reset handling."""
 
 import pytest
+
 from rosetta.contract.schema import ResamplePolicy
 from rosetta.frames.resample import StreamBuffer
 

@@ -24,6 +24,7 @@ import types
 
 import numpy as np
 import pytest
+
 from rosetta.robots.ros2.decoders import (
     DepthEncodingNotSupported,
     decode_ros_image,

@@ -49,7 +49,6 @@ import traceback
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rosetta_interfaces.action import RunPolicy
 
 from rosetta.contract.schema import load_contract
 from rosetta.contract.sidecar import find_contract_for_pretrained, scan_inline_codec_paths
@@ -66,6 +65,7 @@ from rosetta.robots.ros2.nodes.node_utils import (
 )
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta.robots.ros2.topic_bridge import TopicBridge
+from rosetta_interfaces.action import RunPolicy
 
 
 class PolicyRunnerNode(RosettaLifecycleNode):

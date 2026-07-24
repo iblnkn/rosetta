@@ -24,6 +24,7 @@ TRANSIENT_LOCAL only when every publisher offers it.
 from types import SimpleNamespace
 
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
 from rosetta.robots.ros2.nodes.episode_recorder_node import adapt_publisher_qos
 
 

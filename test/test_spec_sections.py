@@ -18,6 +18,7 @@ iter_specs also yields. This keeps RL and record-only columns out of
 observation.state."""
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (
     Align,

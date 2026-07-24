@@ -23,6 +23,7 @@ finish_goal that itself raises.
 from types import SimpleNamespace
 
 import pytest
+
 from rosetta.policies import RunnerResult
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
 

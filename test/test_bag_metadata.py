@@ -16,6 +16,7 @@
 
 import pytest
 import yaml
+
 from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,

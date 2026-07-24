@@ -37,12 +37,13 @@ import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn
+from sensor_msgs.msg import JointState
+
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec
 from rosetta.robots.ros2.rclpy_utils import lifecycle_state_label
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode, RosettaLifecycleNode
-from sensor_msgs.msg import JointState
 
 
 def _act_spec(topic: str, names: list[str], safety: SafetyBehavior) -> ActionStreamSpec:

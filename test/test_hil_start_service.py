@@ -24,6 +24,7 @@ episode thread, and returns; the thread releases the guard on every exit.
 import threading
 
 import pytest
+
 from rosetta.robots.ros2.nodes.hil_manager_node import HilManagerNode
 from rosetta.robots.ros2.nodes.node_utils import wait_until
 from rosetta_interfaces.srv import StartHILEpisode

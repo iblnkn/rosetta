@@ -17,6 +17,7 @@
 import types
 
 import pytest
+
 from rosetta.robots.ros2.field_access import resolve_indexed
 
 

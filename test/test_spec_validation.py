@@ -22,6 +22,7 @@ no registration imports are needed.
 """
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (
     Align,
@@ -212,9 +213,7 @@ def test_non_numeric_action_dtype_rejected():
     """Published streams are numeric vectors. A String-typed action channel
     (native dtype 'string') used to build a FrameLayout fine and then crash
     at the first publish_frame, inside split's float coercion."""
-    c = _contract(
-        actions=[_entry("action", _source("/note", "std_msgs/msg/String", encoder="my_pkg.enc:encode"))]
-    )
+    c = _contract(actions=[_entry("action", _source("/note", "std_msgs/msg/String", encoder="my_pkg.enc:encode"))])
     with pytest.raises(ContractValidationError, match="numeric vectors"):
         list(iter_action_specs(c))
 

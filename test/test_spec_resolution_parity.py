@@ -23,6 +23,7 @@ pin exactly that, plus the identity guarantee itself.
 """
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (
     Align,

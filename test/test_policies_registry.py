@@ -22,6 +22,7 @@ test_codec_registry.py uses for the codec plugin loader.
 import types
 
 import pytest
+
 from rosetta.policies import load_dataset_writer, load_policy_runner, registry
 from rosetta.policies.registry import (
     DATASET_WRITER_GROUP,

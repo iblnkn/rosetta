@@ -23,6 +23,7 @@ twice with the bag writer.
 
 import pytest
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+
 from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 
 _dedup = EpisodeRecorderNode._dedup_topics

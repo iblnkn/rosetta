@@ -17,6 +17,7 @@
 import types
 
 import pytest
+
 from rosetta.robots.ros2.timelines import (
     TIMELINES,
     get_message_timestamp_ns,

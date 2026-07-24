@@ -52,8 +52,9 @@ import time
 
 import rclpy
 from rclpy.node import Node
-from rosetta_interfaces.srv import StartRecording
 from std_srvs.srv import Trigger
+
+from rosetta_interfaces.srv import StartRecording
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Key codes

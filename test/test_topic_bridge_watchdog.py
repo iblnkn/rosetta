@@ -36,10 +36,11 @@ import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
+from sensor_msgs.msg import JointState
+
 from rosetta.contract.schema import Align, Channel, SafetyBehavior, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.robots.ros2.topic_bridge import WATCHDOG_PERIODS, TopicBridge
-from sensor_msgs.msg import JointState
 
 FPS = 30
 TIMEOUT_NS = int(WATCHDOG_PERIODS * 1e9 / FPS)

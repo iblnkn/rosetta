@@ -43,8 +43,6 @@ from rclpy.action import ActionServer, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.serialization import serialize_message
-from rosetta_interfaces.action import RecordEpisode
-from rosetta_interfaces.srv import StartRecording
 from rosidl_runtime_py.utilities import get_message
 from std_srvs.srv import Trigger
 
@@ -64,6 +62,8 @@ from rosetta.robots.ros2.nodes.node_utils import (
 )
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta_interfaces.action import RecordEpisode
+from rosetta_interfaces.srv import StartRecording
 
 # ---------- Constants ----------
 

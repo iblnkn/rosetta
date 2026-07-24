@@ -78,9 +78,7 @@ class ResizeOperator(Operator):
         if not all(isinstance(v, int) and not isinstance(v, bool) for v in args):
             raise ContractValidationError(f"resize operator dimensions must be integers, got {args!r}")
         if not all(0 < v <= _MAX_RESIZE_DIM for v in args):
-            raise ContractValidationError(
-                f"resize operator dimensions must be in [1, {_MAX_RESIZE_DIM}], got {args!r}"
-            )
+            raise ContractValidationError(f"resize operator dimensions must be in [1, {_MAX_RESIZE_DIM}], got {args!r}")
         self.output_hw = (args[0], args[1])  # declared geometry, read at spec resolution
 
     def forward(self, arr: np.ndarray) -> np.ndarray:

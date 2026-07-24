@@ -19,6 +19,7 @@ warning naming the broken link, and never raises."""
 import json
 
 import pytest
+
 import rosetta.contract.sidecar as sidecar_mod
 from rosetta.contract.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH, find_contract_for_pretrained
 

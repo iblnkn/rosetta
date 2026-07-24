@@ -32,6 +32,7 @@ from rclpy.qos import (
 )
 from rosbag2_py._storage import Duration as Rosbag2Duration
 from rosbag2_py._storage import QoS as Rosbag2QoS
+
 from rosetta.robots.ros2.nodes.node_utils import _rosbag2_duration, qos_to_rosbag2
 
 RMW_DURATION_INFINITE_NS = 2**63 - 1

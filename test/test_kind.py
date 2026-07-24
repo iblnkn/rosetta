@@ -17,6 +17,7 @@
 import warnings
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import (
     Align,

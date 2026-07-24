@@ -23,6 +23,7 @@ before re-raising.
 
 import pytest
 import rclpy
+
 from rosetta.robots.ros2.node_host import NodeHost
 
 

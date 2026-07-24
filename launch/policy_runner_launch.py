@@ -52,6 +52,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
+
 from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config
 
 

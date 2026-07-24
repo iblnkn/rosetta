@@ -21,6 +21,7 @@ pins one rule.
 """
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 

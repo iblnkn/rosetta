@@ -22,6 +22,7 @@ shapes are a whole-key concern (concatenation), owned by FrameLayout.
 
 import numpy as np
 import pytest
+
 from rosetta.frames.layout import (
     DECODED_IMAGE_CHANNELS,
     build_feature,

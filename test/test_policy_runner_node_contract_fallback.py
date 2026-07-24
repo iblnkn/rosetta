@@ -19,9 +19,10 @@ FAILURE: _setup() raises and the base routes through on_error so partial
 construction is torn down. The chase itself is pure and covered in
 test_contract_fallback_chase.py."""
 
-import rosetta.robots.ros2.nodes.policy_runner_node as node_mod
 from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.parameter import Parameter
+
+import rosetta.robots.ros2.nodes.policy_runner_node as node_mod
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
 
 

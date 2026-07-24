@@ -20,6 +20,7 @@ Pure (no ROS): registration and discovery just populate dicts.
 import types
 
 import pytest
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.frames import codecs
 from rosetta.frames.codecs import (

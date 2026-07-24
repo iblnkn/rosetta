@@ -25,6 +25,8 @@ a round-trip case -- closing the historical 1-of-N gap for good.
 
 import numpy as np
 import pytest
+from rosidl_runtime_py.utilities import get_message
+
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import (
@@ -39,7 +41,6 @@ from rosetta.frames.codecs import (
     discover_codecs,
     encode_value,
 )
-from rosidl_runtime_py.utilities import get_message
 
 # Every type that has BOTH an encoder and a decoder is round-trippable and must
 # have a sample below. type -> (select, sample_vector, atol).

@@ -43,8 +43,6 @@ import time
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionClient, ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
-from rosetta_interfaces.srv import StartHILEpisode
 from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import Int8
 from std_srvs.srv import SetBool, Trigger
@@ -66,6 +64,8 @@ from rosetta.robots.ros2.nodes.node_utils import (
 )
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
+from rosetta_interfaces.srv import StartHILEpisode
 
 # ---------- Constants ----------
 

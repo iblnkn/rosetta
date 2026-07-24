@@ -41,13 +41,14 @@ import numpy as np
 import pytest
 import rosbag2_py
 from rclpy.serialization import serialize_message
+from sensor_msgs.msg import JointState
+
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.frames.codecs import decode_value
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.offline.bag_frames import iter_bag_frames
-from sensor_msgs.msg import JointState
 
 FPS = 10
 STEP_NS = int(1e9 / FPS)

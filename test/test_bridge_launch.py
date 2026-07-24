@@ -34,9 +34,10 @@ import launch_testing.actions
 import launch_testing.asserts
 import numpy as np
 import pytest
+from sensor_msgs.msg import JointState  # noqa: F401
+
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from sensor_msgs.msg import JointState  # noqa: F401
 
 TOPIC = "/launch_test/js"
 
@@ -110,6 +111,7 @@ class TestBridgeAgainstLiveGraph(unittest.TestCase):
     def test_shared_key_frame_from_external_publisher(self):
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.lifecycle import LifecycleNode
+
         from rosetta.robots.ros2.topic_bridge import TopicBridge
 
         specs = [

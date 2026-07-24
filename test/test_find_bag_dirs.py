@@ -20,6 +20,7 @@ is an error; a valid shard that happens to receive none is an empty list.
 """
 
 import pytest
+
 from rosetta.robots.ros2.offline.bag_frames import find_bag_dirs
 
 

@@ -15,6 +15,7 @@
 """read_bag_contract_text reads back what episode_recorder_node writes."""
 
 import yaml
+
 from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,

@@ -18,7 +18,7 @@
   └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
 ```
 
-> **Getting started?** The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) devcontainer installs ROS2, Rosetta, and LeRobot together.
+> **Getting started?** See [Installation](https://iblnkn.github.io/rosetta/installation.html). The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) pixi workspace installs ROS2, Rosetta, and LeRobot together in one command; installing into an existing ROS 2 Jazzy workspace is also supported.
 
 **1. Define** a contract for your robot:
 
@@ -94,18 +94,18 @@ ros2 action send_goal /run_policy \
     rosetta_interfaces/action/RunPolicy "{prompt: 'pick up red block'}"
 ```
 
-Full walkthrough: [Train and deploy your first policy](https://github.com/iblnkn/rosetta/blob/main/doc/tutorials/first-policy.md).
+Full walkthrough: [Train and deploy your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html).
 
 ## Documentation
 
-The docs aspire to follow [Diátaxis](https://diataxis.fr/) framework. Start at the [documentation index](https://github.com/iblnkn/rosetta/blob/main/doc/index.md).
+The docs aspire to follow [Diátaxis](https://diataxis.fr/) framework. Start at the [documentation index](https://iblnkn.github.io/rosetta/).
 
 | Section | Purpose | Start with |
 |---------|---------|-----------|
-| [Tutorials](https://github.com/iblnkn/rosetta/blob/main/doc/tutorials/first-policy.md) | Learn by doing | [Your first policy](https://github.com/iblnkn/rosetta/blob/main/doc/tutorials/first-policy.md) |
-| [How-to guides](https://github.com/iblnkn/rosetta/blob/main/doc/index.md#how-to-guides) | Get a task done | [Write a contract](https://github.com/iblnkn/rosetta/blob/main/doc/how-to/write-a-contract.md), [Port existing bags](https://github.com/iblnkn/rosetta/blob/main/doc/how-to/port-existing-bags.md) |
-| [Reference](https://github.com/iblnkn/rosetta/blob/main/doc/index.md#reference) | Look things up | [Contract reference](https://github.com/iblnkn/rosetta/blob/main/doc/reference/contract.md), [Nodes](https://github.com/iblnkn/rosetta/blob/main/doc/reference/nodes.md) |
-| [Explanation](https://github.com/iblnkn/rosetta/blob/main/doc/index.md#explanation) | Understand the design | [Design](https://github.com/iblnkn/rosetta/blob/main/doc/explanation/design.md), [Record raw, decide late](https://github.com/iblnkn/rosetta/blob/main/doc/explanation/record-raw-decide-late.md) |
+| Getting started | Install, then learn by doing | [Installation](https://iblnkn.github.io/rosetta/installation.html), [Your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html) |
+| How-to guides | Get a task done | [Write a contract](https://iblnkn.github.io/rosetta/how-to/write-a-contract.html), [Port existing bags](https://iblnkn.github.io/rosetta/how-to/port-existing-bags.html) |
+| Reference | Look things up | [Contract](https://iblnkn.github.io/rosetta/reference/contract.html), [Nodes](https://iblnkn.github.io/rosetta/reference/nodes.html), [Actions and services](https://iblnkn.github.io/rosetta/reference/interfaces.html) |
+| Explanation | Understand the design | [Design](https://iblnkn.github.io/rosetta/explanation/design.html), [Record raw, decide late](https://iblnkn.github.io/rosetta/explanation/record-raw-decide-late.html) |
 
 
 ## License
