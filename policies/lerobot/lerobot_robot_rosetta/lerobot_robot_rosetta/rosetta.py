@@ -41,6 +41,7 @@ import numpy as np
 from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.node_host import NodeHost
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode

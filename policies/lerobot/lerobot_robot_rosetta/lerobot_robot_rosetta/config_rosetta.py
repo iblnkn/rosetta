@@ -82,6 +82,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from lerobot.robots.config import RobotConfig
+
 from rosetta.contract.schema import Contract, load_contract
 from rosetta.contract.specs import (
     ActionStreamSpec,

@@ -38,24 +38,31 @@ The package follows LeRobot's `lerobot_robot_*` [naming convention](https://hugg
 
 ## Configuration
 
-All configuration comes from the contract YAML. See [rosetta/README.md](../rosetta/README.md#contract-reference) for the full schema.
+All configuration comes from the contract YAML:
 
 ```yaml
 robot_type: my_robot
+robot_interface: ros2
 fps: 30
 
 observations:
-  - key: observation.state
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
-    selector: {names: [position.shoulder, position.elbow]}
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
+    select: [position.shoulder, position.elbow]
 
 actions:
-  - key: action
-    publish: {topic: /cmd, type: sensor_msgs/msg/JointState}
-    selector: {names: [position.shoulder, position.elbow]}
-    safety_behavior: hold  # what to publish if actions stop
+  action:
+    channel:
+      topic: /cmd
+      type: sensor_msgs/msg/JointState
+      safety: hold          # what to publish if actions stop
+    align: {strategy: hold, timeline: header}
+    select: [position.shoulder, position.elbow]
 ```
+
+Full schema — every section, operator, and alignment strategy:
+[contract reference](https://iblnkn.github.io/rosetta/reference/contract.html).
 
 ## LeRobot Interface
 
@@ -87,6 +94,10 @@ Implements the [Robot](https://github.com/huggingface/lerobot/blob/main/src/lero
 ## Inference Servers
 
 The gRPC inference servers, dataset writer, and policy runner moved to [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) — rosetta's LeRobot backend adapter. This package keeps only the LeRobot-discovered Robot plugin.
+
+## Documentation
+
+Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
 
 ## License
 
