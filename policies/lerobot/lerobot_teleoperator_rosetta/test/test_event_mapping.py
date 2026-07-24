@@ -7,9 +7,9 @@ vocabulary changes without the other.
 """
 
 from lerobot.teleoperators.utils import TeleopEvents
-from rosetta.contract.model import TELEOP_EVENT_NAMES
 
 from lerobot_teleoperator_rosetta.rosetta_teleop import DEFAULT_EVENTS, EVENT_NAME_TO_ENUMS
+from rosetta.contract.model import TELEOP_EVENT_NAMES
 
 # The one contract event with no lerobot counterpart: lerobot's record loop
 # starts episodes itself, so only the rosetta-native path consumes it.

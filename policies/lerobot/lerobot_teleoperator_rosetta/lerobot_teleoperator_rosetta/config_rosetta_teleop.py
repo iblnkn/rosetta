@@ -22,6 +22,7 @@ construction, so property access stays cheap and hands back the same objects.
 from dataclasses import dataclass, field
 
 from lerobot.teleoperators.config import TeleoperatorConfig
+
 from rosetta.contract.schema import Contract, load_contract
 from rosetta.contract.specs import iter_teleop_feedback_specs, iter_teleop_input_specs
 

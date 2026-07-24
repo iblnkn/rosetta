@@ -43,29 +43,38 @@ The package follows LeRobot's `lerobot_teleoperator_*` [naming convention](https
 
 ## Configuration
 
-Configure via the `teleop` section of your contract:
+Configure via the `teleop` section of your contract. `input` and `feedback` are
+lists of independently-targeted sources; each entry names an existing action
+(`target`) or observation (`origin`) topic, validated at contract load:
 
 ```yaml
 teleop:
-  inputs:
-    - key: teleop_input
-      topic: /leader_arm/joint_states
-      type: sensor_msgs/msg/JointState
-      selector:
-        names: [position.j1, position.j2, position.j3]
+  input:
+    - target: /cmd                 # names an existing action channel's topic
+      channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: header}
+      select: [position.j1, position.j2, position.j3]
 
-  events:
-    topic: /joy
-    type: sensor_msgs/msg/Joy
-    mappings:
+  events:                          # edge-triggered; no align — events are not resampled
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
+    select:                        # event_name -> button/axis path
       is_intervention: buttons.5   # Human taking over
       success: buttons.0           # Mark success
-      terminate_episode: buttons.6 # End episode
-      rerecord_episode: buttons.7  # Discard and restart
+      end_success: buttons.6       # End episode, success
+      end_failure: buttons.7       # End episode, failure
       failure: buttons.1           # Mark failure
 
-  feedback: []  # Optional publishers for operator feedback
+  feedback: []                     # Optional publishers for operator feedback
 ```
+
+The event vocabulary is closed — `is_intervention`, `start_episode`, `success`,
+`failure`, `end_success`, `end_failure`. An unknown event name is a load error.
+On this LeRobot-native path the first three map one-to-one onto LeRobot's
+`TeleopEvents`, `end_success`/`end_failure` assert the reward event plus
+`TERMINATE_EPISODE` together, and `start_episode` has no LeRobot counterpart
+(ignored here, handled by `hil_manager_node`).
+
+Full schema: [contract reference](https://iblnkn.github.io/rosetta/reference/contract.html#teleop).
 
 ## LeRobot Interface
 
@@ -109,6 +118,12 @@ while True:
     if events[TeleopEvents.TERMINATE_EPISODE]:
         break
 ```
+
+See [Set up teleop and HIL](https://iblnkn.github.io/rosetta/how-to/teleop-and-hil.html) for the ROS 2-native path, where `hil_manager_node` runs this loop for you.
+
+## Documentation
+
+Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
 
 ## License
 

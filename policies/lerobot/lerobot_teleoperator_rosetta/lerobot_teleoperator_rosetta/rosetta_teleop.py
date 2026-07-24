@@ -39,12 +39,13 @@ import numpy as np
 from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from rosidl_runtime_py.utilities import get_message
+
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.node_host import NodeHost
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict, require_transition_success
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
-from rosidl_runtime_py.utilities import get_message
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 
