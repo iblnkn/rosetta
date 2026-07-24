@@ -35,6 +35,14 @@ python -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
 colcon build --packages-select lerobot_rosetta
 ```
 
+## Documentation
+
+How the LeRobot backend fits together, and the dataset layout it writes:
+[LeRobot integration](https://iblnkn.github.io/rosetta/explanation/lerobot-integration.html)
+and [LeRobot data model](https://iblnkn.github.io/rosetta/reference/lerobot-data-model.html).
+
+Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
+
 ## License
 
 Apache-2.0

@@ -24,6 +24,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+
 from lerobot_rosetta import policy_runner as pr
 
 

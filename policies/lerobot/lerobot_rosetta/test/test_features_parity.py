@@ -32,9 +32,10 @@ fails here.
 from pathlib import Path
 
 import pytest
-import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from ament_index_python.packages import get_package_share_directory
 from lerobot.utils.feature_utils import hw_to_dataset_features
+
+import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
 from lerobot_rosetta.dataset_writer import build_lerobot_features

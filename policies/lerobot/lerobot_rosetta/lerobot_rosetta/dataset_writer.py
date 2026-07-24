@@ -30,6 +30,7 @@ from typing import Any
 
 from lerobot.configs import RGBEncoderConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
 from rosetta.contract.schema import Contract
 from rosetta.contract.specs import StreamSpec
 from rosetta.frames.layout import FrameLayout

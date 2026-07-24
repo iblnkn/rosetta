@@ -39,11 +39,11 @@ from typing import Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
+from rcl_interfaces.msg import ParameterDescriptor
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
-from rcl_interfaces.msg import ParameterDescriptor
 from rosetta.contract.schema import Contract
 from rosetta.frames.protocols import FrameIO
 from rosetta.policies import RunnerFeedback, RunnerResult
