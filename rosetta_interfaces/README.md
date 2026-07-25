@@ -12,6 +12,22 @@ actions, rewards) is plain ROS 2 topics defined by the contract YAML.
 | `ManageEpisode` | action | `hil_manager` | Orchestrate a human-in-the-loop episode |
 | `StartHILEpisode` | service | `hil_manager` | Start a HIL episode (returns once started) |
 | `StartRecording` | service | `episode_recorder` | Lightweight start of recording |
+| `StartPolicy` | service | `policy_runner` | Lightweight start of policy inference |
+
+The services exist because some clients (Foxglove, for one) can call services but
+not actions. They are thin proxies for the action operations they are named
+after, and they return immediately — per the ROS 2 design guidance that services
+"should never be used for longer running processes."
+
+Every action result reports **how** it ended, not whether it "succeeded":
+
+- The goal's terminal `GoalStatus` is the mechanics — `SUCCEEDED` when the work
+  reached a defined end, `CANCELED` when a client took it away, `ABORTED` when
+  the server stopped it (an error, or a lifecycle deactivate).
+- `termination_reason` names the exact cause, with the legal values declared as
+  constants in each `.action`.
+- `ManageEpisode` additionally carries `outcome` — whether the *robot did the
+  task* — which is independent of how the episode ended.
 
 Field-by-field definitions with example calls:
 **[Actions and services reference](https://iblnkn.github.io/rosetta/reference/interfaces.html)**.

@@ -1,13 +1,22 @@
 # Goal
 string prompt                    # Description of this demonstration episode
+float64 max_duration_s           # Auto-stop after this long (0.0 = use the node default)
 ---
 # Result
-bool success                     # Whether recording completed successfully
-string message                   # Error details or success info
-string bag_path                  # Path to the recorded rosbag
+# termination_reason values. The goal's terminal state (SUCCEEDED / CANCELED /
+# ABORTED) says whether the recording ran to a defined end, was taken away by a
+# client, or was stopped by the server; this field says which of those, exactly.
+string TERMINATION_STOPPED="stopped"
+string TERMINATION_TIMEOUT="timeout"
+string TERMINATION_CANCELLED="cancelled"
+string TERMINATION_NODE_DEACTIVATED="node_deactivated"
+string TERMINATION_ERROR="error"
+
+string termination_reason        # Why recording ended (one of the constants above)
+string message                   # Detail when something went wrong; empty otherwise
+string bag_path                  # Path to the recorded rosbag (set on every path)
 int32 messages_written           # Total messages captured
 ---
 # Feedback
-int32 seconds_remaining          # Time until auto-stop (from max_duration param)
+float64 elapsed_s                # Seconds since recording started
 int32 messages_written           # Messages captured so far (confirms data flow)
-string status                    # Current state: "recording", etc.
