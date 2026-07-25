@@ -183,12 +183,12 @@ class LeRobotPolicyRunner:
         """Snapshot of action-queue depth and published-action count."""
         client = self._client
         if client is None:
-            return RunnerFeedback(0, 0, "idle")
+            return RunnerFeedback(0, 0)
         with client.action_queue_lock:
             depth = client.action_queue.qsize()
         with client.latest_action_lock:
             published = max(0, client.latest_action)
-        return RunnerFeedback(depth, published, "executing")
+        return RunnerFeedback(depth, published)
 
     # -------------------- Internals --------------------
 
