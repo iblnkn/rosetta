@@ -10,9 +10,11 @@ from lerobot_teleoperator_rosetta import RosettaTeleop, RosettaTeleopConfig
 teleop = RosettaTeleop(RosettaTeleopConfig(config_path="contract.yaml"))
 teleop.connect()
 
-# Get action from human operator
+# Get action from human operator, keyed by the entry's own selector names
 action = teleop.get_action()
-# {"leader.position.j1": 0.1, "leader.position.j2": 0.2}
+# {"position.j1": 0.1, "position.j2": 0.2}
+# (several input entries driving the same action get a topic-derived prefix
+#  to keep their names distinct)
 
 # Check events (buttons, intervention signals)
 events = teleop.get_teleop_events()
@@ -119,7 +121,7 @@ while True:
         break
 ```
 
-See [Set up teleop and HIL](https://iblnkn.github.io/rosetta/how-to/teleop-and-hil.html) for the ROS 2-native path, where `hil_manager_node` runs this loop for you.
+See [Set up teleop and HIL](https://iblnkn.github.io/rosetta/how-to/record-train-deploy.html) for the ROS 2-native path, where `hil_manager_node` runs this loop for you.
 
 ## Documentation
 
