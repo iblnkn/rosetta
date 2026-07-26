@@ -2,6 +2,16 @@
 Changelog for package lerobot_robot_rosetta
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* **Fixed: a failed lifecycle transition was silent.** ``configure()`` and
+  ``connect()`` called ``trigger_configure()``/``trigger_activate()`` and
+  discarded the result. ``trigger_*`` returns the transition's outcome rather
+  than raising, so a failed configure left ``connect()`` reporting success
+  against a node with no publishers -- surfacing later as a warmup timeout
+  naming the wrong cause. Both now go through ``require_transition_success``,
+  matching what the teleoperator adapter already did.
+
 0.2.0 (2026-07-24)
 ------------------
 * **Breaking: requires the 0.2.0 contract schema.** The package consumes

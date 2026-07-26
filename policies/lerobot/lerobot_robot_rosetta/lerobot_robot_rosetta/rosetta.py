@@ -44,6 +44,7 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.node_host import NodeHost
+from rosetta.robots.ros2.rclpy_utils import require_transition_success
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 
@@ -247,7 +248,7 @@ class Rosetta(Robot):
             return  # bridge already configured by external node
         if self._node is None:
             self._create_node()
-        self._node.trigger_configure()
+        require_transition_success(self._node.trigger_configure(), "configure")
 
     def connect(self, calibrate: bool = True) -> None:
         """Configure (if needed) and activate the lifecycle node."""
@@ -270,11 +271,15 @@ class Rosetta(Robot):
         if self._node is None:
             self._create_node()
 
-        # Auto-configure if unconfigured (no publishers/subscriptions yet)
+        # Auto-configure if unconfigured (no publishers/subscriptions yet).
+        # trigger_* returns the transition's result rather than raising, so a
+        # failed configure would otherwise leave connect() reporting success
+        # against a node with no publishers -- surfacing later as a warmup
+        # timeout that names the wrong cause.
         if not self._node.is_configured:
-            self._node.trigger_configure()
+            require_transition_success(self._node.trigger_configure(), "configure")
 
-        self._node.trigger_activate()
+        require_transition_success(self._node.trigger_activate(), "activate")
         self._wait_for_warmup(self._node.bridge)
 
     def _wait_for_warmup(self, bridge: TopicBridge) -> None:

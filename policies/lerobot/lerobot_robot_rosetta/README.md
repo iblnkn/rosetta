@@ -10,12 +10,12 @@ from lerobot_robot_rosetta import Rosetta, RosettaConfig
 robot = Rosetta(RosettaConfig(config_path="contract.yaml"))
 robot.connect()
 
-# Get observations as dict
+# Get observations as dict, keyed by the contract's own selector names
 obs = robot.get_observation()
-# {"shoulder.position": 0.1, "elbow.position": 0.2, "camera": array(...)}
+# {"position.shoulder": 0.1, "position.elbow": 0.2, "cam": array(...)}
 
 # Send actions
-robot.send_action({"shoulder.position": 0.5, "elbow.position": 0.3})
+robot.send_action({"position.shoulder": 0.5, "position.elbow": 0.3})
 
 robot.disconnect()
 ```
@@ -51,6 +51,12 @@ observations:
     align: {strategy: hold, timeline: header}
     select: [position.shoulder, position.elbow]
 
+  observation.images.cam:
+    channel: {topic: /camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
+    apply: [resize: [480, 640]]
+
 actions:
   action:
     channel:
@@ -70,7 +76,7 @@ Implements the [Robot](https://github.com/huggingface/lerobot/blob/main/src/lero
 
 | Property/Method | Description |
 |-----------------|-------------|
-| `observation_features` | Dict of feature names → types (callable before `connect()`) |
+| `observation_features` | Dict of feature names → types (callable before `connect()`). Vector features are named by their contract `select` path (`position.shoulder`), images by the part of the key after `observation.images.` (`cam`). A key fed by several topics prefixes each source with a distinguishing topic segment |
 | `action_features` | Dict of action names → types (callable before `connect()`) |
 | `is_connected` | True when lifecycle node is active |
 | `connect()` | Configure and activate ROS2 subscriptions/publishers |
