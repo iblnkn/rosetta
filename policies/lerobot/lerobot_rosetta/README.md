@@ -38,8 +38,8 @@ colcon build --packages-select lerobot_rosetta
 ## Documentation
 
 How the LeRobot backend fits together, and the dataset layout it writes:
-[LeRobot integration](https://iblnkn.github.io/rosetta/explanation/lerobot-integration.html)
-and [LeRobot data model](https://iblnkn.github.io/rosetta/reference/lerobot-data-model.html).
+[LeRobot integration](https://iblnkn.github.io/rosetta/explanation/design.html)
+and [LeRobot data model](https://iblnkn.github.io/rosetta/reference/contract.html).
 
 Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
 
