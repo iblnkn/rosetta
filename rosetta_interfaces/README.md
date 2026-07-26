@@ -30,7 +30,7 @@ Every action result reports **how** it ended, not whether it "succeeded":
   task* — which is independent of how the episode ended.
 
 Field-by-field definitions with example calls:
-**[Actions and services reference](https://iblnkn.github.io/rosetta/reference/interfaces.html)**.
+**[Actions and services reference](https://iblnkn.github.io/rosetta/reference/nodes.html)**.
 The `.action` and `.srv` files in this repo are the source of truth — they are
 commented, and short enough to read directly.
 
