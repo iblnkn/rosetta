@@ -33,9 +33,14 @@ episode_recorder:
     # auto-record — overrides exclude_topics and the per-camera policy above.
     # include_topics: ["/wrist_camera/image_raw$"]
 
+    # Task prompt used when a goal or service call leaves prompt empty.
+    # Empty means the bag stores no prompt, which is correct when the
+    # contract declares a `tasks` section instead.
+    default_prompt: ""
+
     # Default max episode duration in seconds (can be overridden per-episode)
     # 0 (or negative) = record until stopped, no time limit
-    default_max_duration: 0.0
+    default_max_duration_s: 0.0
 
     # Rate at which to publish recording feedback (Hz)
     feedback_rate_hz: 2.0

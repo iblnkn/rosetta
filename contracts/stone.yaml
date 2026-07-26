@@ -20,6 +20,14 @@
 #
 # No policy framework appears in this file: one contract drives every
 # framework. The mapping keys are the entire policy-side surface.
+#
+# NOT DEPLOYABLE THROUGH LEROBOT. This contract declares three numeric
+# observation keys and two action keys to demonstrate the schema. LeRobot's
+# live path collapses all numeric observations into one `observation.state`
+# and all actions into one `action`, so lerobot_robot_rosetta rejects a
+# contract like this one at connect (ensure_live_observation_layout). It ports
+# and trains; it does not serve. Deployable examples: so_101.yaml,
+# so_101_hil.yaml, turtlebot3.yaml.
 
 robot_type: stone
 robot_interface: ros2

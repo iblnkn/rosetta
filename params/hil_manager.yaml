@@ -44,9 +44,9 @@ hil_manager:
     # mux/records/labels around it -- it never sends or cancels a goal.
     manage_policy_lifecycle: true
 
-    # Task prompt used when an episode is started via the start_episode
-    # teleop event (a button press carries no text input).
-    default_episode_prompt: ""
+    # Task prompt used whenever a goal, service call, or the start_episode
+    # teleop event leaves prompt empty (a button carries no text input).
+    default_prompt: ""
 
     # Action names for child node action clients
     # These must match the namespaced action names from the launch file
@@ -86,7 +86,7 @@ hil_manager:
     # Default max episode duration in seconds
     # (used when a ManageEpisode request does not specify max_duration_s)
     # 0 (or negative) = run until stopped, no time limit
-    default_max_duration: 0.0
+    default_max_duration_s: 0.0
 
 # ==============================================================================
 # Robot Policy  (policy_runner_node, namespace: robot_policy)
@@ -137,7 +137,7 @@ episode_recorder:
 
     # Default max episode duration in seconds
     # 0 (or negative) = record until stopped, no time limit
-    default_max_duration: 0.0
+    default_max_duration_s: 0.0
 
 # ==============================================================================
 # Reward Classifier  (policy_runner_node, namespace: reward_classifier)

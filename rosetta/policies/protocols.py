@@ -44,13 +44,11 @@ class RunnerFeedback:
 
     Keeps the node's ROS feedback message separate from adapter internals.
     The counters map onto ``uint32`` ROS feedback fields and must stay
-    non-negative; ``status`` is a short free-form display label
-    (conventionally ``"executing"`` or ``"idle"``), not an enum.
+    non-negative.
     """
 
     queue_depth: int = 0
     published_actions: int = 0
-    status: str = "executing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +60,12 @@ class RunnerResult:
     ``"Stopped"``), as is one whose control loop finished naturally
     (``"Completed"``). Reserve ``success=False`` for actual failures
     (connect errors, inference errors, ...).
+
+    The host maps this onto the action result's ``termination_reason``
+    (see ``PolicyRunnerNode._run``): ``success=True`` becomes whichever stop
+    reason the node recorded, or ``"completed"`` when nobody asked it to stop;
+    ``success=False`` becomes ``"error"``. A runner never needs to know why it
+    was stopped -- only that it was.
     """
 
     success: bool

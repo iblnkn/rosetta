@@ -235,9 +235,10 @@ def generate_launch_description():
             "a policy is already running externally and just mux/records/labels around it.",
         ),
         DeclareLaunchArgument(
-            "default_episode_prompt",
-            default_value=hil_cfg["default_episode_prompt"],
-            description="Task prompt used when an episode is started via the start_episode teleop event.",
+            "default_prompt",
+            default_value=hil_cfg["default_prompt"],
+            description="Task prompt used whenever a goal, service call, or the start_episode "
+            "teleop event leaves prompt empty.",
         ),
         DeclareLaunchArgument(
             "feedback_rate_hz",
@@ -304,8 +305,8 @@ def generate_launch_description():
             description="Rosbag format: mcap (recommended) or sqlite3",
         ),
         DeclareLaunchArgument(
-            "default_max_duration",
-            default_value=str(recorder_cfg["default_max_duration"]),
+            "default_max_duration_s",
+            default_value=str(recorder_cfg["default_max_duration_s"]),
             description="Max episode duration in seconds (recorder fallback)",
         ),
     ]
@@ -416,7 +417,7 @@ def generate_launch_description():
                 "contract_path": LaunchConfiguration("contract_path"),
                 "bag_base_dir": LaunchConfiguration("bag_base_dir"),
                 "storage_id": LaunchConfiguration("storage_id"),
-                "default_max_duration": LaunchConfiguration("default_max_duration"),
+                "default_max_duration_s": LaunchConfiguration("default_max_duration_s"),
                 "feedback_rate_hz": LaunchConfiguration("feedback_rate_hz"),
             },
         ],
@@ -437,14 +438,14 @@ def generate_launch_description():
         parameters=[
             # hil_cfg as base delivers EVERY hil_manager-section key (the
             # hand-copied allowlist this replaces silently dropped
-            # default_max_duration and anything added later).
+            # default_max_duration_s and anything added later).
             hil_cfg,
             {
                 "contract_path": LaunchConfiguration("contract_path"),
                 "enable_reward_classifier": LaunchConfiguration("enable_reward_classifier"),
                 "enable_recording": LaunchConfiguration("enable_recording"),
                 "manage_policy_lifecycle": LaunchConfiguration("manage_policy_lifecycle"),
-                "default_episode_prompt": LaunchConfiguration("default_episode_prompt"),
+                "default_prompt": LaunchConfiguration("default_prompt"),
                 "policy_remap_prefix": LaunchConfiguration("policy_remap_prefix"),
                 "reward_remap_prefix": LaunchConfiguration("reward_remap_prefix"),
                 "human_reward_positive": LaunchConfiguration("human_reward_positive"),

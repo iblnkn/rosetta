@@ -47,6 +47,15 @@ policy_runner:
     #          "average" (0.5*old + 0.5*new), "conservative" (0.7*old + 0.3*new)
     aggregate_fn_name: "weighted_average"
 
+    # Task prompt used when a goal or service call leaves prompt empty.
+    # For a language-conditioned policy, match what its episodes were
+    # recorded with.
+    default_prompt: ""
+
+    # Default max run duration in seconds (can be overridden per-goal)
+    # 0 (or negative) = run until stopped, no time limit
+    default_max_duration_s: 0.0
+
     # Rate at which to publish execution feedback (Hz)
     feedback_rate_hz: 2.0
 

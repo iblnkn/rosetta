@@ -18,7 +18,7 @@
 rosetta node one discipline: fail-loud configure, one teardown path shared by
 cleanup/shutdown/error, and a work gate that keeps goal acceptance coherent
 with deactivation. Subclasses implement ``_setup()`` and ``_teardown()``, and
-where relevant extend ``_signal_stop()`` and ``_send_safety_action()``. They
+where relevant extend ``_unblock_stop()`` and ``_send_safety_action()``. They
 never override the lifecycle callbacks themselves.
 
 :class:`BridgeLifecycleNode` adds :class:`TopicBridge` ownership for hosts
@@ -41,7 +41,12 @@ from rclpy.action import CancelResponse, GoalResponse
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.robots.ros2.nodes.node_utils import wait_until
+from rosetta.robots.ros2.nodes.node_utils import (
+    TERMINATION_CANCELLED,
+    TERMINATION_NODE_DEACTIVATED,
+    request_cancel_all,
+    wait_until,
+)
 from rosetta.robots.ros2.rclpy_utils import LIFECYCLE_CONFIGURED_LABELS, lifecycle_state_label
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 
@@ -63,6 +68,14 @@ class RosettaLifecycleNode(Node):
     work is accepted after acceptance is closed. Action cancels are routed by
     goal id (:meth:`_on_cancel`), so a stale cancel for a finished goal can
     never stop the goal that replaced it.
+
+    Every stop signal names itself. :meth:`_signal_stop` records *why* work was
+    asked to stop alongside setting the event, and the work loop reports that
+    recorded reason instead of re-deriving the cause at terminal time. There is
+    one stop event but many stop causes (an action cancel, a cancel service, a
+    button, a deactivate, a failed write), and inferring which one fired was
+    how a deactivate came to be reported as a human stop and a failed bag write
+    came to be reported as a clean recording.
     """
 
     #: Bounded wait for in-progress work to end during deactivate/shutdown.
@@ -78,6 +91,13 @@ class RosettaLifecycleNode(Node):
         self._busy = False  # True while a claim is in progress
         self._accepting_work = False
         self._stop_event: threading.Event | None = None
+        # Why the current claim was asked to stop, latched first-writer-wins by
+        # _record_stop and cleared by the next claim. Deliberately the same
+        # lifetime as _stop_event: the signal and the reason for it are one
+        # thing, so one look at _try_claim_work tells you the reason belongs to
+        # this claim and no other.
+        self._stop_reason: str | None = None
+        self._stop_detail: str = ""
         self._active_goal = None  # bound by _goal_work for cancel routing
 
     # -------------------- Subclass hooks --------------------
@@ -100,15 +120,50 @@ class RosettaLifecycleNode(Node):
         """
         raise NotImplementedError
 
-    def _signal_stop(self) -> None:
-        """Ask in-progress work to stop.
+    def _signal_stop(self, reason: str, detail: str = "") -> None:
+        """Ask in-progress work to stop, recording why.
 
-        Sets the current stop event if one is armed. Extend to add a further
-        stop signal such as ``runner.request_stop()``.
+        The recorded reason is what the work loop reports at terminal time;
+        nothing downstream re-derives the cause. First writer wins, so the thing
+        that actually decided the outcome is what gets reported, not the last
+        thing to notice.
+
+        :param reason: one of the ``TERMINATION_*`` values in
+            ``nodes.node_utils``.
+        :param detail: optional human-readable specifics for the result's
+            ``message`` (for example which topic's bag write failed).
         """
+        with self._work_gate:
+            self._record_stop(reason, detail)
+        self._unblock_stop()
+
+    def _record_stop(self, reason: str, detail: str = "") -> None:
+        """Latch the stop reason and set the stop event. Caller holds the gate.
+
+        Only the two base paths that already hold :attr:`_work_gate` call this
+        directly (:meth:`_on_cancel`, :meth:`_stop_and_secure`); they pair it
+        with :meth:`_unblock_stop` after releasing. Everyone else calls
+        :meth:`_signal_stop`. The gate is not reentrant, and those two paths
+        must not release it mid-decision -- ``_on_cancel`` releasing between the
+        goal-id match and the signal would reopen the stale-cancel race the
+        routing exists to close.
+        """
+        if self._stop_reason is None:
+            self._stop_reason = reason
+            self._stop_detail = detail
         ev = self._stop_event
         if ev is not None:
             ev.set()
+
+    def _unblock_stop(self) -> None:
+        """Best-effort nudge for work blocked in I/O, after the stop event is set.
+
+        No-op by default. Extend to add a further stop signal such as
+        ``runner.request_stop()``, which unblocks a run parked in a socket read
+        so it observes the stop event promptly. Never called while holding
+        :attr:`_work_gate`, so an override may block; it must be safe to call
+        with no work active.
+        """
 
     def _send_safety_action(self) -> None:
         """Secure the robot after work has stopped.
@@ -141,6 +196,11 @@ class RosettaLifecycleNode(Node):
                 return "already busy"
             self._busy = True
             self._stop_event = threading.Event()
+            # Cleared alongside arming the event: a reason latched against the
+            # previous claim, or against a deactivate that landed while idle,
+            # must never be read as the reason this claim ended.
+            self._stop_reason = None
+            self._stop_detail = ""
             return None
 
     def _on_goal(self, _goal_request) -> GoalResponse:
@@ -165,9 +225,10 @@ class RosettaLifecycleNode(Node):
         stale-cancel race. A cancel landing in the accept->bind window finds no
         bound goal and skips the signal here; :meth:`_goal_work` re-checks
         ``is_cancel_requested`` after binding, which closes that window.
-        Service-initiated stop paths (recorder cancel service, HIL
-        stop_episode) deliberately keep cancel-the-current semantics, since
-        they carry no goal id to route by.
+
+        This is the one place a cancel reason is recorded, and it covers the
+        cancel services too: they forward to this server's own
+        ``_action/cancel_goal``, so their cancels arrive here like any other.
 
         :param goal_handle: the goal the cancel request targets.
         :returns: ACCEPT always. Acceptance acknowledges the request; whether
@@ -175,8 +236,12 @@ class RosettaLifecycleNode(Node):
         """
         with self._work_gate:
             active = self._active_goal
-            if active is not None and goal_handle.goal_id == active.goal_id:
-                self._signal_stop()
+            routed = active is not None and goal_handle.goal_id == active.goal_id
+            if routed:
+                self._record_stop(TERMINATION_CANCELLED)
+        # Outside the gate: an _unblock_stop override may block on framework I/O.
+        if routed:
+            self._unblock_stop()
         return CancelResponse.ACCEPT
 
     @contextmanager
@@ -198,13 +263,94 @@ class RosettaLifecycleNode(Node):
         # A cancel accepted in the accept->bind window found _active_goal
         # unbound and skipped the signal. Re-check and honor it now.
         if goal_handle is not None and goal_handle.is_cancel_requested:
-            self._signal_stop()
+            self._signal_stop(TERMINATION_CANCELLED)
         try:
             yield stop_event
         finally:
             with self._work_gate:
                 self._active_goal = None
                 self._busy = False
+
+    def _cancel_current_work(self, cancel_client) -> None:
+        """Cancel in-progress work on behalf of a service caller.
+
+        The cancel services exist so clients that can call services but not
+        actions -- Foxglove, most of all -- can still drive the control plane.
+        Forwarding to the action server's own ``_action/cancel_goal`` is what
+        makes their cancel a real one: the goal enters CANCELING and ends
+        CANCELED, exactly as if a `ros2 action` client had asked. Faking it with
+        a bare stop signal used to end the goal ABORTED, so the same human
+        gesture produced two different terminal states depending on which
+        button was pressed.
+
+        Work started through a *service* has no goal handle for a cancel request
+        to match, so it falls back to signalling the reason directly. Deciding
+        between the two up front matters: the forwarded request is asynchronous,
+        so signalling as well would latch its reason first and win.
+
+        :param cancel_client: client for ``<action_name>/_action/cancel_goal``.
+        """
+        with self._work_gate:
+            has_goal = self._active_goal is not None
+        if has_goal:
+            request_cancel_all(cancel_client, warn=self.get_logger().warning)
+        else:
+            self._signal_stop(TERMINATION_CANCELLED)
+
+    # -------------------- Service proxies for action operations --------------------
+    # Every node exposes ~/start_* and ~/cancel_* services so clients that can
+    # call services but not actions -- Foxglove, most of all -- can still drive
+    # the control plane. The three nodes' handlers differ only in what noun they
+    # put in the message and what work they start, so the bodies live here.
+
+    def _handle_start_service(self, response, target, args: tuple, *, what: str):
+        """Claim the work slot and run ``target`` on a background thread.
+
+        The service returns as soon as the work is *started*, never when it
+        finishes: ROS 2 services are for short calls, and one that blocked for
+        the length of a recording or a policy run would hold an executor thread
+        for as long as the work lasted.
+
+        :param response: the service response to fill (needs ``accepted``/``message``).
+        :param target: callable to run on the background thread.
+        :param args: positional arguments for ``target``.
+        :param what: lowercase noun for the message ("recording", "episode").
+        :returns: the response, so handlers can ``return`` this directly.
+        """
+        reason = self._try_claim_work()
+        if reason is not None:
+            response.accepted = False
+            response.message = f"Rejected: {reason}"
+            self.get_logger().warning(f"{what.capitalize()} not started: {reason}")
+            return response
+
+        threading.Thread(target=target, args=args, daemon=True).start()
+        response.accepted = True
+        response.message = f"{what.capitalize()} started"
+        return response
+
+    def _handle_cancel_service(self, response, cancel_client, *, what: str):
+        """Cancel in-progress work for a plain ``Trigger`` caller.
+
+        Reports success False when nothing is running, so a caller can tell
+        "there was nothing to cancel" from "the cancel is on its way" without
+        parsing the message.
+
+        :param response: the ``Trigger`` response to fill.
+        :param cancel_client: client for ``<action_name>/_action/cancel_goal``.
+        :param what: lowercase noun for the message ("recording", "episode").
+        :returns: the response, so handlers can ``return`` this directly.
+        """
+        if not self.busy:
+            response.success = False
+            response.message = f"No active {what}"
+            return response
+
+        self.get_logger().info(f"Cancel requested via service: stopping {what}")
+        self._cancel_current_work(cancel_client)
+        response.success = True
+        response.message = "Cancel requested"
+        return response
 
     def _stop_and_secure(self, wait_timeout: float | None = None) -> None:
         """Close acceptance, stop work, wait bounded, then secure, in that order.
@@ -222,7 +368,8 @@ class RosettaLifecycleNode(Node):
             wait_timeout = self.STOP_WORK_TIMEOUT_SEC
         with self._work_gate:
             self._accepting_work = False
-            self._signal_stop()
+            self._record_stop(TERMINATION_NODE_DEACTIVATED)
+        self._unblock_stop()
         if not wait_until(lambda: not self.busy, timeout=wait_timeout):
             self.get_logger().warning(f"Work did not stop within {wait_timeout:.1f}s; sending safety action anyway")
         self._send_safety_action()
@@ -355,6 +502,23 @@ class RosettaLifecycleNode(Node):
         """
         with self._work_gate:
             return self._busy
+
+    @property
+    def stop_reason(self) -> str | None:
+        """Why the current claim was asked to stop, or None if nobody asked.
+
+        A work loop that ended on its own (a timeout, a control loop finishing)
+        reads None here and reports its own reason instead. Same
+        "caller must not hold the gate" rule as :attr:`busy`.
+        """
+        with self._work_gate:
+            return self._stop_reason
+
+    @property
+    def stop_detail(self) -> str:
+        """Human-readable specifics recorded alongside :attr:`stop_reason`."""
+        with self._work_gate:
+            return self._stop_detail
 
     @property
     def is_active(self) -> bool:

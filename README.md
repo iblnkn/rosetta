@@ -103,9 +103,9 @@ The docs aspire to follow [Diátaxis](https://diataxis.fr/) framework. Start at 
 | Section | Purpose | Start with |
 |---------|---------|-----------|
 | Getting started | Install, then learn by doing | [Installation](https://iblnkn.github.io/rosetta/installation.html), [Your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html) |
-| How-to guides | Get a task done | [Write a contract](https://iblnkn.github.io/rosetta/how-to/write-a-contract.html), [Port existing bags](https://iblnkn.github.io/rosetta/how-to/port-existing-bags.html) |
-| Reference | Look things up | [Contract](https://iblnkn.github.io/rosetta/reference/contract.html), [Nodes](https://iblnkn.github.io/rosetta/reference/nodes.html), [Actions and services](https://iblnkn.github.io/rosetta/reference/interfaces.html) |
-| Explanation | Understand the design | [Design](https://iblnkn.github.io/rosetta/explanation/design.html), [Record raw, decide late](https://iblnkn.github.io/rosetta/explanation/record-raw-decide-late.html) |
+| How-to guides | Get a task done | [Write a contract](https://iblnkn.github.io/rosetta/how-to/write-a-contract.html), [Port existing bags](https://iblnkn.github.io/rosetta/how-to/record-train-deploy.html) |
+| Reference | Look things up | [Contract](https://iblnkn.github.io/rosetta/reference/contract.html), [Nodes](https://iblnkn.github.io/rosetta/reference/nodes.html), [Actions and services](https://iblnkn.github.io/rosetta/reference/nodes.html) |
+| Explanation | Understand the design | [Design](https://iblnkn.github.io/rosetta/explanation/design.html), [Record raw, decide late](https://iblnkn.github.io/rosetta/explanation/design.html) |
 
 
 ## License

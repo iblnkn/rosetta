@@ -29,6 +29,7 @@ rosetta.frames.layout.FrameLayout.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -174,6 +175,105 @@ WARMUP_WARN_SECONDS = 1.0
 WARMUP_WARN_FRACTION = 0.1
 
 
+@dataclass(frozen=True)
+class _BagPlan:
+    """An opened, validated bag plus the tick grid to sample it on."""
+
+    reader: rosbag2_py.SequentialReader
+    entries: list[tuple[StreamSpec, StreamBuffer]]
+    routing: dict[str, list[int]]
+    layout: FrameLayout
+    warmup_idxs: list[int]
+    prompt: str
+    fps: int
+    step: int
+    start_ns: int
+    n_ticks: int
+
+
+def _open_and_validate(bag_dir: Path, specs: list[StreamSpec], warmup_keys: set[str]) -> _BagPlan:
+    """Open a bag, route its topics to per-spec buffers, and refuse bad ports.
+
+    Split out of :func:`iter_bag_frames` so these checks read (and fail) on
+    their own, leaving the generator to hold only the part that has to be read
+    as a whole: the interleaving of message reads with tick emissions.
+
+    Both checks here refuse a port that would otherwise *succeed* while writing
+    fabricated data, which is worse than any crash: an undecodable stream and
+    an absent observation topic both end up as silent all-zero columns.
+
+    Raises:
+        RuntimeError: a contract stream cannot be decoded, or a warmup
+            (observation) topic is absent from the bag.
+
+    """
+    meta = read_bag_metadata(bag_dir)
+    info = meta.get(BAG_METADATA_KEY, {})
+    storage_id = info.get("storage_identifier", "mcap")
+
+    reader = rosbag2_py.SequentialReader()
+    reader.open(
+        rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage_id),
+        rosbag2_py.ConverterOptions(
+            input_serialization_format="cdr",
+            output_serialization_format="cdr",
+        ),
+    )
+    try:
+        topic_types = _get_topic_types(reader)
+        entries, routing = _build_buffers(specs, topic_types)
+
+        # Encode-only channel types are valid for live serving (actions are
+        # never decoded there), but porting *records* every spec, so an
+        # undecodable one would silently produce an all-zero dataset column via
+        # the ingest drop path.
+        undecodable = sorted(
+            f"{spec.key} ({spec.source.channel.type})"
+            for spec, _ in entries
+            if not spec.source.channel.decoder and not has_decoder(spec.source.channel.type)
+        )
+        if undecodable:
+            raise RuntimeError(
+                f"{bag_dir.name}: contract streams cannot be decoded for porting: {undecodable}. "
+                f"Their message types are encode-only (no registered or inline decoder), so the "
+                f"port could only record zeros for them. Register a decoder or set 'decoder:' on "
+                f"the channel."
+            )
+
+        # Warmup (observation) topics absent from the bag: their buffers could
+        # never fill, so every frame would silently carry fabricated zeros for
+        # them. Non-warmup streams keep the warn + zero-fill behavior.
+        absent = sorted(
+            f"{spec.key} ({spec.source.channel.topic})"
+            for spec, _ in entries
+            if spec.key in warmup_keys and spec.source.channel.topic not in topic_types
+        )
+        if absent:
+            raise RuntimeError(
+                f"{bag_dir.name}: observation topics missing from bag: {absent}. "
+                f"Check the contract topic names against the recording."
+            )
+
+        fps = specs[0].fps  # contract-root value, copied verbatim into every spec
+        step = step_ns(fps)
+        start_ns, end_ns = _get_bag_time_bounds_ns(reader)
+        return _BagPlan(
+            reader=reader,
+            entries=entries,
+            routing=routing,
+            layout=FrameLayout(specs),
+            warmup_idxs=sorted({i for idxs in routing.values() for i in idxs if entries[i][0].key in warmup_keys}),
+            prompt=read_custom_field(meta, BAG_PROMPT_KEY),
+            fps=fps,
+            step=step,
+            start_ns=start_ns,
+            n_ticks=max(1, int((end_ns - start_ns) // step) + 1),
+        )
+    except Exception:
+        reader.close()  # a refused port must not leak the bag's file handles
+        raise
+
+
 def iter_bag_frames(
     bag_dir: Path,
     specs: list[StreamSpec],
@@ -207,62 +307,10 @@ def iter_bag_frames(
     otherwise train on 100% fabricated zeros) or if warmup never completes
     (a present topic produced no samples).
     """
-    fps = specs[0].fps
-    step = step_ns(fps)
-
-    meta = read_bag_metadata(bag_dir)
-    info = meta.get(BAG_METADATA_KEY, {})
-    storage_id = info.get("storage_identifier", "mcap")
-    prompt = read_custom_field(meta, BAG_PROMPT_KEY)
-
-    reader = rosbag2_py.SequentialReader()
-    reader.open(
-        rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id=storage_id),
-        rosbag2_py.ConverterOptions(
-            input_serialization_format="cdr",
-            output_serialization_format="cdr",
-        ),
-    )
-
-    topic_types = _get_topic_types(reader)
-    layout = FrameLayout(specs)
-    entries, routing = _build_buffers(specs, topic_types)
-
-    # Fail fast on specs the porter could never decode: encode-only channel
-    # types are valid for live serving (actions are never decoded there), but
-    # porting *records* every spec, so an undecodable one would silently
-    # produce an all-zero dataset column via the ingest drop path.
-    undecodable = sorted(
-        f"{spec.key} ({spec.source.channel.type})"
-        for spec, _ in entries
-        if not spec.source.channel.decoder and not has_decoder(spec.source.channel.type)
-    )
-    if undecodable:
-        raise RuntimeError(
-            f"{bag_dir.name}: contract streams cannot be decoded for porting: {undecodable}. "
-            f"Their message types are encode-only (no registered or inline decoder), so the "
-            f"port could only record zeros for them. Register a decoder or set 'decoder:' on "
-            f"the channel."
-        )
-
-    # Fail fast on warmup (observation) topics absent from the bag: their
-    # buffers could never fill, so every frame would silently carry fabricated
-    # zeros for them. Non-warmup streams keep the warn + zero-fill behavior.
-    absent = sorted(
-        f"{spec.key} ({spec.source.channel.topic})"
-        for spec, _ in entries
-        if spec.key in warmup_keys and spec.source.channel.topic not in topic_types
-    )
-    if absent:
-        raise RuntimeError(
-            f"{bag_dir.name}: observation topics missing from bag: {absent}. "
-            f"Check the contract topic names against the recording."
-        )
-
-    warmup_idxs = sorted({i for idxs in routing.values() for i in idxs if entries[i][0].key in warmup_keys})
-
-    start_ns, end_ns = _get_bag_time_bounds_ns(reader)
-    n_ticks = max(1, int((end_ns - start_ns) // step) + 1)
+    plan = _open_and_validate(bag_dir, specs, warmup_keys)
+    reader, entries, routing, layout = plan.reader, plan.entries, plan.routing, plan.layout
+    warmup_idxs, prompt, fps = plan.warmup_idxs, plan.prompt, plan.fps
+    step, start_ns, n_ticks = plan.step, plan.start_ns, plan.n_ticks
 
     tick_idx = 0
     tick_ns = start_ns
@@ -313,51 +361,60 @@ def iter_bag_frames(
         emitted += 1
         return frame
 
-    while reader.has_next():
-        topic, data, bag_ns = reader.read_next()
+    try:
+        while reader.has_next():
+            topic, data, bag_ns = reader.read_next()
 
-        # Emit ticks strictly before this message's receive time. The strict
-        # comparison keeps a message received exactly at tick t in frame t
-        # (it is pushed below, before the tick is emitted).
-        while tick_idx < n_ticks and tick_ns < bag_ns:
+            # Emit ticks strictly before this message's receive time. The strict
+            # comparison keeps a message received exactly at tick t in frame t
+            # (it is pushed below, before the tick is emitted).
+            while tick_idx < n_ticks and tick_ns < bag_ns:
+                frame = _try_emit()
+                if frame is not None:
+                    yield frame
+                tick_idx += 1
+                tick_ns = start_ns + tick_idx * step
+
+            if topic in task_topics:
+                msg = deserialize_message(data, get_message(task_topics[topic]))
+                text = getattr(msg, "data", None)
+                if isinstance(text, str):
+                    current_task = text
+                elif not task_warned:
+                    logging.warning(
+                        "%s: task topic %s (%s) has no string 'data' field; ignoring",
+                        bag_dir.name,
+                        topic,
+                        task_topics[topic],
+                    )
+                    task_warned = True
+
+            # Route the message to every spec reading this topic (one deserialize,
+            # one ingest per routed spec — selectors may differ).
+            if topic in routing:
+                msg = None
+                for i in routing[topic]:
+                    spec, buffer = entries[i]
+                    if msg is None:
+                        msg = deserialize_message(data, get_message(spec.source.channel.type))
+                    ingest.ingest(msg, spec, buffer, i, receive_ns=bag_ns)
+
+        # Drain ticks past the last message.
+        while tick_idx < n_ticks:
             frame = _try_emit()
             if frame is not None:
                 yield frame
             tick_idx += 1
             tick_ns = start_ns + tick_idx * step
 
-        if topic in task_topics:
-            msg = deserialize_message(data, get_message(task_topics[topic]))
-            text = getattr(msg, "data", None)
-            if isinstance(text, str):
-                current_task = text
-            elif not task_warned:
-                logging.warning(
-                    "%s: task topic %s (%s) has no string 'data' field; ignoring",
-                    bag_dir.name,
-                    topic,
-                    task_topics[topic],
-                )
-                task_warned = True
-
-        # Route the message to every spec reading this topic (one deserialize,
-        # one ingest per routed spec — selectors may differ).
-        if topic in routing:
-            msg = None
-            for i in routing[topic]:
-                spec, buffer = entries[i]
-                if msg is None:
-                    msg = deserialize_message(data, get_message(spec.source.channel.type))
-                ingest.ingest(msg, spec, buffer, i, receive_ns=bag_ns)
-
-    # Drain ticks past the last message.
-    while tick_idx < n_ticks:
-        frame = _try_emit()
-        if frame is not None:
-            yield frame
-        tick_idx += 1
-        tick_ns = start_ns + tick_idx * step
-
-    if emitted == 0:
-        stale = [entries[i][0].key for i in warmup_idxs if entries[i][1].last_ts is None]
-        raise RuntimeError(f"{bag_dir.name}: no frames emitted; observation streams never produced a sample: {stale}")
+        if emitted == 0:
+            stale = [entries[i][0].key for i in warmup_idxs if entries[i][1].last_ts is None]
+            raise RuntimeError(
+                f"{bag_dir.name}: no frames emitted; observation streams never produced a sample: {stale}"
+            )
+    finally:
+        # Generator: this runs on normal completion, on an exception, and on
+        # GeneratorExit when a consumer abandons the iteration early. The
+        # writer side closes just as deliberately -- an unclosed reader holds
+        # the bag's file handles until GC, and a port walks thousands of bags.
+        reader.close()

@@ -86,14 +86,12 @@ def test_inactive_node_rejects_without_claiming(node):
 
 
 def _fields():
-    return (
-        {
-            "success": True,
-            "message": "done",
-            "termination_reason": "timeout",
-            "final_reward": 0.0,
-            "bag_path": "/tmp/bag",
-            "messages_written": 3,
-        },
-        False,
-    )
+    """A stand-in for _run_episode's return value (one dict, no tuple)."""
+    return {
+        "termination_reason": "timeout",
+        "outcome": "unlabeled",
+        "message": "done",
+        "final_reward": 0.0,
+        "bag_path": "/tmp/bag",
+        "messages_written": 3,
+    }

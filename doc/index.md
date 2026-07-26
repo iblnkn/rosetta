@@ -1,11 +1,14 @@
 # Rosetta
 
-Rosetta connects your ROS 2 robot to robot-learning frameworks like [LeRobot](https://github.com/huggingface/lerobot).
+**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots.
 
-- **Getting started**: [install Rosetta](installation.md), then run the whole pipeline once in [your first policy](tutorials/first-policy.md).
-- **How-to guides**: task-oriented, from [writing a contract](how-to/write-a-contract.md) to [porting existing bags](how-to/port-existing-bags.md).
-- **Reference**: information-oriented. The [contract reference](reference/contract.md) and friends.
-- **Explanation**: understanding-oriented. Start with [design](explanation/design.md).
+Define a contract that maps your ROS2 topics to LeRobot features, record demos to
+bag files, convert them to a LeRobot dataset, train a policy, and deploy it back
+to your robot.
+
+> **Getting started?** The [rosetta_ws](https://github.com/iblnkn/rosetta_ws)
+> workspace handles the non-trivial setup of getting ROS2, Rosetta, and LeRobot
+> installed together.
 
 ```{toctree}
 :caption: Getting started
@@ -20,13 +23,7 @@ tutorials/first-policy
 :maxdepth: 1
 
 how-to/write-a-contract
-how-to/record-episodes
-how-to/port-existing-bags
-how-to/train-a-policy
-how-to/deploy-a-policy
-how-to/teleop-and-hil
-how-to/add-custom-codecs
-how-to/add-custom-operators
+how-to/record-train-deploy
 ```
 
 ```{toctree}
@@ -35,9 +32,6 @@ how-to/add-custom-operators
 
 reference/contract
 reference/nodes
-reference/interfaces
-reference/porter-cli
-reference/lerobot-data-model
 ```
 
 ```{toctree}
@@ -45,15 +39,4 @@ reference/lerobot-data-model
 :maxdepth: 1
 
 explanation/design
-explanation/contract-design
-explanation/record-raw-decide-late
-explanation/train-serve-skew
-explanation/lerobot-integration
-```
-
-```{toctree}
-:caption: Contributing
-:maxdepth: 1
-
-contributing/codebase-guide
 ```

@@ -34,6 +34,7 @@ from std_msgs.msg import String
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
 from rosetta.robots.ros2.bag_metadata import BAG_METADATA_KEY, BAG_PROMPT_KEY
+from rosetta.robots.ros2.offline import bag_frames
 from rosetta.robots.ros2.offline.bag_frames import iter_bag_frames
 
 FPS = 10
@@ -155,3 +156,71 @@ def test_without_task_topics_prompt_only(tmp_path):
     _write_bag(bag, events, prompt="fold the towel")
     frames = list(iter_bag_frames(bag, SPECS, warmup_keys=WARMUP_KEYS))
     assert [f["task"] for f in frames] == ["fold the towel", "fold the towel"]
+
+
+# ---- Reader lifetime ----------------------------------------------------
+# iter_bag_frames is a generator, so the bag stays open across yields. A port
+# walks thousands of bags in one process; leaking a handle per abandoned or
+# failed bag exhausts the descriptor table. The writer side closes just as
+# deliberately ("don't leak an unfinalized bag").
+
+
+# Bound before the monkeypatch, or the spy's own constructor would resolve
+# SequentialReader to the spy and recurse.
+_REAL_SEQUENTIAL_READER = rosbag2_py.SequentialReader
+
+
+class _SpyReader:
+    """Forwards to a real SequentialReader and records that close() happened."""
+
+    closed: list[bool] = []
+
+    def __init__(self):
+        self._inner = _REAL_SEQUENTIAL_READER()
+
+    def __getattr__(self, name):
+        # Only reached for names not set on the instance, so _inner is always
+        # present by the time this runs.
+        return getattr(self._inner, name)
+
+    def close(self):
+        _SpyReader.closed.append(True)
+        return self._inner.close()
+
+
+@pytest.fixture
+def spy_reader(monkeypatch):
+    _SpyReader.closed = []
+    monkeypatch.setattr(bag_frames.rosbag2_py, "SequentialReader", _SpyReader)
+    return _SpyReader
+
+
+def test_draining_the_iterator_closes_the_bag(tmp_path, spy_reader):
+    bag = tmp_path / "ep0"
+    _write_bag(bag, _obs_events(4))
+    _frames(bag)
+    assert spy_reader.closed
+
+
+def test_abandoning_the_iterator_closes_the_bag(tmp_path, spy_reader):
+    """The case a plain close-at-the-end would miss: a consumer that stops
+    early (a `break`, or an exception downstream) never reaches the last
+    yield, so only the generator's own finally can release the handle."""
+    bag = tmp_path / "ep0"
+    _write_bag(bag, _obs_events(8))
+    frames = iter_bag_frames(bag, SPECS, warmup_keys=WARMUP_KEYS, task_topics=TASK_TOPICS)
+    next(frames)
+    assert not spy_reader.closed  # still mid-iteration
+    frames.close()  # what abandoning it looks like
+    assert spy_reader.closed
+
+
+def test_a_refused_bag_closes_the_reader(tmp_path, spy_reader):
+    """The validations run after open(), so a bag the porter refuses must close
+    too -- otherwise a run over a directory of mismatched bags leaks one handle
+    per rejection."""
+    bag = tmp_path / "ep0"
+    _write_bag(bag, [(TASK_TOPIC, "std_msgs/msg/String", T0, _task("x"))])  # no contract topics
+    with pytest.raises(RuntimeError, match="No contract topics found"):
+        list(iter_bag_frames(bag, SPECS, warmup_keys=WARMUP_KEYS, task_topics=TASK_TOPICS))
+    assert spy_reader.closed

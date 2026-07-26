@@ -2,6 +2,63 @@
 Changelog for package rosetta
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* **Breaking: action results report how work ended, not whether it "succeeded".**
+  ``bool success`` is gone from all three results (see ``rosetta_interfaces``);
+  the terminal ``GoalStatus`` is the mechanics and ``termination_reason`` names
+  the cause. ``ManageEpisode`` additionally reports ``outcome`` -- whether the
+  robot did the task -- which no field carried before.
+* **Breaking: ``hil_manager``'s ``~/stop_episode`` split in two.**
+  ``~/end_episode`` (``SetBool``: true = success, false = failure) is the
+  deliberate, labelled end, mirroring the ``end_success``/``end_failure``
+  buttons; ``~/cancel_episode`` (``Trigger``) abandons the take. The single
+  service could not say which was meant.
+* **Fixed: a failed bag write reported a successful recording.** The write
+  exception is caught inside the subscription callback, so it never reached
+  ``_record``'s handler: the loop exited normally and the goal SUCCEEDED while
+  handing back a truncated bag. Now ``ABORTED`` with
+  ``termination_reason: error`` naming the topic that failed.
+* **Fixed: a lifecycle deactivate was reported as a human stop.** The HIL
+  feedback loop derived its reason from ``is_cancel_requested``, so everything
+  that was not an action cancel came back as ``human_stop``.
+* **Fixed: the cancel services now really cancel.** ``~/cancel_recording`` used
+  to set a flag that ended the goal ``ABORTED``, so a dashboard button and a
+  ``ros2 action`` cancel produced different terminal states for the same human
+  gesture. The cancel services forward to the action server's own
+  ``_action/cancel_goal``, so both paths end ``CANCELED``.
+* Every stop signal now names itself. ``_signal_stop(reason)`` records the cause
+  under the work gate, first writer wins, and work loops report the recorded
+  reason instead of re-deriving it -- there was one stop event but nine stop
+  causes, and inferring which had fired is what produced the two bugs above.
+* ``PolicyRunnerNode``'s stop hook moved from ``_signal_stop`` to
+  ``_unblock_stop``, which never runs while holding the work gate. It calls
+  ``runner.request_stop()``, a foreign framework call that could block.
+* ``RunnerFeedback.status`` removed along with the ROS feedback field it
+  existed to fill (see ``rosetta_interfaces``), so adapters no longer invent an
+  ``"executing"``/``"idle"`` label nothing reads.
+* The ``TERMINATION_*``/``OUTCOME_*`` values in ``nodes/node_utils.py`` are now
+  re-exported from the generated message constants rather than restated, so the
+  ``.action`` files are their single source.
+* Recordings now carry their provenance: the UUID of the ``RecordEpisode`` goal
+  that produced a bag is written to ``rosetta.goal_id`` in the bag's
+  ``metadata.yaml``, beside the prompt and contract text. A client that kept its
+  goal id can find the bag later. Absent for service-started recordings, which
+  have no goal.
+* ``max_duration_s`` on a goal overrides the node's ``default_max_duration_s``
+  for that one run (see ``rosetta_interfaces``). ``policy_runner`` gained a
+  ``default_max_duration_s`` parameter to match the recorder's.
+* **Breaking: ``hil_manager``'s ``default_episode_prompt`` renamed to
+  ``default_prompt``**, and it now applies to every empty-prompt path -- the
+  action goal and the start_episode service as well as the teleop button.
+  ``episode_recorder`` and ``policy_runner`` gained the same parameter, so a
+  caller with no prompt to give (a dashboard button, a bare ``"{}"`` goal)
+  gets the node's configured one. Every goal field now has a zero-value
+  default meaning "use the node's", so callers type only what they override.
+* Added ``policy_runner`` services ``~/start_policy`` and ``~/cancel_policy``;
+  the node previously had no service path at all, so clients that cannot call
+  actions could not run or stop a policy.
+
 0.2.0 (2026-07-24)
 ------------------
 * **Breaking: new contract schema.** Sections are mappings keyed by frame key,

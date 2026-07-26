@@ -14,7 +14,8 @@
 
 """Helpers used only by the lifecycle nodes in rosetta.robots.ros2.nodes.
 
-Node-side concerns: rcl-legal action termination (finish_goal), QoS
+Node-side concerns: the termination vocabulary and rcl-legal action termination
+(finish_goal), cancelling a node's own action goals (request_cancel_all), QoS
 introspection/conversion for bag topic metadata, polling waits (wait_until),
 and the shared node entry point (spin_lifecycle_node). QoS-dict parsing and
 lifecycle-state helpers shared with the wider ros2 layer stay in
@@ -28,6 +29,7 @@ import time
 from typing import Callable
 
 import rclpy
+from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
@@ -45,6 +47,8 @@ from rosbag2_py._storage import (
     rmw_qos_liveliness_policy_t,
     rmw_qos_reliability_policy_t,
 )
+
+from rosetta_interfaces.action import ManageEpisode, RunPolicy
 
 # =============================================================================
 # Parameter declaration
@@ -65,40 +69,118 @@ def positive_rate_descriptor(description: str) -> ParameterDescriptor:
 
 
 # =============================================================================
+# Termination vocabulary
+# =============================================================================
+
+# The .action files are the single source of these values: they are what
+# non-Python clients read, so defining them again here in Python would be two
+# places to keep in sync. Re-exported under short names because every node uses
+# them and ``ManageEpisode.Result.TERMINATION_NODE_DEACTIVATED`` does not read
+# well inline.
+#
+# ManageEpisode declares the widest reason set, so it is the natural home for
+# all but ``completed``, which only a policy run can produce.
+# test_termination_constants.py checks that each action declares every reason
+# its own server can produce.
+#
+# The goal's terminal GoalStatus is the coarse view -- SUCCEEDED when the work
+# reached a defined end, CANCELED when a client took it away, ABORTED when the
+# server stopped it. These values say which of those, exactly.
+TERMINATION_STOPPED = ManageEpisode.Result.TERMINATION_STOPPED
+TERMINATION_TIMEOUT = ManageEpisode.Result.TERMINATION_TIMEOUT
+TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
+TERMINATION_COMPLETED = RunPolicy.Result.TERMINATION_COMPLETED
+TERMINATION_CANCELLED = ManageEpisode.Result.TERMINATION_CANCELLED
+TERMINATION_NODE_DEACTIVATED = ManageEpisode.Result.TERMINATION_NODE_DEACTIVATED
+TERMINATION_ERROR = ManageEpisode.Result.TERMINATION_ERROR
+
+# The ``outcome`` value set (ManageEpisode only): whether the robot did the
+# task. Independent of how the episode ended.
+OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
+OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
+OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
+
+#: Reasons that must not report the work as having reached a defined end.
+#: Everything else succeeds.
+#:
+#: ``node_deactivated`` is here because a lifecycle deactivate IS the server
+#: choosing to stop a goal, which the ROS 2 action docs define as an abort.
+#:
+#: ``cancelled`` is here only as a fallback. The normal cancel path never
+#: reaches it -- ``is_cancel_requested`` is checked first and wins -- so this
+#: catches the anomaly where the reason was latched but the goal never entered
+#: CANCELING. Succeeding there would report a clean finish for work somebody
+#: asked to cancel.
+_ABORT_REASONS = frozenset(
+    {
+        TERMINATION_ERROR,
+        TERMINATION_NODE_DEACTIVATED,
+        TERMINATION_CANCELLED,
+    }
+)
+
+
+# =============================================================================
 # Goal termination
 # =============================================================================
 
 
-def finish_goal(
-    goal_handle,
-    result,
-    *,
-    service_cancelled: bool = False,
-    success_message: str | None = None,
-) -> None:
-    """Set an action goal's terminal state using only rcl-legal transitions.
+def finish_goal(goal_handle, result) -> None:
+    """Set an action goal's terminal state from ``result.termination_reason``.
 
-    ``canceled()`` is legal only from CANCELING (``is_cancel_requested``
-    True); a service-initiated cancel leaves the goal EXECUTING and must
-    ``abort()`` instead. ``succeed()``/``abort()`` are legal from both
-    EXECUTING and CANCELING, so a cancel racing in after these checks cannot
-    produce an illegal transition. ``result`` must carry ``success`` and
-    ``message`` fields (true for all rosetta action results).
+    Legality first, then meaning. ``canceled()`` is legal only from CANCELING
+    (``is_cancel_requested`` True), so that branch decides on its own -- and it
+    is reachable from every cancel path, because the cancel services forward to
+    the action server's own ``_action/cancel_goal`` rather than faking a stop.
+    ``succeed()``/``abort()`` are legal from both EXECUTING and CANCELING, so a
+    cancel racing in after the check cannot produce an illegal transition.
+
+    ``result`` must carry a ``termination_reason`` field, already set by the
+    work loop (true for all three rosetta action results). This function never
+    writes it: the loop is its single writer, so the terminal state and the
+    reported reason cannot disagree.
     """
     if goal_handle.is_cancel_requested:
-        result.success = False
-        result.message = "Cancelled"
         goal_handle.canceled()
-    elif service_cancelled:
-        result.success = False
-        result.message = "Cancelled via service"
+    elif result.termination_reason in _ABORT_REASONS:
         goal_handle.abort()
-    elif result.success:
-        if success_message is not None:
-            result.message = success_message
-        goal_handle.succeed()
     else:
-        goal_handle.abort()
+        goal_handle.succeed()
+
+
+def request_cancel_all(cancel_client, *, warn: Callable[[str], None] | None = None) -> bool:
+    """Ask an action server to cancel every goal it is currently running.
+
+    ``CancelGoal.Request()`` is the action spec's cancel-all wildcard: an
+    all-zero goal id with a zero stamp means "cancel all goals"
+    (``rcl_action_process_cancel_request``). Nodes use this to give clients that
+    can call services but not actions -- Foxglove, most of all -- a real cancel
+    rather than a lookalike. It is the same request an action client sends, so
+    the goal genuinely enters CANCELING and ends CANCELED.
+
+    Fire-and-forget on purpose. The response is never awaited: doing so from
+    inside a service callback would need the executor to service three more
+    wakeups on the same node before the handler could return, which starves a
+    thread-limited executor and hard-deadlocks a single-threaded one. The
+    response carries nothing the caller needs anyway -- whether work was running
+    is already known from the node's own ``busy`` flag.
+
+    Args:
+        cancel_client: Client for ``<action_name>/_action/cancel_goal``.
+        warn: Optional callable invoked with a message when the server's cancel
+            service is not reachable.
+
+    Returns:
+        True when the request was dispatched, False when the cancel service was
+        not available.
+
+    """
+    if not cancel_client.service_is_ready():
+        if warn is not None:
+            warn("cancel service not available; nothing was cancelled")
+        return False
+    cancel_client.call_async(CancelGoal.Request())
+    return True
 
 
 # =============================================================================

@@ -25,7 +25,7 @@ imports no specific policy framework.
 Lifecycle transitions (fail-loud configure, stop/wait/safety ordering on
 deactivate AND shutdown, one teardown path) come from
 :class:`RosettaLifecycleNode`; this class only fills in the ``_setup()`` /
-``_teardown()`` / ``_signal_stop()`` / ``_send_safety_action()`` hooks and the
+``_teardown()`` / ``_unblock_stop()`` / ``_send_safety_action()`` hooks and the
 action callbacks.
 
 The action is served under the relative name ``run_policy``. The launch-file
@@ -46,9 +46,11 @@ import sys
 import threading
 import traceback
 
+from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
+from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import load_contract
 from rosetta.contract.sidecar import find_contract_for_pretrained, scan_inline_codec_paths
@@ -59,6 +61,9 @@ from rosetta.contract.specs import (
 )
 from rosetta.policies import PolicyRunner, RunnerResult, load_policy_runner
 from rosetta.robots.ros2.nodes.node_utils import (
+    TERMINATION_COMPLETED,
+    TERMINATION_ERROR,
+    TERMINATION_TIMEOUT,
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
@@ -66,6 +71,7 @@ from rosetta.robots.ros2.nodes.node_utils import (
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 from rosetta_interfaces.action import RunPolicy
+from rosetta_interfaces.srv import StartPolicy
 
 
 class PolicyRunnerNode(RosettaLifecycleNode):
@@ -115,12 +121,33 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             2.0,
             positive_rate_descriptor("Rate for publishing action feedback"),
         )
+        self.declare_parameter(
+            "default_prompt",
+            "",
+            ParameterDescriptor(
+                description="Task prompt used when a goal or service call leaves prompt empty. "
+                "Read at each run start. For a language-conditioned policy this should match the "
+                "prompt its episodes were recorded with."
+            ),
+        )
+        self.declare_parameter(
+            "default_max_duration_s",
+            0.0,
+            ParameterDescriptor(
+                description="Maximum policy run duration in seconds (0 or negative = run until stopped, no limit). "
+                "Read at each run start, and used only when the goal does not set max_duration_s."
+            ),
+        )
 
         # State (resources created in _setup)
         self._contract = None
         self._bridge: TopicBridge | None = None
         self._runner: PolicyRunner | None = None
         self._action_server: ActionServer | None = None
+        self._cancel_client = None
+        self._start_service = None
+        self._cancel_service = None
+        self._cbg = ReentrantCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -181,7 +208,32 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             execute_callback=self._execute,
             goal_callback=self._on_goal,
             cancel_callback=self._on_cancel,
-            callback_group=ReentrantCallbackGroup(),
+            callback_group=self._cbg,
+        )
+
+        # Client to this server's own cancel service, so ~/cancel_policy can
+        # perform a real cancel. Relative name, so it expands through the same
+        # node-namespace rules as the action name above.
+        self._cancel_client = self.create_client(
+            CancelGoal,
+            "run_policy/_action/cancel_goal",
+            callback_group=self._cbg,
+        )
+
+        # Service wrappers for callers that can call services but not actions
+        # (Foxglove). Node-private (~/) names, matching the recorder's
+        # convention.
+        self._start_service = self.create_service(
+            StartPolicy,
+            "~/start_policy",
+            self._on_start_service,
+            callback_group=self._cbg,
+        )
+        self._cancel_service = self.create_service(
+            Trigger,
+            "~/cancel_policy",
+            self._on_cancel_service,
+            callback_group=self._cbg,
         )
 
         self.get_logger().info(f"Configured: contract={contract_path}, framework={framework}")
@@ -191,21 +243,30 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         if self._action_server is not None:
             self._action_server.destroy()
             self._action_server = None
+        if self._cancel_client is not None:
+            self.destroy_client(self._cancel_client)
+            self._cancel_client = None
+        for attr in ("_start_service", "_cancel_service"):
+            service = getattr(self, attr)
+            if service is not None:
+                self.destroy_service(service)
+                setattr(self, attr, None)
         self._teardown_runner()
         if self._bridge is not None:
             self._bridge.teardown()
             self._bridge = None
         self._contract = None
 
-    def _signal_stop(self) -> None:
-        """Set the stop event, then also call the runner's ``request_stop()``.
+    def _unblock_stop(self) -> None:
+        """Also call the runner's ``request_stop()`` after the stop event is set.
 
-        Event first, both always. The event is the cooperative signal every
-        control loop polls. ``request_stop()`` unblocks a run stuck in I/O so
-        it observes the event promptly. See :meth:`PolicyRunner.request_stop`.
-        Safe to call with no goal active.
+        The event is the cooperative signal every control loop polls;
+        ``request_stop()`` unblocks a run stuck in I/O so it observes the event
+        promptly. See :meth:`PolicyRunner.request_stop`. Safe to call with no
+        goal active, and -- unlike the old ``_signal_stop`` override -- never
+        called while holding the base's work gate, so a framework call that
+        blocks cannot stall every other claim.
         """
-        super()._signal_stop()
         runner = self._runner
         if runner is not None:
             runner.request_stop()
@@ -228,36 +289,115 @@ class PolicyRunnerNode(RosettaLifecycleNode):
     # -------------------- Action callbacks --------------------
     # Goal/cancel callbacks come from the base: claim-or-reject, goal-id-routed cancel.
 
-    def _execute(self, goal_handle) -> RunPolicy.Result:
-        """Execute policy inference by delegating to the framework runner."""
-        task = goal_handle.request.prompt
-        result = RunPolicy.Result()
+    def _on_start_service(self, request, response):
+        """Start policy inference without the ROS2 action protocol.
 
-        self.get_logger().info(f"Starting: task={task!r} framework={self.get_parameter('framework').value}")
+        For Foxglove extensions and other clients that cannot route to the
+        hidden _action/* services. The run happens on a background thread, so
+        this returns immediately -- a service that blocked for the length of a
+        policy run would hold an executor thread indefinitely.
+
+        Returns:
+            The response with accepted False and a reason when the slot is
+            already claimed, else True with "Policy started".
+
+        """
+        return self._handle_start_service(response, self._run, (request.prompt or "",), what="policy run")
+
+    def _on_cancel_service(self, _request, response: Trigger.Response) -> Trigger.Response:
+        """Cancel the active policy run from a plain Trigger service call.
+
+        Forwards to this server's own cancel service so the goal ends CANCELED,
+        exactly as a `ros2 action` cancel would. See
+        :meth:`RosettaLifecycleNode._cancel_current_work`.
+        """
+        return self._handle_cancel_service(response, self._cancel_client, what="policy run")
+
+    def _execute(self, goal_handle) -> RunPolicy.Result:
+        """Action-goal wrapper around the shared run loop."""
+        return self._run(
+            goal_handle.request.prompt or "",
+            goal_handle,
+            max_duration=goal_handle.request.max_duration_s,
+        )
+
+    def _run(self, task: str, goal_handle=None, max_duration: float = 0.0) -> RunPolicy.Result:
+        """The one run loop, shared by both start paths.
+
+        ``goal_handle=None`` marks a service start. That path skips feedback
+        publishing and the terminal goal transition; the run itself, the stop
+        handling, and the reason mapping are identical by construction.
+
+        Args:
+            task: Task prompt the policy is conditioned on. Empty falls back to
+                the ``default_prompt`` parameter.
+            goal_handle: Action goal handle, or None for a service start.
+            max_duration: Stop the run after this many seconds. 0 or negative
+                falls back to the ``default_max_duration_s`` parameter, which is
+                what the service-start path always uses -- the lightweight
+                service start takes node defaults; the goal can override them.
+
+        Returns:
+            The populated RunPolicy.Result.
+
+        """
+        # Resolved here rather than at each entry point, so the action goal,
+        # the service call, and any future caller all fall back the same way.
+        task = task or self.get_parameter("default_prompt").value
+
+        result = RunPolicy.Result()
+        source = "action" if goal_handle is not None else "service"
+        self.get_logger().info(f"Starting ({source}): task={task!r} framework={self.get_parameter('framework').value}")
 
         with self._goal_work(goal_handle) as stop_event:
             feedback_stop = threading.Event()
-            feedback_thread = threading.Thread(
-                target=self._feedback_loop,
-                args=(goal_handle, feedback_stop),
-                daemon=True,
-            )
-            feedback_thread.start()
+            feedback_thread = None
+            if goal_handle is not None:
+                feedback_thread = threading.Thread(
+                    target=self._feedback_loop,
+                    args=(goal_handle, feedback_stop),
+                    daemon=True,
+                )
+                feedback_thread.start()
+
+            # The run itself is one blocking call into the framework, so the
+            # deadline is a timer rather than a loop check. Signalling names
+            # the reason and, via _unblock_stop, asks the runner to stop --
+            # the same path a cancel takes.
+            if max_duration <= 0.0:
+                max_duration = float(self.get_parameter("default_max_duration_s").value)
+            deadline = None
+            if max_duration > 0.0:
+                deadline = threading.Timer(max_duration, self._signal_stop, args=(TERMINATION_TIMEOUT,))
+                deadline.daemon = True
+                deadline.start()
 
             try:
                 run_result: RunnerResult = self._runner.run(self._bridge, task=task, stop_event=stop_event)
-                result.success = run_result.success
-                result.message = run_result.message
+                if run_result.success:
+                    # The runner ran clean. Whether that was a stop somebody
+                    # asked for or the control loop finishing on its own is the
+                    # node's to say -- the runner only knows it was told to
+                    # stop, not by whom. Its message ("Stopped", "Completed")
+                    # only restates that, so it does not travel.
+                    result.termination_reason = self.stop_reason or TERMINATION_COMPLETED
+                else:
+                    result.termination_reason = TERMINATION_ERROR
+                    result.message = run_result.message
             except Exception as e:
                 self.get_logger().error(f"Policy run failed:\n{traceback.format_exc()}")
-                result.success = False
+                result.termination_reason = TERMINATION_ERROR
                 result.message = f"{type(e).__name__}: {e}"
             finally:
+                if deadline is not None:
+                    deadline.cancel()
                 feedback_stop.set()
-                feedback_thread.join(timeout=1.0)
+                if feedback_thread is not None:
+                    feedback_thread.join(timeout=1.0)
 
-            finish_goal(goal_handle, result)
-            self.get_logger().info(f"Finished: {result.message}")
+            if goal_handle is not None:
+                finish_goal(goal_handle, result)
+            self.get_logger().info(f"Finished ({result.termination_reason}): {result.message}")
             return result
 
     def _feedback_loop(self, goal_handle, stop_event: threading.Event) -> None:
@@ -271,7 +411,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
                 feedback = RunPolicy.Feedback()
                 feedback.queue_depth = snap.queue_depth
                 feedback.published_actions = snap.published_actions
-                feedback.status = snap.status
                 goal_handle.publish_feedback(feedback)
             except Exception:
                 # A silent death of this daemon thread would end feedback

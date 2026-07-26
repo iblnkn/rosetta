@@ -1,36 +1,41 @@
 # Write a Contract
 
-This guide shows you how to write a contract for your robot: the mapping from topics to training frames. Full field documentation lives in the [contract reference](../reference/contract.md).
+The contract defines the translation between ROS 2 topics and the keys LeRobot
+expects. Full field documentation: [contract reference](../reference/contract.md).
 
-## Start minimal
+| ROS2 Side | | LeRobot Side |
+|-----------|---|-------------|
+| `/front_camera/image_raw/compressed` | &rarr; | `observation.images.front` |
+| `/follower_arm/joint_states` (position fields) | &rarr; | `observation.state` |
+| `/leader_arm/joint_states` (position fields) | &larr; | `action` |
+| `/task_prompt` (String) | &rarr; | `task` |
+| `/reward_signal` (Float64) | &rarr; | `next.reward` |
+
+On the ROS2 side, data lives in typed messages on named topics with rich
+structure. On the LeRobot side, data lives in flat dictionaries with
+dot-separated string keys and numpy values. The contract maps one to the other,
+handling type conversion, field extraction, timestamp alignment, and resampling.
 
 ```yaml
-robot_type: my_robot
-robot_interface: ros2
-fps: 30
-
-observations:
-  observation.state:
-    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
-
-actions:
-  action:
-    channel: {topic: /joint_commands, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
+observation.state:
+  channel: {topic: /follower_arm/joint_states, type: sensor_msgs/msg/JointState}
+  align: {strategy: hold, timeline: header}
+  select: [position.shoulder_pan, position.shoulder_lift, position.elbow]
 ```
 
-Every frame-clock entry reads as one pipeline: `channel` provides, `align` chooses a timeline (mandatory), then `select`, then `apply`, then the mapping key. Actions read the same pipeline right-to-left. Full semantics: [contract reference](../reference/contract.md). Design rationale: [contract design decisions](../explanation/contract-design.md).
+At each timestep, this **subscribes** to `/follower_arm/joint_states`,
+**extracts** the named fields using dot notation
+(`position.shoulder_pan` → `msg.position[msg.name.index("shoulder_pan")]`),
+**assembles** a numpy array, and **stores** it under `observation.state`.
 
-## Pick timelines and strategies
-
-Use `timeline: header` for stamped sensors with synced clocks, `timeline: receive` otherwise. Use `strategy: hold` unless you need stale-data rejection (`asof` with `tolerance_ms`) or strict freshness (`drop`). See [alignment strategies](../reference/contract.md#alignment-strategies).
+Use `timeline: header` for stamped sensors with synced clocks, `receive`
+otherwise. Use `strategy: hold` unless a stale value is worse than a fabricated
+zero, since a gap zero-fills rather than skipping the frame.
 
 ## Multi-source keys
 
-A **list** value under one key declares ordered sources whose values concatenate into a single feature vector:
+A **list** value under one key declares ordered sources whose values are
+concatenated in declaration order:
 
 ```yaml
 observations:
@@ -43,62 +48,27 @@ observations:
       # Result: observation.state = [j1, j2, j3, gripper] (4D vector)
 ```
 
-This matters because core policies expect specific key names (see [policy compatibility](../reference/lerobot-data-model.md#policy-feature-compatibility)). To feed several ROS2 topics into one observation, declare them as ordered sources of one key.
+This matters because built-in policies look for specific key names by exact
+match. Feeding several topics into one key is how a rich robot stays compatible
+with them. Every source of a multi-source key needs a `select` and they must all
+resolve to the same dtype. Images never share a key.
 
-The same topic also works in several sources (e.g. position and orientation slices of one pose topic). Each source keeps its own selector and buffer.
+The live LeRobot path enforces the same shape harder: **at most one numeric
+observation key and at most one action key**, or the contract is refused at
+deploy time, after the dataset has already trained fine. See
+[key-count limit](../reference/contract.md#key-count-limit-on-the-lerobot-live-path).
 
-Rules, validated at load (`ContractValidationError` otherwise):
+## Action safety
 
-- Every source of a multi-source key needs a `select`. Concatenation needs static dims to lay out the combined vector.
-- All sources of a key must resolve to the **same** dtype. Set `dtype:` in the channel explicitly to align them.
-- Images and strings never share a key. Give each an own key. Image features never concatenate.
-
-Layout follows declaration order. Reorder sources by reordering the list. Rationale: [why layout follows declaration order](../explanation/contract-design.md#why-layout-follows-declaration-order).
-
-## Set action safety
-
-Declare a stop behavior per action channel. `none` (default) publishes nothing on watchdog or deactivate. `zeros` suits velocity control. `hold` re-sends the last command. Never leave a position-controlled arm on `zeros`. See [actions](../reference/contract.md#actions).
-
-## Maximize policy compatibility
-
-For a dataset working with the widest range of policies:
-
-```yaml
-observations:
-  observation.state:                # Required by: SmolVLA, Wall-X
-    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [...]
-
-  observation.images.top:           # At least 1 image required by most policies
-    channel: {topic: /camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [480, 640]]
-
-actions:
-  action:                           # Required by all action policies
-    channel: {topic: /joint_commands, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [...]
-
-# For VLA policies, also provide a task prompt when recording:
-# ros2 action send_goal ... "{prompt: 'pick up the red block'}"
-```
-
-For VLA fine-tuning, add a second camera and keep recording prompts descriptive:
-
-```yaml
-observations:
-  # ... state and first camera as above ...
-
-  observation.images.wrist.right:
-    channel: {topic: /wrist_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [512, 512]]
-```
+`channel.safety` declares what the watchdog publishes when actions stop
+arriving: `none` (default), `zeros`, or `hold`. **Never put a
+position-controlled arm on `zeros`:** zero is a pose, and the arm will slam to
+it. `hold` lands in the same place before the channel has published once, since
+there is no last command to re-send.
 
 ## Worked example
 
-`contracts/stone.yaml` is the annotated tour: multi-source actions, teleop, QoS anchors, extended sections.
+`contracts/stone.yaml` is the annotated tour: multi-source actions, teleop, QoS
+anchors, extended sections. It declares three numeric observation keys, so read
+it for the schema and do not copy its shape. `so_101.yaml` and `turtlebot3.yaml`
+are the deployable examples.

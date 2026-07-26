@@ -34,6 +34,12 @@ BAG_METADATA_KEY = "rosbag2_bagfile_information"
 BAG_CUSTOM_DATA_KEY = "custom_data"
 BAG_PROMPT_KEY = "lerobot.operator_prompt"
 BAG_CONTRACT_KEY = "rosetta.contract_yaml"
+#: UUID of the RecordEpisode goal that produced the bag, as the canonical
+#: 8-4-4-4-12 hex string. Empty for a service-started recording, which has no
+#: goal. Every action goal already carries a unique id; writing it here is what
+#: lets a bag be traced back to the request that made it, and lets a client
+#: that kept its goal id find the bag afterwards.
+BAG_GOAL_ID_KEY = "rosetta.goal_id"
 
 
 def read_bag_metadata(bag_dir: Path) -> dict[str, Any]:

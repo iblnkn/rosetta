@@ -34,12 +34,14 @@ import shutil
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 import rosbag2_py
+from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
-from rclpy.action import ActionServer, GoalResponse
+from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.serialization import serialize_message
@@ -50,10 +52,14 @@ from rosetta.contract.schema import parse_contract
 from rosetta.contract.specs import iter_specs
 from rosetta.robots.ros2.bag_metadata import (
     BAG_CONTRACT_KEY,
+    BAG_GOAL_ID_KEY,
     BAG_PROMPT_KEY,
     update_custom_data,
 )
 from rosetta.robots.ros2.nodes.node_utils import (
+    TERMINATION_ERROR,
+    TERMINATION_STOPPED,
+    TERMINATION_TIMEOUT,
     extract_qos_numeric_values,
     finish_goal,
     positive_rate_descriptor,
@@ -232,11 +238,20 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             ),
         )
         self.declare_parameter(
-            "default_max_duration",
+            "default_prompt",
+            "",
+            ParameterDescriptor(
+                description="Task prompt used when a goal or service call leaves prompt empty. "
+                "Read at each recording start. Empty means the bag stores no prompt, which is "
+                "correct when the contract declares a `tasks` section instead."
+            ),
+        )
+        self.declare_parameter(
+            "default_max_duration_s",
             0.0,
             ParameterDescriptor(
                 description="Maximum recording duration in seconds (0 or negative = record until stopped, no limit). "
-                "Read at each recording start."
+                "Read at each recording start, and used only when the goal does not set max_duration_s."
             ),
         )
         self.declare_parameter(
@@ -274,6 +289,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._subs: dict[str, Any] = {}  # persistent subs (non-latched contract topics)
         self._episode_subs: dict[str, Any] = {}  # per-episode subs (latched contract + discovered)
         self._action_server: ActionServer | None = None
+        self._cancel_client = None
         self._cancel_service = None
         self._start_service = None
         self._delete_last_bag_service = None
@@ -282,14 +298,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # path. The base work gate (the busy flag plus a per-claim stop event)
         # is claimed at accept time, before the writer opens. That stops two
         # concurrent starts (service plus service, or service plus action)
-        # from both proceeding through the writer-open window. _cancel_requested
-        # lets the cancel service ask _record to finish an action goal without
-        # touching the goal handle from another thread.
+        # from both proceeding through the writer-open window.
         self._writer: rosbag2_py.SequentialWriter | None = None
         self._writer_lock = threading.Lock()
         self._messages_written = 0
         self._topic_msg_counts: dict[str, int] = {}
-        self._cancel_requested = False
         self._cbg = ReentrantCallbackGroup()
         self._last_bag_dir: Path | None = None
 
@@ -348,9 +361,22 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
-        # Service to allow external callers to cancel an active recording
+        # Client to this server's own cancel service, so ~/cancel_recording can
+        # perform a real cancel rather than a lookalike. The name is relative,
+        # so it expands through the same node-namespace rules that expanded the
+        # action name above -- hand-composing an absolute name would break
+        # silently under a namespace.
+        self._cancel_client = self.create_client(
+            CancelGoal,
+            "record_episode/_action/cancel_goal",
+            callback_group=self._cbg,
+        )
+
+        # Service to allow external callers to cancel an active recording.
         # Useful for users who can't (or don't want to) interact with the
-        # action protocol directly.
+        # action protocol directly -- Foxglove can call services but not
+        # actions. It forwards to the cancel service above, so a dashboard
+        # button and a `ros2 action` cancel are the same event.
         self._cancel_service = self.create_service(
             Trigger,
             "~/cancel_recording",
@@ -395,6 +421,10 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         if self._action_server is not None:
             self._action_server.destroy()
             self._action_server = None
+
+        if self._cancel_client is not None:
+            self.destroy_client(self._cancel_client)
+            self._cancel_client = None
 
         for attr in ("_cancel_service", "_start_service", "_delete_last_bag_service"):
             service = getattr(self, attr)
@@ -574,6 +604,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             # Serialize outside the lock: for image topics this is a ~MB copy,
             # and every topic's callback contends the one writer lock.
             serialized = serialize_message(msg)
+            write_error: str | None = None
             with self._writer_lock:
                 if self._writer is None:
                     return
@@ -582,75 +613,39 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                     self._messages_written += 1
                     self._topic_msg_counts[_topic] = self._topic_msg_counts.get(_topic, 0) + 1
                 except Exception as e:
-                    self.get_logger().error(f"Write failed on {_topic}: {e}")
-                    self._signal_stop()
+                    write_error = f"Write failed on {_topic}: {e}"
+            if write_error is not None:
+                # Signalled outside the writer lock (_signal_stop takes the work
+                # gate; keeping the two disjoint means nobody has to reason
+                # about their order). Naming the reason is what makes the
+                # epilogue report an error: this used to just set the stop
+                # event, so the loop exited normally and the goal SUCCEEDED
+                # while handing back a truncated bag.
+                self.get_logger().error(write_error)
+                self._signal_stop(TERMINATION_ERROR, write_error)
 
         return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
 
     # ---------- Action callbacks ----------
 
-    def _arm_recording(self) -> str | None:
-        """Claim the recording slot via the base work gate; reset the cancel flag.
-
-        The stop event is armed by _try_claim_work at accept time, not in
-        _record. A cancel or deactivate that lands in the accept->execute
-        window needs an event already present to set. The cancel flag resets
-        here for the same reason. Resetting it inside _record would eat a
-        service cancel that landed in that window.
-
-        Returns:
-            The rejection reason (node inactive, or a recording in flight), or
-            None when the slot was claimed.
-
-        """
-        reason = self._try_claim_work()
-        if reason is None:
-            self._cancel_requested = False
-        return reason
-
-    def _on_goal(self, _goal_request) -> GoalResponse:
-        """Accept the goal if active and not already recording or starting.
-
-        Overrides the base only to reset the cancel flag as part of the claim.
-        The cancel callback stays the base's goal-id-routed default.
-
-        Returns:
-            GoalResponse.ACCEPT if the slot was claimed, else REJECT.
-
-        """
-        reason = self._arm_recording()
-        if reason is not None:
-            self.get_logger().warning(f"Goal rejected: {reason}")
-            return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
-
     def _on_cancel_service(self, request, response):
         """Cancel the active recording from a plain Trigger service call.
 
-        Signals the record loop to stop. For an action recording it also sets
-        the cancel flag so the goal finishes early. That goal ends ABORTED, not
-        CANCELED. rcl only reaches CANCELED from the CANCELING state, which an
-        action-protocol cancel enters and a service call cannot. The goal-handle
-        transition is left to _record, the thread that owns the handle, so two
-        threads never transition it at once.
+        Forwards to this server's own ``_action/cancel_goal`` with the action
+        spec's cancel-all wildcard, so the goal takes the ordinary cancel path:
+        the base's goal-id-routed ``_on_cancel`` records the reason, the goal
+        enters CANCELING, and _record ends it CANCELED. A dashboard button and
+        a `ros2 action` cancel are the same event, down to the terminal state.
+
+        A service start (no goal handle) has nothing to cancel through the
+        action protocol, so it stops via the recorded reason alone.
 
         Returns:
             The response with success False when nothing is recording, else
             True with a "Cancel requested" message.
 
         """
-        if not self.busy:
-            response.success = False
-            response.message = "No active recording"
-            return response
-
-        self.get_logger().info("cancel_recording service called: stopping recording")
-        self._cancel_requested = True
-        self._signal_stop()
-
-        response.success = True
-        response.message = "Cancel requested"
-        return response
+        return self._handle_cancel_service(response, self._cancel_client, what="recording")
 
     def _on_start_service(self, request, response):
         """Start a recording without the ROS2 action protocol.
@@ -663,24 +658,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             already claimed, else True with "Recording started".
 
         """
-        # Claim the recording slot before the writer exists so a concurrent
-        # start (another service call or an action goal) is rejected.
-        reason = self._arm_recording()
-        if reason is not None:
-            response.accepted = False
-            response.message = f"Rejected: {reason}"
-            return response
-
-        prompt = request.prompt or ""
-        self.get_logger().info(f"start_recording service called: prompt='{prompt}'")
-
-        # Run the shared record loop in a background thread (the action path
-        # runs it on the action executor thread instead).
-        threading.Thread(target=self._record, args=(prompt,), daemon=True).start()
-
-        response.accepted = True
-        response.message = "Recording started"
-        return response
+        # The base claims the recording slot before the writer exists, so a
+        # concurrent start (another service call or an action goal) is rejected.
+        # The shared record loop runs on a background thread; the action path
+        # runs the same loop on the action executor thread instead.
+        return self._handle_start_service(response, self._record, (request.prompt or "",), what="recording")
 
     def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Delete the most recently completed bag directory.
@@ -718,9 +700,13 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
         """Action-goal wrapper around the shared record loop."""
-        return self._record(goal_handle.request.prompt or "", goal_handle)
+        return self._record(
+            goal_handle.request.prompt or "",
+            goal_handle,
+            max_duration=goal_handle.request.max_duration_s,
+        )
 
-    def _record(self, prompt: str, goal_handle=None) -> RecordEpisode.Result:
+    def _record(self, prompt: str, goal_handle=None, max_duration: float = 0.0) -> RecordEpisode.Result:
         """The one record loop, shared by both start paths.
 
         ``goal_handle=None`` marks a service start. That path skips feedback
@@ -729,17 +715,27 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         timeout, metadata, per-topic summary, and state reconciliation. The
         two paths were once parallel copies that had drifted.
 
-        The per-recording stop event was armed at accept time by
-        _arm_recording. It is deliberately not reset here.
+        The per-recording stop event and stop reason were armed at accept time
+        by _try_claim_work. They are deliberately not reset here: a cancel or
+        deactivate landing in the accept->execute window must not be lost.
 
         Args:
-            prompt: Task prompt stored in the bag metadata.
+            prompt: Task prompt stored in the bag metadata. Empty falls back to
+                the ``default_prompt`` parameter.
             goal_handle: Action goal handle, or None for a service start.
+            max_duration: Auto-stop after this many seconds. 0 or negative
+                falls back to the ``default_max_duration_s`` parameter, which is
+                what the service-start path always uses -- the lightweight
+                service start takes node defaults; the goal can override them.
 
         Returns:
             The populated RecordEpisode.Result.
 
         """
+        # Resolved here rather than at each entry point, so the action goal,
+        # the service call, and any future caller all fall back the same way.
+        prompt = prompt or self.get_parameter("default_prompt").value
+
         self._messages_written = 0
         self._topic_msg_counts = {}
         bag_dir = self._create_bag_dir()
@@ -749,6 +745,9 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         source = "action" if goal_handle is not None else "service"
         error: Exception | None = None
         writer_opened = False
+        # Set only when the loop ends on its own terms. A stop somebody else
+        # asked for is recorded on the node instead (see the epilogue).
+        loop_reason: str | None = None
 
         # _goal_work releases the claim on every exit, including a goal-handle
         # transition that raises. No path can leave the busy flag held and
@@ -757,7 +756,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         with self._goal_work(goal_handle) as stop_event:
             start = time.monotonic()
             try:
-                max_duration = float(self.get_parameter("default_max_duration").value)
+                if max_duration <= 0.0:
+                    max_duration = float(self.get_parameter("default_max_duration_s").value)
                 # Range-validated at declare/set time (positive_rate_descriptor).
                 feedback_rate = float(self.get_parameter("feedback_rate_hz").value)
                 self.get_logger().info(f"Recording ({source}): {bag_dir}, max={max_duration}s")
@@ -769,21 +769,21 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 while not stop_event.wait(1.0 / feedback_rate):
                     elapsed = time.monotonic() - start
 
-                    # Timeout (max_duration <= 0 means record until stopped)
-                    remaining = max_duration - elapsed if max_duration > 0 else 0.0
-                    if max_duration > 0 and remaining <= 0:
+                    # max_duration <= 0 means record until stopped.
+                    if 0 < max_duration <= elapsed:
                         self.get_logger().info("Timeout reached")
+                        loop_reason = TERMINATION_TIMEOUT
                         break
 
                     if goal_handle is not None:
-                        if goal_handle.is_cancel_requested:
-                            break
+                        # No is_cancel_requested poll: every cancel now sets the
+                        # stop event via the base's _on_cancel, including the
+                        # ones the cancel service forwards.
                         # Read message count under lock for thread safety.
                         with self._writer_lock:
                             msg_count = self._messages_written
-                        feedback.seconds_remaining = int(max(0.0, remaining))
+                        feedback.elapsed_s = elapsed
                         feedback.messages_written = msg_count
-                        feedback.status = "recording"
                         goal_handle.publish_feedback(feedback)
             except Exception as e:
                 self.get_logger().error(f"Recording error: {e}")
@@ -796,7 +796,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             self._close_writer()
             if writer_opened:
                 try:
-                    self._write_metadata(bag_dir, prompt, self._contract_text)
+                    self._write_metadata(bag_dir, prompt, self._contract_text, self._goal_id_str(goal_handle))
                 except RuntimeError as e:
                     # A partial bag with provenance is still a real error, but
                     # never mask an earlier one.
@@ -807,22 +807,37 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 self._last_bag_dir = bag_dir
 
             result.messages_written = self._messages_written
-            result.success = error is None
-            result.message = "" if error is None else str(error)
-            if error is None:
+
+            # Why the recording ended, in precedence order:
+            #   1. an exception raised on this thread
+            #   2. a stop somebody asked for, which named itself (a cancel, a
+            #      deactivate, a failed bag write)
+            #   3. the loop's own decision (a timeout)
+            #   4. nothing above: the loop was told to stop with no reason
+            # Signalled beats loop-decided so a failed write landing in the same
+            # tick as a timeout still reports as an error rather than a clean
+            # finish.
+            # ``message`` carries only what no other field does: the detail of
+            # something going wrong. It stays empty on a clean end rather than
+            # restating messages_written back at the caller.
+            signalled, detail = self.stop_reason, self.stop_detail
+            if error is not None:
+                result.termination_reason = TERMINATION_ERROR
+                result.message = str(error)
+            elif signalled is not None:
+                result.termination_reason = signalled
+                result.message = detail
+            else:
+                result.termination_reason = loop_reason or TERMINATION_STOPPED
+
+            if result.termination_reason != TERMINATION_ERROR:
                 self._log_topic_summary(bag_dir, discovered, time.monotonic() - start)
 
             # Terminal goal state. This thread owns the goal handle and is the
-            # only place that transitions it. finish_goal uses only rcl-legal
-            # transitions. A service cancel finishes as ABORTED. CANCELED needs
-            # the CANCELING state, which only an action-protocol cancel enters.
+            # only place that transitions it; finish_goal uses only rcl-legal
+            # transitions and reads the reason set just above.
             if goal_handle is not None:
-                finish_goal(
-                    goal_handle,
-                    result,
-                    service_cancelled=self._cancel_requested,
-                    success_message=f"Recorded {self._messages_written} messages",
-                )
+                finish_goal(goal_handle, result)
             return result
 
     def _log_topic_summary(self, bag_dir: Path, discovered_topics, elapsed: float) -> None:
@@ -918,13 +933,26 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             self.destroy_subscription(sub)
         self._discovered_topics = []
 
-    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "") -> None:
-        """Write prompt and contract provenance into metadata.yaml custom_data.
+    @staticmethod
+    def _goal_id_str(goal_handle) -> str:
+        """The goal's UUID as canonical hex, or "" for a service start.
+
+        ``goal_id.uuid`` is a 16-byte array on the wire; bag metadata is YAML
+        read by humans and by the porter, so store the string form.
+        """
+        if goal_handle is None:
+            return ""
+        return str(uuid.UUID(bytes=bytes(goal_handle.goal_id.uuid)))
+
+    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "", goal_id: str = "") -> None:
+        """Write prompt, contract, and goal provenance into metadata.yaml custom_data.
 
         Args:
             bag_dir: The closed bag's directory holding metadata.yaml.
             prompt: Task prompt to store, or empty to skip.
             contract_text: Full contract YAML to store, or empty to skip.
+            goal_id: UUID of the goal that produced the bag, or empty to skip
+                (a service-started recording has no goal).
 
         Raises:
             RuntimeError: metadata.yaml could not be written after retries.
@@ -937,6 +965,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             entries[BAG_PROMPT_KEY] = prompt
         if contract_text:
             entries[BAG_CONTRACT_KEY] = contract_text
+        if goal_id:
+            entries[BAG_GOAL_ID_KEY] = goal_id
         if not entries:
             return
 

@@ -27,6 +27,11 @@ teardown actually cleaned up; FAILURE (finalized) when it could not.
 The base-level tests pin the work gate: shutdown-from-active stops work and
 secures BEFORE teardown, cleanup refuses while work runs, and a claim always
 leaves behind a stop event that _stop_and_secure() sets.
+
+The stop-reason tests pin the other half of that gate: every stop signal names
+itself, the name has exactly the same lifetime as the stop event, and the first
+writer wins. Work loops report the recorded reason instead of re-deriving the
+cause, which is what stopped a deactivate from being reported as a human stop.
 """
 
 import threading
@@ -42,6 +47,11 @@ from sensor_msgs.msg import JointState
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec
+from rosetta.robots.ros2.nodes.node_utils import (
+    TERMINATION_CANCELLED,
+    TERMINATION_ERROR,
+    TERMINATION_NODE_DEACTIVATED,
+)
 from rosetta.robots.ros2.rclpy_utils import lifecycle_state_label
 from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode, RosettaLifecycleNode
 
@@ -170,9 +180,9 @@ class _RecordingNode(RosettaLifecycleNode):
     def _teardown(self):
         self.calls.append("teardown")
 
-    def _signal_stop(self):
-        self.calls.append("signal_stop")
-        super()._signal_stop()
+    def _unblock_stop(self):
+        self.calls.append("unblock_stop")
+        super()._unblock_stop()
 
     def _send_safety_action(self):
         self.calls.append("safety")
@@ -218,13 +228,13 @@ def test_shutdown_from_active_stops_and_secures_before_teardown(base_node):
     base_node.calls.clear()
 
     def signal_and_release():
-        base_node.calls.append("signal_stop")
+        base_node.calls.append("unblock_stop")
         stop_event.set()
         base_node._busy = False
 
-    base_node._signal_stop = signal_and_release
+    base_node._unblock_stop = signal_and_release
     assert base_node.trigger_shutdown() == TransitionCallbackReturn.SUCCESS
-    assert base_node.calls == ["signal_stop", "safety", "teardown"]
+    assert base_node.calls == ["unblock_stop", "safety", "teardown"]
 
 
 def test_shutdown_teardown_runs_even_when_safety_send_raises(base_node):
@@ -270,6 +280,79 @@ def test_claim_and_stop_serialize_on_the_work_gate(base_node):
     assert base_node._try_claim_work() is not None
     base_node._busy = False
     assert base_node._try_claim_work() is not None  # still inactive
+
+
+def test_a_fresh_claim_clears_the_previous_stop_reason(base_node):
+    base_node._accepting_work = True
+    assert base_node._try_claim_work() is None
+    base_node._signal_stop(TERMINATION_CANCELLED, "user asked")
+    assert base_node.stop_reason == TERMINATION_CANCELLED
+    assert base_node.stop_detail == "user asked"
+
+    base_node._busy = False  # work finished
+    assert base_node._try_claim_work() is None
+    # A reason latched against the previous claim must never be read as the
+    # reason THIS claim ended.
+    assert base_node.stop_reason is None
+    assert base_node.stop_detail == ""
+
+
+def test_first_stop_reason_wins(base_node):
+    # The thing that actually decided the outcome is what gets reported, not
+    # the last thing to notice. A failed bag write followed by the deactivate
+    # it triggers must still read as an error.
+    base_node._accepting_work = True
+    assert base_node._try_claim_work() is None
+    base_node._signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
+    base_node._signal_stop(TERMINATION_NODE_DEACTIVATED)
+    assert base_node.stop_reason == TERMINATION_ERROR
+    assert base_node.stop_detail == "Write failed on /scan: boom"
+
+
+def test_deactivate_records_node_deactivated(base_node):
+    base_node._accepting_work = True
+    assert base_node._try_claim_work() is None
+    base_node._stop_and_secure(wait_timeout=0.1)
+    assert base_node.stop_reason == TERMINATION_NODE_DEACTIVATED
+
+
+def test_routed_cancel_records_cancelled_and_a_stale_one_records_nothing(base_node):
+    class Handle:
+        def __init__(self):
+            self.goal_id = object()
+            self.is_cancel_requested = False
+
+    base_node._accepting_work = True
+    assert base_node._try_claim_work() is None
+    live, stale = Handle(), Handle()
+    with base_node._goal_work(live):
+        # A cancel for a goal that already finished must not stop, or name,
+        # the goal that replaced it.
+        base_node._on_cancel(stale)
+        assert base_node.stop_reason is None
+        base_node._on_cancel(live)
+        assert base_node.stop_reason == TERMINATION_CANCELLED
+
+
+def test_unblock_stop_runs_outside_the_work_gate(base_node):
+    """The gate is not reentrant and _unblock_stop overrides call into foreign
+    frameworks (runner.request_stop()). Holding the gate across one would stall
+    every other claim on a framework's I/O."""
+    observed: list[bool] = []
+
+    def probe():
+        acquired = base_node._work_gate.acquire(blocking=False)
+        observed.append(acquired)
+        if acquired:
+            base_node._work_gate.release()
+
+    base_node._unblock_stop = probe
+    base_node._accepting_work = True
+    assert base_node._try_claim_work() is None
+
+    base_node._signal_stop(TERMINATION_CANCELLED)
+    base_node._stop_and_secure(wait_timeout=0.1)
+    assert observed and all(observed)
 
 
 def test_concurrent_claims_admit_exactly_one_winner(base_node):

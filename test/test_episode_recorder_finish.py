@@ -14,18 +14,44 @@
 
 """Terminal-transition tests for finish_goal (shared by all action nodes).
 
-Regression guard for the recorder cancel-service brick: rcl only allows
-canceled() from the CANCELING state (entered only by an action-protocol
-cancel). A Trigger-service cancel leaves the goal EXECUTING, so it must
-finish via abort() — the old code called canceled() there, which raised
-RCLError outside the try/except and leaked _busy/_is_recording/_goal_handle,
-rejecting every subsequent recording until node restart. The helper now
-lives in node_utils and is also used by the client and HIL manager nodes.
+finish_goal maps a work loop's ``termination_reason`` onto the one rcl-legal
+terminal transition for it. The mapping it implements:
+
+    a client took the work away  -> CANCELED
+    the work reached a defined end -> SUCCEEDED
+    the server stopped the work  -> ABORTED
+
+Two constraints it must respect, both of which have bitten before:
+
+- ``canceled()`` is legal ONLY from CANCELING. Calling it from EXECUTING raises
+  RCLError out of the execute callback, which once leaked the busy flag and
+  rejected every subsequent recording until node restart. So the
+  ``is_cancel_requested`` branch decides first, and a "cancelled" reason on a
+  goal that never entered CANCELING must still abort rather than raise.
+- finish_goal must never write ``termination_reason``. The work loop is its
+  single writer, which is what keeps the terminal state and the reported reason
+  from disagreeing.
+
+These use a fake goal handle and so can only check which transition was
+*requested*. That the transition is legal and that a client sees the terminal
+status is proved against a real ActionServer in
+test_action_cancel_terminal_state.py.
 """
 
 from types import SimpleNamespace
 
-from rosetta.robots.ros2.nodes.node_utils import finish_goal
+import pytest
+
+from rosetta.robots.ros2.nodes.node_utils import (
+    TERMINATION_CANCELLED,
+    TERMINATION_COMPLETED,
+    TERMINATION_ERROR,
+    TERMINATION_NODE_DEACTIVATED,
+    TERMINATION_REWARD_THRESHOLD,
+    TERMINATION_STOPPED,
+    TERMINATION_TIMEOUT,
+    finish_goal,
+)
 
 
 class FakeGoalHandle:
@@ -45,53 +71,62 @@ class FakeGoalHandle:
         self.calls.append("succeed")
 
 
-def _result(success=True, message=""):
-    return SimpleNamespace(success=success, message=message)
+def _result(termination_reason, message=""):
+    return SimpleNamespace(termination_reason=termination_reason, message=message)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        TERMINATION_STOPPED,
+        TERMINATION_TIMEOUT,
+        TERMINATION_REWARD_THRESHOLD,
+        TERMINATION_COMPLETED,
+    ],
+)
+def test_work_that_reached_a_defined_end_succeeds(reason):
+    handle = FakeGoalHandle()
+    finish_goal(handle, _result(reason))
+    assert handle.calls == ["succeed"]
+
+
+@pytest.mark.parametrize("reason", [TERMINATION_ERROR, TERMINATION_NODE_DEACTIVATED])
+def test_server_initiated_stop_aborts(reason):
+    # node_deactivated aborts for the same reason an error does: the SERVER
+    # chose to stop the goal, which the ROS 2 action docs define as an abort.
+    handle = FakeGoalHandle()
+    finish_goal(handle, _result(reason))
+    assert handle.calls == ["abort"]
 
 
 def test_action_protocol_cancel_finishes_canceled():
     handle = FakeGoalHandle(cancel_requested=True)
-    result = _result()
-    finish_goal(handle, result, success_message="ok")
+    finish_goal(handle, _result(TERMINATION_CANCELLED))
     assert handle.calls == ["canceled"]
-    assert result.success is False
-    assert result.message == "Cancelled"
 
 
-def test_service_cancel_finishes_aborted_never_canceled():
-    # The regression: canceled() from EXECUTING raises in rcl; the service
-    # path must use abort().
+def test_cancelled_reason_without_canceling_state_aborts():
+    # The original brick, in its current form: a "cancelled" reason recorded
+    # against a goal that never entered CANCELING must NOT call canceled().
+    # Reachable if a cancel forward is dropped but the reason was already
+    # latched.
     handle = FakeGoalHandle(cancel_requested=False)
-    result = _result()
-    finish_goal(handle, result, service_cancelled=True, success_message="ok")
+    finish_goal(handle, _result(TERMINATION_CANCELLED))
     assert handle.calls == ["abort"]
     assert "canceled" not in handle.calls
-    assert result.success is False
-    assert result.message == "Cancelled via service"
 
 
-def test_normal_completion_succeeds():
-    handle = FakeGoalHandle()
-    result = _result(success=True)
-    finish_goal(handle, result, success_message="Recorded 42 messages")
-    assert handle.calls == ["succeed"]
-    assert result.success is True
-    assert result.message == "Recorded 42 messages"
-
-
-def test_failure_aborts_and_keeps_message():
-    handle = FakeGoalHandle()
-    result = _result(success=False, message="writer exploded")
-    finish_goal(handle, result)
-    assert handle.calls == ["abort"]
-    assert result.success is False
-    assert result.message == "writer exploded"
-
-
-def test_action_cancel_takes_precedence_over_service_cancel():
-    # Both flags set: the goal IS in CANCELING, so canceled() is the legal
-    # and correct terminal state.
+def test_cancel_state_wins_over_the_recorded_reason():
+    # The goal IS in CANCELING, so canceled() is the only legal terminal
+    # transition regardless of what the loop recorded.
     handle = FakeGoalHandle(cancel_requested=True)
-    result = _result()
-    finish_goal(handle, result, service_cancelled=True, success_message="ok")
+    finish_goal(handle, _result(TERMINATION_ERROR))
     assert handle.calls == ["canceled"]
+
+
+def test_finish_goal_never_rewrites_the_reason_or_message():
+    handle = FakeGoalHandle(cancel_requested=True)
+    result = _result(TERMINATION_CANCELLED, message="Recorded 42 messages")
+    finish_goal(handle, result)
+    assert result.termination_reason == TERMINATION_CANCELLED
+    assert result.message == "Recorded 42 messages"
