@@ -58,6 +58,70 @@ THREAD_JOIN_TIMEOUT_SEC = 2.0
 FEEDBACK_THREAD_JOIN_TIMEOUT_SEC = 1.0
 
 
+def _resolve_policy_device(
+    requested_device: str | None,
+    torch_available: bool | None = None,
+    cuda_available: bool | None = None,
+    xpu_available: bool | None = None,
+    npu_available: bool | None = None,
+) -> str:
+    """Resolve the requested policy device, falling back to CPU on unsupported systems."""
+    normalized_device = (requested_device or '').strip().lower()
+
+    if normalized_device.startswith('cuda'):
+        if torch_available is None or cuda_available is None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch_available = False
+                cuda_available = False
+            else:
+                torch_available = True
+                cuda_available = torch.cuda.is_available()
+
+        if cuda_available:
+            return normalized_device
+
+        return 'cpu'
+
+    if normalized_device.startswith('xpu'):
+        if torch_available is None or xpu_available is None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch_available = False
+                xpu_available = False
+            else:
+                torch_available = True
+                xpu_available = hasattr(torch, 'xpu') and torch.xpu.is_available()
+
+        if xpu_available:
+            return normalized_device
+
+        return 'cpu'
+
+    if normalized_device.startswith('npu') or normalized_device == 'openvino':
+        if npu_available is None:
+            try:
+                import openvino as ov  # type: ignore
+            except Exception:
+                npu_available = False
+            else:
+                try:
+                    npu_available = any(
+                        'NPU' in device.upper() for device in ov.Core().available_devices
+                    )
+                except Exception:
+                    npu_available = False
+
+        if npu_available:
+            return 'npu'
+
+        return 'cpu'
+
+    return normalized_device
+
+
 class RosettaClientNode(LifecycleNode):
     """ROS2 Lifecycle Action Server wrapping LeRobot's RobotClient for policy inference."""
 
@@ -102,7 +166,7 @@ class RosettaClientNode(LifecycleNode):
             'policy_device',
             'cuda',
             ParameterDescriptor(
-                description='Device for policy inference (cuda, cpu)', read_only=True
+                description='Device for policy inference (cuda, xpu, npu, cpu)', read_only=True
             ),
         )
         self.declare_parameter(
@@ -666,12 +730,20 @@ class RosettaClientNode(LifecycleNode):
                 f'control loop fps={control_loop_fps}Hz (wall time)'
             )
 
+        requested_policy_device = self.get_parameter('policy_device').value
+        resolved_policy_device = _resolve_policy_device(requested_policy_device)
+        if requested_policy_device != resolved_policy_device:
+            self.get_logger().warning(
+                f"Requested policy device '{requested_policy_device}' but the requested backend "
+                f"is unavailable; using '{resolved_policy_device}' instead."
+            )
+
         config_kwargs = {
             'robot': robot_config,
             'server_address': self.get_parameter('server_address').value,
             'policy_type': self.get_parameter('policy_type').value,
             'pretrained_name_or_path': self._pretrained,
-            'policy_device': self.get_parameter('policy_device').value,
+            'policy_device': resolved_policy_device,
             'task': task,
             'fps': control_loop_fps,  # Wall-time polling rate for control_loop()
             'actions_per_chunk': self.get_parameter('actions_per_chunk').value,
