@@ -229,6 +229,39 @@ def decode_value(msg, spec: 'ObservationStreamSpec | ActionStreamSpec') -> Any:
     return val
 
 
+def to_actuator_space(
+    spec: 'ActionStreamSpec',
+    action_vec: Sequence[float],
+) -> np.ndarray:
+    """
+    Convert a policy-space action vector into actuator/controller space.
+
+    Applies the contract's inverse unit conversion (deg → rad when
+    ``spec.unit_conversion == "rad2deg"``) followed by the configured clamp.
+    This is the same numeric transform ``encode_value`` performs before building
+    a ROS message, exposed as a standalone helper so consumers that need the
+    controller-space values without a ROS message (e.g. action-chunk
+    visualizers) do not have to duplicate the conversion logic.
+
+    Args
+    ----
+        spec: Action stream spec with ``unit_conversion`` and ``clamp``
+        action_vec: Flat array of action values in policy/dataset space
+
+    Returns
+    -------
+        Flat float64 numpy array in actuator/controller space
+
+    """
+    vec = np.asarray(action_vec, dtype=np.float64).flatten()
+    if getattr(spec, 'unit_conversion', None) == 'rad2deg':
+        vec = np.deg2rad(vec)
+    clamp = getattr(spec, 'clamp', None)
+    if clamp:
+        vec = np.clip(vec, clamp[0], clamp[1])
+    return vec
+
+
 def encode_value(
     spec: 'ActionStreamSpec',
     action_vec: Sequence[float],
