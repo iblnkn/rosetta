@@ -174,7 +174,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "policy_device",
             default_value=client_cfg["policy_device"],
-            description="Inference device: cuda, cpu, mps, or cuda:0",
+            description="Inference device: cuda, xpu, mps, cpu, or cuda:0",
         ),
         DeclareLaunchArgument(
             "actions_per_chunk",

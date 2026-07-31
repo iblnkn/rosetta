@@ -24,7 +24,7 @@ policy_runner:
     # Options: "act", "smolvla", "diffusion", "tdmpc", "vqbet", "pi0", "pi05"
     policy_type: "act"
 
-    # Device for policy inference: "cuda", "xpu", "npu", "cpu", "mps", or specific like "cuda:0"
+    # Device for policy inference: "cuda", "xpu", "mps", "cpu", or specific like "cuda:0"
     policy_device: "cuda"
 
     # Note: fps is defined in the contract (single source of truth)

@@ -73,7 +73,7 @@ by the resolved `framework` adapter, `lerobot_rosetta` here.
 | `pretrained_name_or_path` | *(see params file)* | HuggingFace model ID or local path (launch arg) |
 | `server_address` | `127.0.0.1:8080` | Policy server address (launch arg) |
 | `policy_type` | `act` | `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc. (launch arg) |
-| `policy_device` | `cuda` | `cuda`, `cpu`, `mps`, or `cuda:0` |
+| `policy_device` | `cuda` | `cuda`, `xpu`, `mps`, `cpu`, or `cuda:0` (falls back to `cpu` if unavailable) |
 | `actions_per_chunk` | `30` | Actions per inference chunk |
 | `chunk_size_threshold` | `0.95` | When to request a new chunk (0.0-1.0) |
 | `aggregate_fn_name` | `weighted_average` | `weighted_average`, `latest_only`, `average`, `conservative` |
