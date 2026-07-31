@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      ROSDEP_SKIP_KEYS: ament_python
+      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main github:iblnkn/rosetta#dev"
+      # lerobot is PyPI-only (not a ROS/rosdep package) — colcon build doesn't
+      # resolve a package's own install_requires the way rosdep resolves
+      # package.xml, so nothing installs it without this hook.
+      # --break-system-packages: PEP 668, required on Ubuntu 24.04.
+      # --ignore-installed: lerobot's deps (e.g. numpy) can want to upgrade
+      # apt-installed packages, which pip can't uninstall (no RECORD file).
+      BEFORE_BUILD_TARGET_WORKSPACE: "pip install --break-system-packages --ignore-installed lerobot"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/dev/ruff.toml -o ruff.toml
+      - uses: astral-sh/ruff-action@v3
+        with:
+          args: check .
