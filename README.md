@@ -9,6 +9,8 @@
 
 **Rosetta** connects your ROS 2 robot to robot-learning frameworks like [LeRobot](https://github.com/huggingface/lerobot).
 
+**📖 Documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)**
+
 ## Quick Start
 
 ```
@@ -95,18 +97,6 @@ ros2 action send_goal /run_policy \
 ```
 
 Full walkthrough: [Train and deploy your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html).
-
-## Documentation
-
-The docs aspire to follow [Diátaxis](https://diataxis.fr/) framework. Start at the [documentation index](https://iblnkn.github.io/rosetta/).
-
-| Section | Purpose | Start with |
-|---------|---------|-----------|
-| Getting started | Install, then learn by doing | [Installation](https://iblnkn.github.io/rosetta/installation.html), [Your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html) |
-| How-to guides | Get a task done | [Write a contract](https://iblnkn.github.io/rosetta/how-to/write-a-contract.html), [Port existing bags](https://iblnkn.github.io/rosetta/how-to/record-train-deploy.html) |
-| Reference | Look things up | [Contract](https://iblnkn.github.io/rosetta/reference/contract.html), [Nodes](https://iblnkn.github.io/rosetta/reference/nodes.html), [Actions and services](https://iblnkn.github.io/rosetta/reference/nodes.html) |
-| Explanation | Understand the design | [Design](https://iblnkn.github.io/rosetta/explanation/design.html), [Record raw, decide late](https://iblnkn.github.io/rosetta/explanation/design.html) |
-
 
 ## License
 
