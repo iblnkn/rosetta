@@ -12,40 +12,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for _resolve_policy_device (ported from rosetta PR #33)."""
+"""Unit tests for _resolve_policy_device (CPU fallback for unavailable backends)."""
 
 import pytest
 
 from lerobot_rosetta.policy_runner import _resolve_policy_device
 
+KNOWN_BACKENDS = {"cuda", "mps", "xpu", "cpu"}
+
+
+def fake_availability(available):
+    """A stand-in for lerobot's is_torch_device_available, mirroring its contract."""
+
+    def is_available(backend):
+        if backend not in KNOWN_BACKENDS:
+            raise ValueError(f"Unknown device {backend}.")
+        return backend == "cpu" or backend in available
+
+    return is_available
+
 
 @pytest.mark.parametrize(
-    ("requested", "kwargs", "expected"),
+    ("requested", "available", "expected"),
     [
-        # CUDA: honored when available (incl. explicit index), else CPU fallback.
-        ("cuda", {"torch_available": True, "cuda_available": True}, "cuda"),
-        ("cuda:0", {"torch_available": True, "cuda_available": True}, "cuda:0"),
-        ("cuda", {"torch_available": True, "cuda_available": False}, "cpu"),
-        ("cuda", {"torch_available": False, "cuda_available": False}, "cpu"),
-        # XPU: honored when available, else CPU fallback.
-        ("xpu", {"torch_available": True, "xpu_available": True}, "xpu"),
-        ("xpu", {"torch_available": True, "xpu_available": False}, "cpu"),
-        ("xpu", {"torch_available": False, "xpu_available": False}, "cpu"),
-        # NPU / openvino alias: both resolve to "npu" when available.
-        ("npu", {"npu_available": True}, "npu"),
-        ("openvino", {"npu_available": True}, "npu"),
-        ("npu", {"npu_available": False}, "cpu"),
-        ("openvino", {"npu_available": False}, "cpu"),
-        # Devices without an availability probe pass through unchanged.
-        ("cpu", {}, "cpu"),
-        ("mps", {}, "mps"),
+        # Available backends are honored, including an explicit device index.
+        ("cuda", {"cuda"}, "cuda"),
+        ("cuda:1", {"cuda"}, "cuda:1"),
+        ("xpu", {"xpu"}, "xpu"),
+        ("mps", {"mps"}, "mps"),
+        # Unavailable backends fall back to CPU.
+        ("cuda", set(), "cpu"),
+        ("cuda:1", set(), "cpu"),
+        ("xpu", set(), "cpu"),
+        ("mps", set(), "cpu"),
+        # CPU is always available.
+        ("cpu", set(), "cpu"),
+        # Devices LeRobot doesn't know pass through; the server is the authority.
+        ("npu", set(), "npu"),
+        ("openvino", {"cuda"}, "openvino"),
         # Normalization: case and surrounding whitespace are stripped.
-        ("  CUDA  ", {"torch_available": True, "cuda_available": True}, "cuda"),
-        ("XPU", {"torch_available": True, "xpu_available": True}, "xpu"),
-        # Empty / missing request normalizes to the empty string.
-        ("", {}, ""),
-        (None, {}, ""),
+        ("  CUDA  ", {"cuda"}, "cuda"),
+        ("XPU", {"xpu"}, "xpu"),
+        # Empty / missing request defaults to CPU.
+        ("", {"cuda"}, "cpu"),
+        (None, {"cuda"}, "cpu"),
     ],
 )
-def test_resolve_policy_device(requested, kwargs, expected):
-    assert _resolve_policy_device(requested, **kwargs) == expected
+def test_resolve_policy_device(requested, available, expected):
+    assert _resolve_policy_device(requested, is_available=fake_availability(available)) == expected

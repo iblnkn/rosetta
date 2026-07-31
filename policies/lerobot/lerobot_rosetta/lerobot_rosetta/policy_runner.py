@@ -34,11 +34,13 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import fields
 from typing import Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
+from lerobot.utils.device_utils import is_torch_device_available
 from rcl_interfaces.msg import ParameterDescriptor
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
@@ -56,55 +58,23 @@ THREAD_JOIN_TIMEOUT_SEC = 2.0
 
 def _resolve_policy_device(
     requested_device: str | None,
-    torch_available: bool | None = None,
-    cuda_available: bool | None = None,
-    xpu_available: bool | None = None,
-    npu_available: bool | None = None,
+    is_available: Callable[[str], bool] = is_torch_device_available,
 ) -> str:
-    """Resolve the requested policy device, falling back to CPU on unsupported systems."""
-    normalized_device = (requested_device or "").strip().lower()
+    """Resolve the requested policy device, falling back to CPU when its backend is unavailable.
 
-    if normalized_device.startswith("cuda"):
-        if torch_available is None or cuda_available is None:
-            try:
-                import torch  # type: ignore
-            except Exception:
-                torch_available = False
-                cuda_available = False
-            else:
-                torch_available = True
-                cuda_available = torch.cuda.is_available()
-
-        return normalized_device if cuda_available else "cpu"
-
-    if normalized_device.startswith("xpu"):
-        if torch_available is None or xpu_available is None:
-            try:
-                import torch  # type: ignore
-            except Exception:
-                torch_available = False
-                xpu_available = False
-            else:
-                torch_available = True
-                xpu_available = hasattr(torch, "xpu") and torch.xpu.is_available()
-
-        return normalized_device if xpu_available else "cpu"
-
-    if normalized_device.startswith("npu") or normalized_device == "openvino":
-        if npu_available is None:
-            try:
-                import openvino as ov  # type: ignore
-            except Exception:
-                npu_available = False
-            else:
-                try:
-                    npu_available = any("NPU" in device.upper() for device in ov.Core().available_devices)
-                except Exception:
-                    npu_available = False
-
-        return "npu" if npu_available else "cpu"
-
-    return normalized_device
+    Availability is LeRobot's call (is_torch_device_available: cuda/mps/xpu/cpu), so this
+    stays in sync with what the policy server will accept. Devices LeRobot doesn't know
+    (it raises ValueError) pass through untouched — the server's own device checks are
+    the authority there.
+    """
+    device = (requested_device or "").strip().lower()
+    if not device:
+        return "cpu"
+    try:
+        available = is_available(device.split(":", 1)[0])
+    except ValueError:
+        return device
+    return device if available else "cpu"
 
 
 class LeRobotPolicyRunner:
@@ -150,7 +120,7 @@ class LeRobotPolicyRunner:
         _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
         _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
         _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
-        _p("policy_device", "cuda", "Device for policy inference (cuda, xpu, npu, cpu)", True)
+        _p("policy_device", "cuda", "Device for policy inference (cuda, xpu, mps, cpu; cpu fallback)", True)
         _p("actions_per_chunk", 50, "Number of actions to request per chunk")
         _p("chunk_size_threshold", 0.5, "Queue threshold ratio to request new chunk (0.0-1.0)")
         _p("aggregate_fn_name", "weighted_average", "Action aggregation function")
