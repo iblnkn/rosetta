@@ -54,6 +54,59 @@ SERVER_STOP_TIMEOUT_SEC = 5.0
 THREAD_JOIN_TIMEOUT_SEC = 2.0
 
 
+def _resolve_policy_device(
+    requested_device: str | None,
+    torch_available: bool | None = None,
+    cuda_available: bool | None = None,
+    xpu_available: bool | None = None,
+    npu_available: bool | None = None,
+) -> str:
+    """Resolve the requested policy device, falling back to CPU on unsupported systems."""
+    normalized_device = (requested_device or "").strip().lower()
+
+    if normalized_device.startswith("cuda"):
+        if torch_available is None or cuda_available is None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch_available = False
+                cuda_available = False
+            else:
+                torch_available = True
+                cuda_available = torch.cuda.is_available()
+
+        return normalized_device if cuda_available else "cpu"
+
+    if normalized_device.startswith("xpu"):
+        if torch_available is None or xpu_available is None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch_available = False
+                xpu_available = False
+            else:
+                torch_available = True
+                xpu_available = hasattr(torch, "xpu") and torch.xpu.is_available()
+
+        return normalized_device if xpu_available else "cpu"
+
+    if normalized_device.startswith("npu") or normalized_device == "openvino":
+        if npu_available is None:
+            try:
+                import openvino as ov  # type: ignore
+            except Exception:
+                npu_available = False
+            else:
+                try:
+                    npu_available = any("NPU" in device.upper() for device in ov.Core().available_devices)
+                except Exception:
+                    npu_available = False
+
+        return "npu" if npu_available else "cpu"
+
+    return normalized_device
+
+
 class LeRobotPolicyRunner:
     """PolicyRunner backed by LeRobot's RobotClient."""
 
@@ -62,6 +115,7 @@ class LeRobotPolicyRunner:
         self._contract: Optional[Contract] = None
         self._contract_path: str = ""
         self._client: Optional[RobotClient] = None
+        self._policy_device: str = "cpu"
         self._server_process: Optional[subprocess.Popen] = None
         self._server_log = None  # file handle for the server subprocess output
         self._server_log_path: str = ""
@@ -96,7 +150,7 @@ class LeRobotPolicyRunner:
         _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
         _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
         _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
-        _p("policy_device", "cuda", "Device for policy inference (cuda, cpu)", True)
+        _p("policy_device", "cuda", "Device for policy inference (cuda, xpu, npu, cpu)", True)
         _p("actions_per_chunk", 50, "Number of actions to request per chunk")
         _p("chunk_size_threshold", 0.5, "Queue threshold ratio to request new chunk (0.0-1.0)")
         _p("aggregate_fn_name", "weighted_average", "Action aggregation function")
@@ -111,6 +165,16 @@ class LeRobotPolicyRunner:
             "model preload; raise it if the first launch must download weights.",
             True,
         )
+
+        # Resolve once at configure time (the parameter is read-only): both the
+        # client config and the server subprocess args use the resolved device.
+        requested_device = node.get_parameter("policy_device").value
+        self._policy_device = _resolve_policy_device(requested_device)
+        if self._policy_device != requested_device:
+            node.get_logger().warning(
+                f"Requested policy device '{requested_device}' but the requested backend "
+                f"is unavailable; using '{self._policy_device}' instead."
+            )
 
         # Warm start: pay subprocess spawn + torch/CUDA init + model preload at
         # configure time so the first goal costs the same as any other. A
@@ -221,7 +285,7 @@ class LeRobotPolicyRunner:
             "server_address": node.get_parameter("server_address").value,
             "policy_type": node.get_parameter("policy_type").value,
             "pretrained_name_or_path": node.get_parameter("pretrained_name_or_path").value,
-            "policy_device": node.get_parameter("policy_device").value,
+            "policy_device": self._policy_device,
             "task": task,
             "fps": control_loop_fps,
             "actions_per_chunk": node.get_parameter("actions_per_chunk").value,
@@ -260,7 +324,7 @@ class LeRobotPolicyRunner:
             cmd += [
                 f"--policy-type={node.get_parameter('policy_type').value}",
                 f"--pretrained-name-or-path={pretrained}",
-                f"--policy-device={node.get_parameter('policy_device').value}",
+                f"--policy-device={self._policy_device}",
             ]
         else:
             node.get_logger().warning(
