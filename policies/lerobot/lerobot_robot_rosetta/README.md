@@ -10,12 +10,12 @@ from lerobot_robot_rosetta import Rosetta, RosettaConfig
 robot = Rosetta(RosettaConfig(config_path="contract.yaml"))
 robot.connect()
 
-# Get observations as dict
+# Get observations as dict, keyed by the contract's own selector names
 obs = robot.get_observation()
-# {"shoulder.position": 0.1, "elbow.position": 0.2, "camera": array(...)}
+# {"position.shoulder": 0.1, "position.elbow": 0.2, "cam": array(...)}
 
 # Send actions
-robot.send_action({"shoulder.position": 0.5, "elbow.position": 0.3})
+robot.send_action({"position.shoulder": 0.5, "position.elbow": 0.3})
 
 robot.disconnect()
 ```
@@ -38,24 +38,37 @@ The package follows LeRobot's `lerobot_robot_*` [naming convention](https://hugg
 
 ## Configuration
 
-All configuration comes from the contract YAML. See [rosetta/README.md](../rosetta/README.md#contract-reference) for the full schema.
+All configuration comes from the contract YAML:
 
 ```yaml
 robot_type: my_robot
+robot_interface: ros2
 fps: 30
 
 observations:
-  - key: observation.state
-    topic: /joint_states
-    type: sensor_msgs/msg/JointState
-    selector: {names: [position.shoulder, position.elbow]}
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
+    select: [position.shoulder, position.elbow]
+
+  observation.images.cam:
+    channel: {topic: /camera/image_raw/compressed,
+              type: sensor_msgs/msg/CompressedImage}
+    align: {strategy: hold, timeline: header}
+    apply: [resize: [480, 640]]
 
 actions:
-  - key: action
-    publish: {topic: /cmd, type: sensor_msgs/msg/JointState}
-    selector: {names: [position.shoulder, position.elbow]}
-    safety_behavior: hold  # what to publish if actions stop
+  action:
+    channel:
+      topic: /cmd
+      type: sensor_msgs/msg/JointState
+      safety: hold          # what to publish if actions stop
+    align: {strategy: hold, timeline: header}
+    select: [position.shoulder, position.elbow]
 ```
+
+Full schema — every section, operator, and alignment strategy:
+[contract reference](https://iblnkn.github.io/rosetta/reference/contract.html).
 
 ## LeRobot Interface
 
@@ -63,7 +76,7 @@ Implements the [Robot](https://github.com/huggingface/lerobot/blob/main/src/lero
 
 | Property/Method | Description |
 |-----------------|-------------|
-| `observation_features` | Dict of feature names → types (callable before `connect()`) |
+| `observation_features` | Dict of feature names → types (callable before `connect()`). Vector features are named by their contract `select` path (`position.shoulder`), images by the part of the key after `observation.images.` (`cam`). A key fed by several topics prefixes each source with a distinguishing topic segment |
 | `action_features` | Dict of action names → types (callable before `connect()`) |
 | `is_connected` | True when lifecycle node is active |
 | `connect()` | Configure and activate ROS2 subscriptions/publishers |
@@ -87,6 +100,10 @@ Implements the [Robot](https://github.com/huggingface/lerobot/blob/main/src/lero
 ## Inference Servers
 
 The gRPC inference servers, dataset writer, and policy runner moved to [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) — rosetta's LeRobot backend adapter. This package keeps only the LeRobot-discovered Robot plugin.
+
+## Documentation
+
+Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
 
 ## License
 
