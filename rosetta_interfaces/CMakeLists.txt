@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/RunPolicy.action"
   "srv/StartRecording.srv"
   "srv/StartHILEpisode.srv"
+  "srv/StartPolicy.srv"
   DEPENDENCIES action_msgs
 )
 
