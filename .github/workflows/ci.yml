@@ -40,4 +40,6 @@ jobs:
       - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/main/ruff.toml -o ruff.toml
       - uses: astral-sh/ruff-action@v3
         with:
+          # Pinned to the workspace pixi env's ruff so CI and `pixi run lint` agree.
+          version: "0.15.21"
           args: check .
