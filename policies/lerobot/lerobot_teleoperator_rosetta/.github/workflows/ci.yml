@@ -16,7 +16,7 @@ jobs:
       ROS_DISTRO: jazzy
       ROS_REPO: main
       ROSDEP_SKIP_KEYS: ament_python
-      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main github:iblnkn/rosetta#dev"
+      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta_interfaces#main github:iblnkn/rosetta#main"
       # lerobot is PyPI-only (not a ROS/rosdep package) — colcon build doesn't
       # resolve a package's own install_requires the way rosdep resolves
       # package.xml, so nothing installs it without this hook.
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/dev/ruff.toml -o ruff.toml
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/main/ruff.toml -o ruff.toml
       - uses: astral-sh/ruff-action@v3
         with:
           args: check .
