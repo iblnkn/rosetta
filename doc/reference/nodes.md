@@ -80,7 +80,9 @@ by the resolved `framework` adapter, `lerobot_rosetta` here.
 | `launch_local_server` | `true` | Auto-start the policy server at configure, with model preload (launch arg) |
 | `server_startup_timeout_sec` | `120.0` | Max wait for the server, covering model preload |
 | `obs_similarity_atol` | `-1.0` | Observation filtering tolerance. Ignored by stock LeRobot v0.6.0, where the filter is hardcoded on |
-| `sim_time_multiplier` | `1.0` | Scales contract `fps` before handing it to LeRobot, which paces on wall time |
+
+With `use_sim_time` true the adapter paces observations and actions on the
+sim clock at the contract fps.
 
 Actions and services: `run_policy` (action), `~/start_policy`,
 `~/cancel_policy`. A launch namespace prefixes the action name, as in
