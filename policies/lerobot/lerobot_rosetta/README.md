@@ -1,8 +1,8 @@
 # lerobot_rosetta
 
-Rosetta's [LeRobot](https://github.com/huggingface/lerobot) backend adapter: dataset writer, policy runner, and gRPC inference servers.
+Rosetta's [LeRobot](https://github.com/huggingface/lerobot) framework adapter: dataset writer, policy runner, and gRPC inference servers.
 
-The workspace naming convention is `<backend>_rosetta` = rosetta's adapter to a backend. This package is the rosetta → LeRobot direction: rosetta loads it by name via entry points. The opposite direction — the Robot/Teleoperator plugins that *LeRobot* auto-discovers — lives in [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) and [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta), whose names are forced by LeRobot's `lerobot_robot_*`/`lerobot_teleoperator_*` discovery convention. This package deliberately matches neither prefix, so LeRobot's `register_third_party_plugins()` never imports it. It depends on `lerobot_robot_rosetta` (for `RosettaConfig`, and LeRobot discovers the Robot plugin at policy-run time).
+The naming convention is `<framework>_rosetta`, rosetta's adapter to a policy framework. This package is the rosetta-to-LeRobot direction: rosetta loads it by name via entry points. The opposite direction (the Robot and Teleoperator plugins that *LeRobot* auto-discovers) lives in [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) and [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta), whose names are forced by LeRobot's `lerobot_robot_*`/`lerobot_teleoperator_*` discovery convention. This package deliberately matches neither prefix, so LeRobot's `register_third_party_plugins()` never imports it. It depends on `lerobot_robot_rosetta` (for `RosettaConfig`, and LeRobot discovers the Robot plugin at policy-run time).
 
 ## Entry points
 
@@ -13,12 +13,12 @@ The workspace naming convention is `<backend>_rosetta` = rosetta's adapter to a 
 | `console_scripts` | `rosetta_policy_server` | `lerobot_rosetta.policy_server:main` |
 | `console_scripts` | `rosetta_classifier_server` | `lerobot_rosetta.classifier_server:main` |
 
-## Inference Servers
+## Inference servers
 
 Two gRPC servers speak LeRobot's AsyncInference protocol (the `RobotClient` connects to either unchanged):
 
-- **`policy_server.py`** (`rosetta_policy_server`) — preload + cache wrapper over LeRobot's stock `lerobot.async_inference.policy_server`. The stock server reloads the checkpoint on every client handshake; this one loads it once and reuses it while the requested `(policy_type, pretrained_name_or_path, device)` is unchanged.
-- **`classifier_server.py`** (`rosetta_classifier_server`) — reward-classifier variant with the same preload/cache behavior.
+- **`policy_server.py`** (`rosetta_policy_server`): preload and cache wrapper over LeRobot's stock `lerobot.async_inference.policy_server`. The stock server reloads the checkpoint on every client handshake; this one loads it once and reuses it while the requested `(policy_type, pretrained_name_or_path, device)` is unchanged.
+- **`classifier_server.py`** (`rosetta_classifier_server`): reward-classifier variant with the same preload and cache behavior.
 
 Both accept optional preload flags that load the model **before** the port is bound, so a socket-level readiness check implies the model is ready:
 
@@ -37,7 +37,7 @@ colcon build --packages-select lerobot_rosetta
 
 ## Documentation
 
-How the LeRobot backend fits together, and the dataset layout it writes:
+How the LeRobot adapter fits together, and the dataset layout it writes:
 [LeRobot integration](https://iblnkn.github.io/rosetta/explanation/design.html)
 and [LeRobot data model](https://iblnkn.github.io/rosetta/reference/contract.html).
 
