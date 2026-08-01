@@ -1,4 +1,4 @@
-# Train and Deploy Your First Policy
+# Train and deploy your first policy
 
 ```
   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
@@ -8,7 +8,7 @@
 ```
 
 We run the full pipeline once on a two-joint arm with one camera. Substitute your
-own topics and joint names as you type. You need a ROS2 robot you can
+own topics and joint names as you type. You need a ROS 2 robot you can
 teleoperate, a camera stream, and a GPU for training.
 
 ## 1. Define a contract

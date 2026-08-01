@@ -1,37 +1,36 @@
-# so_101 — recording and inference without HIL.
+# so_101: recording and inference without HIL.
 # See stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101
 robot_interface: ros2
 fps: 30
 
-x-qos:
-  camera: &camera_qos {reliability: best_effort, history: keep_last, depth: 10}
-  state:  &state_qos  {reliability: best_effort, history: keep_last, depth: 50}
-  cmd:    &cmd_qos    {reliability: best_effort, history: keep_last, depth: 10}
-
 observations:
   observation.images.right:
     channel: {topic: /front_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
 
   observation.images.top:
     channel: {topic: /top_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
 
   observation.images.wrist.right:
     channel: {topic: /wrist_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
 
   observation.state:
     channel: {topic: /follower_arm/joint_states,
-              type: sensor_msgs/msg/JointState, qos: *state_qos}
+              type: sensor_msgs/msg/JointState,
+              qos: {reliability: best_effort, history: keep_last, depth: 50}}
     align: {strategy: hold, timeline: header}
     select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
              position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
@@ -42,7 +41,8 @@ actions:
     # Recording decodes from this channel; serving encodes to it
     # (the follower arm subscribes here).
     channel: {topic: /leader_arm/joint_states,
-              type: sensor_msgs/msg/JointState, qos: *cmd_qos}
+              type: sensor_msgs/msg/JointState,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
              position.wrist_pitch, position.wrist_roll, position.wrist_yaw]

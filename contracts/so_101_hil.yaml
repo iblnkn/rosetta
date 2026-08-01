@@ -61,9 +61,8 @@ teleop:
 
   events:
     # This contract wires up 4 of hil_manager_node's teleop events (see its
-    # _on_teleop_events docstring for the full set, including the optional
-    # hold-only success/failure labels this contract doesn't use) -- each on
-    # its OWN button so they fire independently. Nothing here ever deletes a
+    # _on_teleop_events docstring for the full set), each on its OWN button
+    # so they fire independently. Nothing here ever deletes a
     # recording; a bad take is filtered later from the recorded reward
     # stream, not discarded at record time.
     #   is_intervention - hold to take over from the policy
@@ -73,7 +72,7 @@ teleop:
     #   end_failure     - end the episode now, reward = human_reward_negative
     #                      (a distinct negative sentinel, not 0.0, so it's
     #                      filterable from an unlabeled/neutral end)
-    # NOTE: buttons.3 is a placeholder -- verify against your controller's
+    # NOTE: buttons.3 is a placeholder; verify against your controller's
     # actual layout (`ros2 topic echo /joy` while pressing buttons) before use.
     channel: {topic: /joy, type: sensor_msgs/msg/Joy, qos: *event_qos}
     select: {is_intervention: buttons.1, start_episode: buttons.3, end_success: buttons.2, end_failure: buttons.0}

@@ -1,31 +1,20 @@
 <p align="center">
   <img alt="Rosetta" src="media/rosetta_logo.png" width="100%">
 </p>
-<!-- <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/ROS2-Jazzy-blue" alt="ROS2">
-  <img src="https://img.shields.io/badge/python-3.10+-blue" alt="Python 3.10+">
-</p> -->
 
-**Rosetta** connects your ROS 2 robot to robot-learning frameworks like [LeRobot](https://github.com/huggingface/lerobot).
+**Rosetta** interfaces ROS 2 robots to robot-learning frameworks like
+[LeRobot](https://github.com/huggingface/lerobot).
 
-**📖 Documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)**
+**Documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)**
 
-## Quick Start
+Between a pub/sub robot and a policy sits a translation: topics
+must become training frames, and model output must become messages again.
+It has to happen identically at training and at deployment. Rosetta is built around the philosophy that this translation should be defined once and enforced as late as possible.
 
-```
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │  DEFINE  │     │  RECORD  │     │ CONVERT  │     │  TRAIN   │     │  DEPLOY  │
-  │ Contract │────▶│  Demos   │────▶│ Dataset  │────▶│  Policy  │────▶│ on Robot │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
-```
 
-> **Getting started?** See [Installation](https://iblnkn.github.io/rosetta/installation.html). The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) pixi workspace installs ROS2, Rosetta, and LeRobot together in one command; installing into an existing ROS 2 Jazzy workspace is also supported.
-
-**1. Define** a contract for your robot:
+A YAML contract defines the translation. A contract looks like this:
 
 ```yaml
-# my_contract.yaml
 robot_type: my_robot
 robot_interface: ros2
 fps: 30
@@ -49,55 +38,29 @@ actions:
     select: [position.j1, position.j2]
 ```
 
-**2. Record** demonstrations to rosbag:
 
-```bash
-# Terminal 1: Start the recorder
-ros2 launch rosetta episode_recorder_launch.py contract_path:=my_contract.yaml
-```
+## Getting started
 
-```bash
-# Terminal 2: Start an episode. Ctrl-C stops and saves it.
-ros2 action send_goal /record_episode \
-    rosetta_interfaces/action/RecordEpisode "{prompt: 'pick up the red block'}"
-```
+The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) workspace installs
+ROS 2 Jazzy, Rosetta, and LeRobot in one command; the
+[installation guide](https://iblnkn.github.io/rosetta/installation.html)
+covers existing ROS 2 workspaces. The tutorial
+[train and deploy your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html)
+walks through recording demonstrations with the episode recorder,
+converting bags to a dataset with `rosetta_port`, training with LeRobot,
+and deploying with the policy runner.
 
-**3. Convert** bags to a LeRobot dataset:
 
-```bash
-rosetta_port \
-    --raw-dir ./datasets/bags \
-    --contract my_contract.yaml \
-    --repo-id my-org/my-dataset \
-    --root ./datasets/lerobot
-```
+## Packages
 
-**4. Train** with LeRobot:
-
-```bash
-lerobot-train \
-    --dataset.repo_id=my-org/my-dataset \
-    --policy.type=act \
-    --output_dir=outputs/train/my_policy
-```
-
-**5. Deploy** the trained policy:
-
-```bash
-# Terminal 1: Start the policy runner
-ros2 launch rosetta policy_runner_launch.py \
-    contract_path:=my_contract.yaml \
-    pretrained_name_or_path:=my-org/my-policy
-```
-
-```bash
-# Terminal 2: Run the policy
-ros2 action send_goal /run_policy \
-    rosetta_interfaces/action/RunPolicy "{prompt: 'pick up red block'}"
-```
-
-Full walkthrough: [Train and deploy your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html).
+| Package | Purpose |
+|---------|---------|
+| `rosetta` (this repo) | Core library, ROS 2 nodes, bag conversion |
+| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS 2 action and service definitions |
+| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot framework adapter: dataset writer, policy runner, inference servers |
+| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
+| [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
 
 ## License
 
-Apache-2.0
+[Apache-2.0](LICENSE)

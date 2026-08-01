@@ -1,42 +1,41 @@
-# turtlebot3_waffle — differential-drive base.
+# turtlebot3_waffle: differential-drive base.
 # See stone.yaml for the annotated tour of the contract format.
 
 robot_type: turtlebot3_waffle
 robot_interface: ros2
 fps: 30
 
-x-qos:
-  camera: &camera_qos {reliability: best_effort, history: keep_last, depth: 10}
-  state:  &state_qos  {reliability: best_effort, history: keep_last, depth: 50}
-
 observations:
   observation.images.front:
     channel: {topic: /camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [224, 224]]
 
   observation.images.overhead:
     channel: {topic: /overhead_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [224, 224]]
 
   # Concatenated from wheels + imu + odom (16 dims total), in order.
   observation.state:
     - channel: {topic: /joint_states,
-                type: sensor_msgs/msg/JointState, qos: *state_qos}
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [position.wheel_left_joint, position.wheel_right_joint,
                velocity.wheel_left_joint, velocity.wheel_right_joint]
-    - channel: {topic: /imu, type: sensor_msgs/msg/Imu,
-                dtype: float64, qos: *state_qos}
+    - channel: {topic: /imu, type: sensor_msgs/msg/Imu, dtype: float64,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [orientation.x, orientation.y, orientation.z, orientation.w,
                angular_velocity.x, angular_velocity.y, angular_velocity.z,
                linear_acceleration.x, linear_acceleration.y, linear_acceleration.z]
-    - channel: {topic: /odom, type: nav_msgs/msg/Odometry,
-                dtype: float64, qos: *state_qos}
+    - channel: {topic: /odom, type: nav_msgs/msg/Odometry, dtype: float64,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [twist.twist.linear.x, twist.twist.angular.z]
 

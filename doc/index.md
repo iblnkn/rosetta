@@ -1,14 +1,14 @@
 # Rosetta
 
-**Rosetta** brings [LeRobot](https://github.com/huggingface/lerobot) to ROS2 robots.
+**Rosetta** interfaces ROS 2 robots to robot-learning frameworks like
+[LeRobot](https://github.com/huggingface/lerobot).
 
-Define a contract that maps your ROS2 topics to LeRobot features, record demos to
-bag files, convert them to a LeRobot dataset, train a policy, and deploy it back
-to your robot.
+Record demonstrations to rosbag, declare in a YAML
+contract how topics become training frames and how model output becomes
+messages again. Rosetta executes that contract identically for training preperation and live inference.
 
 > **Getting started?** The [rosetta_ws](https://github.com/iblnkn/rosetta_ws)
-> workspace handles the non-trivial setup of getting ROS2, Rosetta, and LeRobot
-> installed together.
+> workspace has ROS 2 Jazzy, Rosetta, and LeRobot installed.
 
 ```{toctree}
 :caption: Getting started

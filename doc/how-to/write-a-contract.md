@@ -1,9 +1,9 @@
-# Write a Contract
+# Write a contract
 
 The contract defines the translation between ROS 2 topics and the keys LeRobot
 expects. Full field documentation: [contract reference](../reference/contract.md).
 
-| ROS2 Side | | LeRobot Side |
+| ROS 2 side | | LeRobot side |
 |-----------|---|-------------|
 | `/front_camera/image_raw/compressed` | &rarr; | `observation.images.front` |
 | `/follower_arm/joint_states` (position fields) | &rarr; | `observation.state` |
@@ -11,7 +11,7 @@ expects. Full field documentation: [contract reference](../reference/contract.md
 | `/task_prompt` (String) | &rarr; | `task` |
 | `/reward_signal` (Float64) | &rarr; | `next.reward` |
 
-On the ROS2 side, data lives in typed messages on named topics with rich
+On the ROS 2 side, data lives in typed messages on named topics with rich
 structure. On the LeRobot side, data lives in flat dictionaries with
 dot-separated string keys and numpy values. The contract maps one to the other,
 handling type conversion, field extraction, timestamp alignment, and resampling.

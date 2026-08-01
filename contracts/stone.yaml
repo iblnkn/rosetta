@@ -1,53 +1,15 @@
-# stone.yaml — the Rosetta stone: a full contract demonstrating every schema
-# feature. The robot is fictional (a mobile manipulator); every entry exists
-# to show one capability, flagged with a `demonstrates:` comment.
-#
-# How to read a contract
-# ----------------------
-#   channel (provides) → align (chooses a timeline; mandatory on every
-#   frame-clock entry) → select (projects fields) → apply (operator pipeline)
-#   → the mapping key (the entry's name in the frame dict)
-#
-# A robot, to Rosetta, is a set of channels; a contract binds channels to
-# frame keys. Actions are the same shape read right-to-left: recording
-# decodes from the channel, serving encodes to it.
-#
-# The channel block is exactly what a different pub/sub ecosystem would
-# replace — its fields speak the declared interface's dialect (ros2:
-# topic/type/qos). Channels *provide* (every timeline the message carries);
-# align *chooses*. Entries without align (adjunct, tasks, teleop events) are
-# not on the frame clock — that absence is meaningful.
-#
-# No policy framework appears in this file: one contract drives every
-# framework. The mapping keys are the entire policy-side surface.
-#
-# NOT DEPLOYABLE THROUGH LEROBOT. This contract declares three numeric
-# observation keys and two action keys to demonstrate the schema. LeRobot's
-# live path collapses all numeric observations into one `observation.state`
-# and all actions into one `action`, so lerobot_robot_rosetta rejects a
-# contract like this one at connect (ensure_live_observation_layout). It ports
-# and trains; it does not serve. Deployable examples: so_101.yaml,
-# so_101_hil.yaml, turtlebot3.yaml.
-
 robot_type: stone
 robot_interface: ros2
 fps: 30
 
-# Optional standard-YAML anchors. Top-level `x-*` blocks are ignored by the
-# loader; aliases and inline values are interchangeable everywhere.
-x-qos:
-  camera: &camera_qos {reliability: best_effort, history: keep_last, depth: 10}
-  state:  &state_qos  {reliability: best_effort, history: keep_last, depth: 50}
-  event:  &event_qos  {reliability: best_effort, history: keep_last, depth: 1}
-  cmd:    &cmd_qos    {reliability: reliable,    history: keep_last, depth: 10}
-
 observations:
   # demonstrates: image stream, resize operator, hold alignment on sensed time.
-  # resize declares the stream's output geometry (integers, [h, w]) — every
+  # resize declares the stream's output geometry (integers, [h, w]); every
   # image observation needs an operator in its pipeline that declares one.
   observation.images.front:
     channel: {topic: /front_camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage, qos: *camera_qos}
+              type: sensor_msgs/msg/CompressedImage,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [512, 512]]
 
@@ -55,7 +17,8 @@ observations:
   # itself at decode time, not declared in the contract)
   observation.images.wrist:
     channel: {topic: /wrist_camera/image_raw,
-              type: sensor_msgs/msg/Image, qos: *camera_qos}
+              type: sensor_msgs/msg/Image,
+              qos: {reliability: best_effort, history: keep_last, depth: 10}}
     align: {strategy: hold, timeline: header}
     apply: [resize: [224, 224]]
 
@@ -63,33 +26,35 @@ observations:
   # one key), nested field selects, rad2deg operator, per-entry dtype
   observation.state:
     - channel: {topic: /arm/joint_states,
-                type: sensor_msgs/msg/JointState, qos: *state_qos}
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
                position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
       apply: [rad2deg]
     - channel: {topic: /gripper/joint_states,
-                type: sensor_msgs/msg/JointState, qos: *state_qos}
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [position.gripper]
-    - channel: {topic: /odom, type: nav_msgs/msg/Odometry,
-                dtype: float64, qos: *state_qos}
+    - channel: {topic: /odom, type: nav_msgs/msg/Odometry, dtype: float64,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [twist.twist.linear.x, twist.twist.angular.z]
 
   # demonstrates: asof alignment (nearest sample within tolerance, else gap),
   # quaternion field kind (VLA normalization hint; LeRobot ignores it)
   observation.imu:
-    channel: {topic: /imu, type: sensor_msgs/msg/Imu,
-              dtype: float64, qos: *state_qos}
+    channel: {topic: /imu, type: sensor_msgs/msg/Imu, dtype: float64,
+              qos: {reliability: best_effort, history: keep_last, depth: 50}}
     align: {strategy: asof, timeline: header, tolerance_ms: 10}
     select: [orientation.x, orientation.y, orientation.z, orientation.w]
     kind: quaternion
 
   # demonstrates: drop alignment (stale samples become gaps rather than
-  # holding), receive timeline (std_msgs types carry no header — naming a
+  # holding), receive timeline (std_msgs types carry no header; naming a
   # timeline the channel can't provide is a load-time error), custom decoder
-  # ("module:function", normally in your own package; validated at load —
+  # ("module:function", normally in your own package; validated at load, and
   # these bundled examples double as the custom-codec signature reference).
   # select declares the stream's width and feature labels; a custom decoder
   # must return exactly that many values (a select-less numeric stream is a
@@ -97,25 +62,27 @@ observations:
   observation.battery:
     channel: {topic: /battery/raw, type: std_msgs/msg/Float64MultiArray,
               decoder: "rosetta.examples.stone_codecs:decode_battery",
-              dtype: float32, qos: *state_qos}
+              dtype: float32,
+              qos: {reliability: best_effort, history: keep_last, depth: 50}}
     align: {strategy: drop, timeline: receive}
     select: [cell0, cell1, cell2, cell3]
 
 actions:
   # demonstrates: shared-key action splitting (the inverse of concatenation:
   # one action vector sliced across channels in order), safety behaviors,
-  # inverse operator pipeline (rad2deg runs deg→rad on the way out), binary kind,
+  # inverse operator pipeline (rad2deg runs deg->rad on the way out), binary kind,
   # custom encoder
   action:
     - channel: {topic: /arm/joint_commands,
-                type: sensor_msgs/msg/JointState, qos: *cmd_qos,
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: reliable, history: keep_last, depth: 10},
                 safety: hold}     # on stop/watchdog: republish last command
       align: {strategy: hold, timeline: header}
       select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
                position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
       apply: [rad2deg]
-    - channel: {topic: /gripper/command,
-                type: std_msgs/msg/Float64, qos: *cmd_qos,
+    - channel: {topic: /gripper/command, type: std_msgs/msg/Float64,
+                qos: {reliability: reliable, history: keep_last, depth: 10},
                 encoder: "rosetta.examples.stone_codecs:encode_gripper",
                 safety: hold}
       align: {strategy: hold, timeline: receive}
@@ -126,50 +93,53 @@ actions:
   # both decode and encode), zeros safety for velocity control
   action.base:
     channel: {topic: /cmd_vel, type: geometry_msgs/msg/TwistStamped,
-              qos: *cmd_qos, safety: zeros}   # on stop: publish zero velocity
+              qos: {reliability: reliable, history: keep_last, depth: 10},
+              safety: zeros}   # on stop: publish zero velocity
     align: {strategy: hold, timeline: header}
     select: [twist.linear.x, twist.angular.z]
     apply: [clamp: {min: -0.5, max: 0.5}]
 
 tasks:
   # demonstrates: per-frame task labels from a channel. The porter stamps
-  # every frame with the latest string received here (hold semantics — the
+  # every frame with the latest string received here (hold semantics: the
   # task may change mid-episode); frames before the first message, or bags
   # with none, fall back to the operator prompt from the record goal.
-  # LeRobot consumes this natively: task_index is a per-frame column,
-  # resolved and tokenized per sample at training time. One task string per
-  # frame; richer multi-label annotation goes through LeRobot's
-  # language_persistent/language_events columns instead. Live inference task
-  # still comes from the RunPolicy goal.
+  # LeRobot consumes this natively as its per-frame task_index column.
+  # One task string per frame; richer multi-label annotation goes through
+  # LeRobot's language_persistent/language_events columns instead. Live
+  # inference task still comes from the RunPolicy goal.
   task:
-    channel: {topic: /task_prompt, type: std_msgs/msg/String, qos: *event_qos}
+    channel: {topic: /task_prompt, type: std_msgs/msg/String,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
 
 teleop:
   # Role sections: input/events/feedback are fixed roles the teleoperator
-  # adapter consumes — no frame-key level, unlike the keyed sections above.
-  # demonstrates: teleop input -- a list of independently-targeted sources.
+  # adapter consumes: no frame-key level, unlike the keyed sections above.
+  # demonstrates: teleop input, a list of independently-targeted sources.
   # Each entry names the action channel topic it drives via `target`
   # (validated at load time against every declared action topic); hil_manager_node
   # decodes this source and encodes+publishes it onto `target` live, so the
   # action's own topic already carries the human's command during teleop.
-  # This one drives only the arm (the gripper source of the `action` key is
-  # not teleop-driven here -- it's left to be closed/opened via events).
+  # This one drives only the arm; the gripper source of the `action` key is
+  # not teleop-driven here.
   input:
     - target: /arm/joint_commands
       channel: {topic: /human/leader_arm/joint_states,
-                type: sensor_msgs/msg/JointState, qos: *state_qos}
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: best_effort, history: keep_last, depth: 50}}
       align: {strategy: hold, timeline: header}
       select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
                position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
 
-  # demonstrates: edge-triggered event mapping (map-form select: event ← field;
-  # no align — events are not resampled)
+  # demonstrates: edge-triggered event mapping (map-form select: event <- field;
+  # no align, events are not resampled)
   events:
-    channel: {topic: /joy, type: sensor_msgs/msg/Joy, qos: *event_qos}
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     select: {is_intervention: buttons.10, success: buttons.0, failure: buttons.1,
              end_success: buttons.2, end_failure: buttons.3}
 
-  # demonstrates: teleop feedback -- a list of independently-sourced entries.
+  # demonstrates: teleop feedback, a list of independently-sourced entries.
   # Each names the observation channel topic it forwards via `origin`
   # (validated against every declared observation topic): here, the arm's own
   # joint_states (which also carries effort) is re-encoded and published back
@@ -177,13 +147,14 @@ teleop:
   feedback:
     - origin: /arm/joint_states
       channel: {topic: /human/leader_arm/effort_feedback,
-                type: sensor_msgs/msg/JointState, qos: *cmd_qos}
+                type: sensor_msgs/msg/JointState,
+                qos: {reliability: reliable, history: keep_last, depth: 10}}
       align: {strategy: hold, timeline: receive}
       select: [effort.shoulder_pan, effort.shoulder_lift, effort.elbow]
 
 # Extended sections (rewards / signals / info / complementary_data) are
-# ordinary frame entries — same channel → align → key pipeline, landing in
-# the same frame dict — with three extra rules:
+# ordinary frame entries (same channel -> align -> key pipeline, into the
+# same frame dict) with three extra rules:
 #   1. `dtype` is mandatory (any numpy dtype string, or `string`);
 #   2. they are never images;
 #   3. they are record-only: written to bags and datasets, never fed to a
@@ -196,49 +167,52 @@ teleop:
 rewards:
   # demonstrates: model composition over the bus. /reward is published by a
   # separate classifier model running under its own contract (its "action" is
-  # this channel). This contract consumes it like any sensor — contracts
+  # this channel). This contract consumes it like any sensor: contracts
   # never reference each other; the topic is the seam. If the classifier
   # stamps outputs with its source image's header time, `timeline: header`
   # here aligns the label with when the scene existed rather than when
   # inference finished; with plain std_msgs it's receive.
   next.reward:
-    channel: {topic: /reward, type: std_msgs/msg/Float64,
-              dtype: float64, qos: *event_qos}
+    channel: {topic: /reward, type: std_msgs/msg/Float64, dtype: float64,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     align: {strategy: hold, timeline: receive}
 
 signals:
-  # demonstrates: episode termination signals — LeRobot EnvTransition's
+  # demonstrates: episode termination signals, LeRobot EnvTransition's
   # terminated/truncated slots. Record-only, like all extended sections.
   next.done:
-    channel: {topic: /episode_done, type: std_msgs/msg/Bool,
-              dtype: bool, qos: *event_qos}
+    channel: {topic: /episode_done, type: std_msgs/msg/Bool, dtype: bool,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     align: {strategy: hold, timeline: receive}
   next.truncated:
-    channel: {topic: /episode_truncated, type: std_msgs/msg/Bool,
-              dtype: bool, qos: *event_qos}
+    channel: {topic: /episode_truncated, type: std_msgs/msg/Bool, dtype: bool,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     align: {strategy: hold, timeline: receive}
 
 info:
   # demonstrates: per-frame metadata recorded into the dataset's info fields
   battery_pct:
     channel: {topic: /battery/percentage, type: std_msgs/msg/Float32,
-              dtype: float32, qos: *event_qos}
+              dtype: float32,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     align: {strategy: hold, timeline: receive}
 
 complementary_data:
   # demonstrates: string-typed complementary data
   operator_note:
     channel: {topic: /operator/note, type: std_msgs/msg/String,
-              dtype: string, qos: *event_qos}
+              dtype: string,
+              qos: {reliability: best_effort, history: keep_last, depth: 1}}
     align: {strategy: hold, timeline: receive}
 
 adjunct:
   # demonstrates: channels that MUST be recorded even though they have no
   # frame-key home. The recorder captures every topic by default; adjunct
   # entries are additionally *required* present at record time. No key, no
-  # align — raw passthrough into the bag, never decoded at inference.
+  # align: raw passthrough into the bag, never decoded at inference.
   # (Latched topics like /tf_static are handled automatically.)
   - channel: {topic: /tf, type: tf2_msgs/msg/TFMessage}
   - channel: {topic: /tf_static, type: tf2_msgs/msg/TFMessage,
               qos: {reliability: reliable, durability: transient_local, depth: 1}}
-  - channel: {topic: /scan, type: sensor_msgs/msg/LaserScan, qos: *state_qos}
+  - channel: {topic: /scan, type: sensor_msgs/msg/LaserScan,
+              qos: {reliability: best_effort, history: keep_last, depth: 50}}

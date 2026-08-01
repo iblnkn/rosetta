@@ -1,4 +1,4 @@
-# Record, Port, Train, Deploy
+# Record, convert, train, deploy
 
 The pipeline after the contract exists. Node parameters:
 [nodes](../reference/nodes.md).
@@ -18,7 +18,7 @@ Run it in a second terminal while the recorder is running. Keys: `r` start,
 ros2 run rosetta episode_keyboard_node
 ```
 
-### ROS2 action
+### ROS 2 action
 
 For scripted workflows, trigger recording directly:
 
@@ -109,7 +109,7 @@ checkpoint chain. A non-empty `contract_path` is used as given and never
 compared against the checkpoint's own.
 
 **Remote inference.** Set `launch_local_server:=false` and point `server_address`
-at a machine running the policy server, which has no ROS2 dependency and can run
+at a machine running the policy server, which has no ROS 2 dependency and can run
 on any machine with a GPU. This lets a resource-constrained robot offload
 inference over the network.
 

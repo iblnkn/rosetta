@@ -1,6 +1,6 @@
-# Contract Reference
+# Contract reference
 
-A contract is a YAML file that maps ROS2 topics to LeRobot's observation/action
+A contract is a YAML file that maps ROS 2 topics to LeRobot's observation/action
 interface. It covers the full LeRobot `EnvTransition` interface:
 
 | Contract Section | EnvTransition Slot |
@@ -178,7 +178,7 @@ Feedback channels never declare `safety`.
 ## Tasks, rewards, and signals
 
 These sections are optional. Use them when your workflow requires task prompts
-from ROS2 topics, RL reward signals, or episode termination signals.
+from ROS 2 topics, RL reward signals, or episode termination signals.
 
 ```yaml
 tasks:
@@ -201,7 +201,7 @@ ordinary frame entries with three extra rules: `dtype` is mandatory, they are
 never images, and they are record-only, never fed to a policy at inference.
 
 Task labels are per-frame. For VLA policies the `task` string can also come from
-the `prompt` argument when recording or running a policy, so no ROS2 topic is
+the `prompt` argument when recording or running a policy, so no ROS 2 topic is
 needed for it.
 
 ## Adjunct topics
@@ -218,7 +218,7 @@ adjunct:
 
 ## Select syntax
 
-Dot notation extracts nested fields from ROS2 messages:
+Dot notation extracts nested fields from ROS 2 messages:
 
 ```yaml
 select: [position.shoulder, velocity.shoulder]       # JointState: {field}.{joint_name}

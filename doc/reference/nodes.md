@@ -27,7 +27,7 @@ Actions and services: `record_episode` (action), `~/start_recording`,
 
 ### Topic recording
 
-By default the recorder records **every topic** on the ROS2 graph, not just
+By default the recorder records **every topic** on the ROS 2 graph, not just
 those declared in the contract, so you never lose data you might need later.
 This behaves like `ros2 bag record -a`. Contract topics are required to be
 present. Only `/rosout` and `/parameter_events` are excluded automatically;
@@ -55,7 +55,7 @@ Keyboard control for the recorder. Launch: `episode_keyboard_launch.py`, with
 
 ## policy_runner_node
 
-Wraps a policy framework's inference pipeline in ROS2 actions. Launch:
+Wraps a policy framework's inference pipeline in ROS 2 actions. Launch:
 `policy_runner_launch.py`. The first block is declared by the node; the second
 by the resolved `framework` adapter, `lerobot_rosetta` here.
 
@@ -105,7 +105,7 @@ Action: `manage_episode`. Services: `~/start_episode`, `~/end_episode` and
 verdict lands in `outcome`. `~/cancel_episode` abandons the take. Neither
 deletes a bag.
 
-## ROS2 lifecycle
+## ROS 2 lifecycle
 
 All Rosetta nodes are lifecycle nodes.
 
