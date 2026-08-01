@@ -46,6 +46,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
+from lerobot_robot_rosetta.rosetta import GATE_SLICE_SEC
 from rosetta.contract.schema import Contract
 from rosetta.frames.protocols import FrameIO
 from rosetta.policies import RunnerFeedback, RunnerResult
@@ -127,7 +128,6 @@ class LeRobotPolicyRunner:
         _p("launch_local_server", True, "Launch local policy server subprocess", True)
         _p("obs_similarity_atol", 1.0, "L2 tolerance for obs similarity (-1.0 disables)")
         _p("is_classifier", False, "Use reward section as action output", True)
-        _p("sim_time_multiplier", 1.0, "fps multiplier for slow sims (contract_fps * mult)")
         _p(
             "server_startup_timeout_sec",
             SERVER_STARTUP_TIMEOUT_SEC,
@@ -177,6 +177,9 @@ class LeRobotPolicyRunner:
             is_classifier=self._node.get_parameter("is_classifier").value,
         )
         robot_config._external_bridge = frames  # Inject the pre-built frame I/O
+        # Under sim time the adapter's tick gates pace on the node clock; the
+        # goal's stop_event releases a gate blocked by a paused sim clock.
+        robot_config._stop_event = stop_event
 
         config = self._build_client_config(robot_config, task)
         client = RobotClient(config)
@@ -207,7 +210,13 @@ class LeRobotPolicyRunner:
         return RunnerResult(not cancelled, "Cancelled" if cancelled else "Completed")
 
     def request_stop(self) -> None:
-        """Interrupt an in-progress control loop."""
+        """Interrupt an in-progress control loop.
+
+        Invariant: every stop path must set run()'s goal stop_event before (or
+        with) this call. shutdown_event only exits the control loop at its
+        while-check; under a paused sim the loop can be blocked inside a
+        sim-paced robot call that only the stop_event releases.
+        """
         # Local ref: run()'s finally can clear self._client from another thread.
         client = self._client
         if client is not None:
@@ -232,22 +241,36 @@ class LeRobotPolicyRunner:
         client: RobotClient,
         watcher_stop: threading.Event,
     ) -> None:
-        """Set the client's shutdown_event once the cooperative stop is requested."""
-        while not watcher_stop.wait(0.1):
+        """Set the client's shutdown_event once the cooperative stop is requested.
+
+        Polls at 10ms: once stop_event releases the adapter's sim-pacing gates,
+        the control loop free-runs at the (lifted) wall fps until
+        shutdown_event stops it, so this poll bounds that window.
+        """
+        while not watcher_stop.wait(0.01):
             if stop_event.is_set():
                 client.shutdown_event.set()
                 return
 
     def _build_client_config(self, robot_config: RosettaConfig, task: str) -> RobotClientConfig:
-        """Build RobotClientConfig from ROS2 parameters, with sim-time fps scaling."""
+        """Build RobotClientConfig from ROS2 parameters.
+
+        Under sim time the robot adapter's tick gates pace the control loop on
+        the node clock, so the client fps is only a wall-clock ceiling that
+        must never bind before the gate itself runs out of resolution. The
+        gate resolves at most one tick per GATE_SLICE_SEC, so that resolution
+        rate IS the ceiling: faster gains nothing, slower throttles fast sims.
+        On wall clock the contract fps paces the loop exactly as before.
+        """
         node = self._node
         contract_fps = robot_config.fps
-        sim_multiplier = node.get_parameter("sim_time_multiplier").value
-        control_loop_fps = int(contract_fps * sim_multiplier)
-        if sim_multiplier != 1.0:
+        # Auto-declared on every rclpy node by TimeSource.attach_node.
+        use_sim_time = bool(node.get_parameter("use_sim_time").value)
+        control_loop_fps = max(contract_fps, int(1 / GATE_SLICE_SEC)) if use_sim_time else contract_fps
+        if use_sim_time:
             node.get_logger().info(
-                f"Applied sim_time_multiplier={sim_multiplier:.2f}: "
-                f"contract fps={contract_fps}Hz -> control loop fps={control_loop_fps}Hz"
+                f"Sim time active: pacing on the sim clock at contract fps={contract_fps}Hz; "
+                f"client fps ceiling lifted to {control_loop_fps}Hz (FPSTracker logs the ceiling)."
             )
 
         config_kwargs = {
