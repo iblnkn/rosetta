@@ -83,7 +83,7 @@ def launch_setup(context, *args, **kwargs):
         arguments=["--ros-args", "--log-level", log_level],
     )
 
-    return [episode_recorder_node, *autostart_handlers(episode_recorder_node)]
+    return [episode_recorder_node, *autostart_handlers(episode_recorder_node, context)]
 
 
 def generate_launch_description():

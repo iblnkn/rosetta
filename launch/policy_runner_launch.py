@@ -93,7 +93,7 @@ def launch_setup(context, *args, **kwargs):
         arguments=["--ros-args", "--log-level", log_level],
     )
 
-    return [policy_runner_node, *autostart_handlers(policy_runner_node)]
+    return [policy_runner_node, *autostart_handlers(policy_runner_node, context)]
 
 
 def generate_launch_description():

@@ -61,12 +61,29 @@ def yaml_params(path: str, node_name: str) -> dict:
     return (data.get(node_name) or {}).get("ros__parameters") or {}
 
 
-def autostart_handlers(node) -> list:
+def _flag_condition(name: str, context) -> IfCondition:
+    """Condition for a boolean launch flag on a deferred event.
+
+    With a context, the flag is resolved to its final value here, at setup
+    time. Left as a lazy substitution, the condition is evaluated only when
+    the event handler eventually fires, in whatever configuration scope
+    exists then — which read the wrong value when the launch file was
+    included from a launch XML on Jazzy. Without a context (a declaratively
+    built launch file, e.g. hil_launch), the lazy substitution is the only
+    option.
+    """
+    if context is None:
+        return IfCondition(EqualsSubstitution(LaunchConfiguration(name), "true"))
+    return IfCondition("true" if typed_config(context, name, bool) else "false")
+
+
+def autostart_handlers(node, context=None) -> list:
     """The configure-on-start / activate-on-inactive chain for a LifecycleNode.
 
     Gated by the ``configure`` and ``activate`` launch configurations (the
-    caller declares those arguments). The activate event fires only when the
-    node actually reaches INACTIVE: emitting it right after the configure
+    caller declares those arguments), resolved at setup time when ``context``
+    is passed — see ``_flag_condition``. The activate event fires only when
+    the node actually reaches INACTIVE: emitting it right after the configure
     request would race the transition and be dropped by the state machine.
     """
     configure_event = EmitEvent(
@@ -74,14 +91,14 @@ def autostart_handlers(node) -> list:
             lifecycle_node_matcher=matches_action(node),
             transition_id=Transition.TRANSITION_CONFIGURE,
         ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("configure"), "true")),
+        condition=_flag_condition("configure", context),
     )
     activate_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(node),
             transition_id=Transition.TRANSITION_ACTIVATE,
         ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration("activate"), "true")),
+        condition=_flag_condition("activate", context),
     )
     return [
         RegisterEventHandler(OnProcessStart(target_action=node, on_start=[configure_event])),
