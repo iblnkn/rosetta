@@ -68,6 +68,7 @@ class LeRobotDatasetWriter:
         repo_id: str,
         root: Path | None = None,
         vcodec: str = "libsvtav1",
+        streaming_encoding: bool = False,
         push_to_hub: bool = False,
         hub_private: bool = True,
         hub_tags: list[str] | None = None,
@@ -94,6 +95,10 @@ class LeRobotDatasetWriter:
             fps=contract.fps,
             features=build_lerobot_features(specs),
             rgb_encoder=RGBEncoderConfig(vcodec=vcodec),
+            # Feed frames straight to the encoder instead of round-tripping
+            # each one through a PNG on disk; identical output, much faster
+            # on image-heavy episodes.
+            streaming_encoding=streaming_encoding,
         )
         if embed_contract and contract_path is not None:
             # Sidecar, not schema: LeRobot's info.json is a closed dataclass
