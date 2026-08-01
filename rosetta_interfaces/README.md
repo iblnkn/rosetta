@@ -16,22 +16,22 @@ actions, rewards) is plain ROS 2 topics defined by the contract YAML.
 
 The services exist because some clients (Foxglove, for one) can call services but
 not actions. They are thin proxies for the action operations they are named
-after, and they return immediately — per the ROS 2 design guidance that services
+after, and they return immediately, per the ROS 2 design guidance that services
 "should never be used for longer running processes."
 
 Every action result reports **how** it ended, not whether it "succeeded":
 
-- The goal's terminal `GoalStatus` is the mechanics — `SUCCEEDED` when the work
+- The goal's terminal `GoalStatus` is the mechanics: `SUCCEEDED` when the work
   reached a defined end, `CANCELED` when a client took it away, `ABORTED` when
   the server stopped it (an error, or a lifecycle deactivate).
 - `termination_reason` names the exact cause, with the legal values declared as
   constants in each `.action`.
-- `ManageEpisode` additionally carries `outcome` — whether the *robot did the
-  task* — which is independent of how the episode ended.
+- `ManageEpisode` additionally carries `outcome` (whether the *robot did the
+  task*), which is independent of how the episode ended.
 
 Field-by-field definitions with example calls:
 **[Actions and services reference](https://iblnkn.github.io/rosetta/reference/nodes.html)**.
-The `.action` and `.srv` files in this repo are the source of truth — they are
+The `.action` and `.srv` files in this repo are the source of truth: they are
 commented, and short enough to read directly.
 
 ## Build
