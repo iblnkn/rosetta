@@ -239,6 +239,11 @@ def main():
         help='[lerobot] Comma-separated HF Hub tags (default: "rosetta,rosbag")',
     )
     parser.add_argument("--vcodec", type=str, default="libsvtav1", help="[lerobot] Video codec")
+    parser.add_argument(
+        "--streaming-encoding",
+        action="store_true",
+        help="[lerobot] Encode frames directly instead of via intermediate PNGs (faster, identical output)",
+    )
     parser.add_argument("--past-steps", type=int, default=None, help="[writer-specific] past lowdim steps")
     parser.add_argument("--future-steps", type=int, default=None, help="[writer-specific] future lowdim steps")
     parser.add_argument("--image-indices", type=str, default=None, help='[writer-specific] comma list, e.g. "-1,0"')
@@ -251,6 +256,7 @@ def main():
         "push_to_hub": args.push_to_hub,
         "hub_private": args.hub_private,
         "vcodec": args.vcodec,
+        "streaming_encoding": args.streaming_encoding,
     }
     if args.hub_tags is not None:
         writer_opts["hub_tags"] = [t.strip() for t in args.hub_tags.split(",") if t.strip()]
