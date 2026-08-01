@@ -208,6 +208,13 @@ class TopicBridge:
         """True once every observation stream has delivered at least one message."""
         return self._node is not None and all(buffer.last_ts is not None for _, buffer in self._obs_buffers)
 
+    @property
+    def clock(self):
+        """Host node clock (sim-time aware). Valid only after setup()."""
+        if self._node is None:
+            raise RuntimeError("TopicBridge.clock accessed before setup()")
+        return self._node.get_clock()
+
     def send_safety_action(self) -> None:
         """Publish each active stream's declared safety command, then disarm.
 
