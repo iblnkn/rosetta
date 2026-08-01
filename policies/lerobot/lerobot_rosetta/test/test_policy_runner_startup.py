@@ -104,13 +104,15 @@ def _setup_runner(param_overrides=None):
 
 
 def test_setup_spawns_server_with_preload_args(spawned):
-    _setup_runner({"pretrained_name_or_path": "user/repo"})
+    # policy_device=cpu: always available, so device resolution is a no-op and
+    # the assertion holds on GPU-less runners (CI) and CUDA machines alike.
+    _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
     assert len(spawned) == 1
     argv = spawned[0].argv
     assert "-m" in argv and "lerobot_rosetta.policy_server" in argv
     assert "--policy-type=act" in argv
     assert "--pretrained-name-or-path=user/repo" in argv
-    assert "--policy-device=cuda" in argv
+    assert "--policy-device=cpu" in argv
 
 
 def test_classifier_flag_picks_classifier_module(spawned):
