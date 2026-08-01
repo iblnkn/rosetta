@@ -101,11 +101,18 @@ class RosettaConfig(RobotConfig):
     config_path: str = ""
     fps: int | None = None
     is_classifier: bool = False
+    # Standalone mode only: sets use_sim_time on the internal node so its
+    # clock (and the adapter's sim pacing) follows /clock. Injected mode
+    # inherits the external node's use_sim_time instead.
+    use_sim_time: bool = False
 
     _contract: Contract | None = field(default=None, init=False, repr=False)
     _observation_specs: list[ObservationStreamSpec] | None = field(default=None, init=False, repr=False)
     _action_specs: list[ActionStreamSpec] | None = field(default=None, init=False, repr=False)
     _external_bridge: Any | None = field(default=None, init=False, repr=False)
+    # Optional threading.Event that releases a sim-paced wait blocked by a
+    # paused sim clock (set by the policy runner alongside _external_bridge).
+    _stop_event: Any | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         super().__post_init__()

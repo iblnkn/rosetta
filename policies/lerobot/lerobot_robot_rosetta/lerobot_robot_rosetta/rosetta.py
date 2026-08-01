@@ -41,6 +41,7 @@ import numpy as np
 from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
+from rclpy.parameter import Parameter
 
 from rosetta.frames.layout import FrameLayout
 from rosetta.robots.ros2.node_host import NodeHost
@@ -53,6 +54,53 @@ from .config_rosetta import RosettaConfig
 # Internal timing constants
 WARMUP_TIMEOUT_SEC = 5.0
 WARMUP_POLL_SEC = 0.02
+# Wall-time poll slice for sim-paced waits. Bounds stop/Ctrl-C latency; also
+# the release resolution, so sim-time jitter grows with the real-time factor
+# (2ms wall = 2ms x RTF sim -- noticeable above RTF ~15-20 at 30 fps).
+GATE_SLICE_SEC = 0.002
+
+
+class _TickGate:
+    """Pace one calling loop at the contract period on the ROS (sim) clock.
+
+    No-op unless the clock reports ROS time active. Slice-polls wall time so
+    a stop request (or Ctrl-C on the main thread) releases a wait blocked by
+    a paused sim. rclpy Clock.sleep_until is deliberately not used: it leaks
+    a strong on_shutdown callback per call and cannot be woken by our stop
+    event. Not thread-safe: one gate per calling loop.
+    """
+
+    def __init__(self, clock, period_ns: int, stop_event=None):
+        self._clock = clock
+        self._period_ns = int(period_ns)
+        self._stop_event = stop_event
+        self._last_ns: Optional[int] = None
+
+    def reset(self) -> None:
+        self._last_ns = None
+
+    def wait(self) -> None:
+        clock = self._clock
+        if clock is None or not getattr(clock, "ros_time_is_active", False):
+            return
+        now = clock.now().nanoseconds
+        if self._last_ns is None:
+            self._last_ns = now  # first gated call releases immediately
+            return
+        target = self._last_ns + self._period_ns
+        while now < target:
+            if now < self._last_ns:  # sim clock jumped backwards: re-anchor
+                self._last_ns = now
+                return
+            if self._stop_event is not None:
+                if self._stop_event.wait(GATE_SLICE_SEC):
+                    return  # released by stop; anchor unchanged
+            else:
+                time.sleep(GATE_SLICE_SEC)
+            now = clock.now().nanoseconds
+        # Exact cadence when on time; re-anchor (no burst) after a stall of a
+        # period or more (pause, inference stall at a chunk boundary).
+        self._last_ns = target if now - target < self._period_ns else now
 
 
 def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
@@ -132,6 +180,10 @@ class Rosetta(Robot):
         # Injected mode: pre-built bridge from external node
         self._external_bridge: Optional[TopicBridge] = getattr(config, "_external_bridge", None)
         self._bridge: Optional[TopicBridge] = None
+
+        # Sim pacing: created in connect(), no-ops unless ROS time is active
+        self._obs_gate: Optional[_TickGate] = None
+        self._act_gate: Optional[_TickGate] = None
 
     # -------------------- LeRobot <-> frame-dict adapters --------------------
     #
@@ -264,6 +316,7 @@ class Rosetta(Robot):
         if self._external_bridge is not None:
             # Injected mode: bridge already set up and activated by external node
             self._bridge = self._external_bridge
+            self._make_gates(getattr(self._bridge, "clock", None))
             self._wait_for_warmup(self._bridge)
             return
 
@@ -280,7 +333,25 @@ class Rosetta(Robot):
             require_transition_success(self._node.trigger_configure(), "configure")
 
         require_transition_success(self._node.trigger_activate(), "activate")
+        self._make_gates(self._node.get_clock())
         self._wait_for_warmup(self._node.bridge)
+
+    def _make_gates(self, clock) -> None:
+        """Create the per-loop sim-pacing gates (no-ops under wall clock).
+
+        Two independent gates: LeRobot's control loop skips get_observation
+        when the action queue is deep and send_action when it is empty, so a
+        shared gate would halve the rate when one iteration does both.
+        """
+        period_ns = int(1e9 / self.config.fps)
+        stop = getattr(self._config, "_stop_event", None)
+        self._obs_gate = _TickGate(clock, period_ns, stop)
+        self._act_gate = _TickGate(clock, period_ns, stop)
+        if getattr(clock, "ros_time_is_active", False):
+            logging.info(
+                "Pacing observations/actions at %d fps on ROS sim time (a silent /clock will block gated calls).",
+                self.config.fps,
+            )
 
     def _wait_for_warmup(self, bridge: TopicBridge) -> None:
         """Block until every observation stream has delivered a message.
@@ -304,6 +375,7 @@ class Rosetta(Robot):
 
     def _create_node(self) -> None:
         """Create the lifecycle node and start the spin thread (NodeHost)."""
+        overrides = [Parameter("use_sim_time", Parameter.Type.BOOL, True)] if self.config.use_sim_time else None
         self._host.start(
             lambda ctx: BridgeLifecycleNode(
                 f"rosetta_{self.config.id}",
@@ -311,6 +383,7 @@ class Rosetta(Robot):
                 self.config.action_specs,
                 self.config.fps,
                 context=ctx,
+                parameter_overrides=overrides,
             )
         )
 
@@ -348,6 +421,9 @@ class Rosetta(Robot):
             self._bridge.reset_state()
         elif self._node is not None:
             self._node.bridge.reset_state()
+        for gate in (self._obs_gate, self._act_gate):
+            if gate is not None:
+                gate.reset()
 
     # -------------------- Observation / Action --------------------
 
@@ -360,6 +436,8 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        if self._obs_gate is not None:
+            self._obs_gate.wait()
         src = self._bridge if self._bridge is not None else self._node.bridge
         return self._flatten_observation(src.sample_frame())
 
@@ -371,6 +449,8 @@ class Rosetta(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+        if self._act_gate is not None:
+            self._act_gate.wait()
         src = self._bridge if self._bridge is not None else self._node.bridge
         src.publish_frame(self._unflatten_action(action))
         # Echo back the values sent, as the namespaced floats LeRobot recorded.
