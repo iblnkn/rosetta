@@ -407,7 +407,10 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
         names = list(selector.get("names", []))
         full_names = list(selector.get("full_names", names))
 
-        if a.type == "trajectory_msgs/msg/JointTrajectory":
+        if a.type in (
+            "trajectory_msgs/msg/JointTrajectory",
+            "sensor_msgs/msg/JointState",
+        ):
             missing_from_full = [name for name in names if name not in full_names]
             if missing_from_full:
                 raise ContractValidationError(
@@ -417,7 +420,8 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
         elif "full_names" in selector and full_names != names:
             raise ContractValidationError(
                 f"selector.full_names is currently supported only for "
-                f"trajectory_msgs/msg/JointTrajectory (action '{a.key}', type '{a.type}')."
+                f"trajectory_msgs/msg/JointTrajectory and sensor_msgs/msg/JointState "
+                f"(action '{a.key}', type '{a.type}')."
             )
 
         clamp = None

@@ -305,7 +305,9 @@ def _enc_joint_state(
 
     arr = _apply_clamp(np.asarray(action_vec, dtype=np.float64).flatten(), spec.clamp)
 
-    if not spec.names:
+    selector_names = list(spec.full_names or spec.names)
+
+    if not selector_names:
         # Default: all values go to position
         msg.name = [f"joint_{i}" for i in range(len(arr))]
         msg.position = arr.tolist()
@@ -313,15 +315,17 @@ def _enc_joint_state(
         msg.effort = []
         return msg
 
-    if len(spec.names) != len(arr):
-        raise ValueError(f"names length ({len(spec.names)}) != action length ({len(arr)})")
+    if len(selector_names) != len(arr):
+        raise ValueError(
+            f"selector length ({len(selector_names)}) != action length ({len(arr)})"
+        )
 
     # Parse names like "position.shoulder_pan", "velocity.elbow"
     field_to_joints: dict[str, dict[str, int]] = {}  # field -> {joint_name -> arr_index}
     joint_order: list[str] = []
     seen_joints: set[str] = set()
 
-    for i, path in enumerate(spec.names):
+    for i, path in enumerate(selector_names):
         if "." in path:
             field, joint_name = path.split(".", 1)
         else:

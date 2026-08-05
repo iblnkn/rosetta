@@ -65,6 +65,8 @@ def launch_setup(context, *args, **kwargs):
     bag_base_dir = LaunchConfiguration('bag_base_dir').perform(context)
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
     log_level = LaunchConfiguration('log_level').perform(context)
+    configure = LaunchConfiguration('configure').perform(context)
+    activate = LaunchConfiguration('activate').perform(context)
     
     # Build parameters list
     parameters = [params_file]  # Load YAML first
@@ -100,16 +102,15 @@ def launch_setup(context, *args, **kwargs):
             lifecycle_node_matcher=matches_action(episode_recorder_node),
             transition_id=Transition.TRANSITION_CONFIGURE,
         ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration('configure'), 'true')),
+        condition=IfCondition(EqualsSubstitution(configure, 'true')),
     )
-
     # Auto-activate event (triggered after configure completes)
     activate_event = EmitEvent(
         event=ChangeState(
             lifecycle_node_matcher=matches_action(episode_recorder_node),
             transition_id=Transition.TRANSITION_ACTIVATE,
         ),
-        condition=IfCondition(EqualsSubstitution(LaunchConfiguration('activate'), 'true')),
+        condition=IfCondition(EqualsSubstitution(activate, 'true')),
     )
 
     # Chain events: process start -> configure -> activate
