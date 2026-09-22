@@ -1,12 +1,11 @@
 # Rosetta
 
-Rosetta connects a ROS 2 robot to a robot-learning framework such as
+Rosetta connects your ROS 2 robot to robot-learning frameworks such as
 [LeRobot](https://github.com/huggingface/lerobot).
 
-A robot publishes topics at whatever rate each sensor runs. A policy wants
-one frame per tick, with a fixed set of keys. You write the mapping between
-the two in a YAML file, the contract. Rosetta applies that one file when it
-builds a dataset from bags and again when it runs the policy on the robot.
+Your robot publishes data streams. A policy wants frames.
+The contract is as yaml file to define this transformation from streams to frames.
+Rosetta applies the transforms defined in the contract identically for both data preparation and when you go to run your policy live.
 
 ```yaml
 robot_type: so_arm101
@@ -32,8 +31,7 @@ actions:
     apply: [clamp: {min: -3.14159, max: 3.14159}, rad2deg]
 ```
 
-Five steps. When you change the contract you redo steps 2 to 5. The bags
-from step 1 stay.
+In just five simple steps you can go from data collection to running a policy on your robot.
 
 ```bash
 ros2 launch rosetta episode_recorder_launch.py contract_path:=robot.yaml         # 1 record

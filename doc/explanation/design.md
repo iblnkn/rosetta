@@ -1,42 +1,33 @@
 # About the contract
 
-Why there's a YAML file between the robot and the policy, and what it does
-for you.
+What is the contract and what can it do for you?
 
 ## Streams and frames
 
 A ROS 2 robot publishes topics. Each has its own message type, its own rate,
-and its own clock. A policy doesn't consume topics. It consumes frames: at
+and its own clock. A policy doesn't consume topics. It consumes regularly Intervaled frames. At
 every tick, one array per key, always the same keys, always the same shapes.
 
 ![Three topics at different rates above four ticks. At each tick the frame takes one sample of each key.](../_static/streams-and-frames.svg)
 
-Turning topics into frames means deciding, for every key, which sample
-belongs to a tick and on which clock, which fields of the message to keep
-and in what order, and how the numbers change on the way in and back out. In
-the contract those are `align`, `select` and `apply`.
+Turning topics into frames means deciding which data from you stream belongs to which fields, and which tick of a frame.
+The contract those provides `align`, `select` and `apply` to define the time, shape, and values components of the transform from stream to frame.
 
 ## Before or after recording
 
 LeRobot's `Robot` class makes those decisions in code. `get_observation()`
-hands back a frame, so what you record is already a dataset. Compact, and
-one place to look. But anything the class didn't emit is gone. Want a
-different image size, one more joint, a different alignment rule? Record
-again.
+hands back a frames. This is nice because it is compact, and ready to train on.
+But anything the class didn't emit is gone. Want a
+different image size, one more joint, a different alignment rule? You might be stuck re-recording.
 
-Rosetta makes the decisions after recording. You record bags, every message
-at its own rate and stamp, on every topic. The contract runs when you build a
-dataset and again when you run the policy. If you change it, you build and
-train again. The bags don't move.
-
-This costs disk, since bags are bigger than datasets, and it means the
-transform runs at two different times.
+Rosetta makes the decisions after recording. You record your data raw, as bags, with every message
+at its own rate and stamp, on every topic. The contract enforces transforms only in preparation for training, and again when you run the policy. If you change it, you prepare and train again.
 
 ## The same code, twice
 
-Two copies of one transform drift apart. Say data preparation
+Two copies of one transform risk drifting apart. Say data preparation
 resizes with one library and inference uses another. Nothing crashes. The
-policy is a little worse than it should be, and no error points at why.
+policy will likely just perform a little worse than it should.
 
 So both paths run the same three classes. `StreamIngest` reads a message on
 its timeline, selects the fields and applies the operators. `StreamBuffer`
