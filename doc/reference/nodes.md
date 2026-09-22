@@ -1,122 +1,222 @@
 # Nodes
 
-Both Rosetta nodes read parameter files (`params/`) as defaults. A launch file
-exposes the deployment-specific subset as launch arguments (paths, storage
-format, log level, lifecycle autostart); everything else is set in the params
-YAML. Run `ros2 launch rosetta <launch_file> --show-args` to see the options.
+Four executables in the `rosetta` package. The recorder, policy runner and
+human-in-the-loop launch files read a params file from `params/` and expose
+deployment values as launch arguments. For the recorder and policy runner, an
+empty launch argument keeps the params-file value, except `contract_path`,
+which is passed as given. `hil_launch.py` fills its defaults from the params
+files up front, so an empty argument is an empty value.
+
+```bash
+ros2 launch rosetta <launch_file> --show-args
+```
+
+## Lifecycle
+
+`episode_recorder_node`, `policy_runner_node` and `hil_manager_node` are
+lifecycle nodes. `episode_keyboard_node` is a plain node.
+
+| Transition | Effect |
+|---|---|
+| `configure` | Load the contract, create subscriptions and inactive publishers. An error returns the node to `unconfigured`, or finalizes it if teardown fails too. |
+| `activate` | Enable publishers, then accept goals. |
+| `deactivate` | Stop accepting goals, stop in-progress work (waits up to 5 s, 10 s for `hil_manager_node`), publish the safety action, disable publishers. |
+| `cleanup` | Refused while work is in progress. Otherwise release resources. |
+| `shutdown` | Stop, secure, release. |
+
+The three lifecycle launch files take `configure` (default `true`) and
+`activate` (default `true`), which drive the transitions at start.
+
+A node runs one goal at a time. A goal sent while busy or while not active is
+rejected. Work stopped by deactivate ends `ABORTED` with `termination_reason:
+node_deactivated`. A cancelled goal ends `CANCELED`. Each node also exposes a
+`~/start_*` service that starts the same work without a goal, and a
+`~/cancel_*` service that cancels the running goal the way a client would.
+A cancel service with nothing running returns `success: false`.
 
 ## episode_recorder_node
 
-Records contract-specified topics to rosbag2. Launch: `episode_recorder_launch.py`.
+Records bags. Node name `episode_recorder`. Launch
+`episode_recorder_launch.py`.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `contract_path` | `contracts/so_101.yaml` | Path to contract YAML (launch arg) |
-| `bag_base_dir` | `datasets/bags` | Directory for rosbag output, relative to the launch cwd (launch arg) |
-| `storage_id` | `mcap` | Rosbag format: `mcap` (recommended) or `sqlite3` (launch arg) |
-| `default_prompt` | `""` | Task label used when a goal leaves `prompt` empty |
-| `default_max_duration_s` | `0.0` | Max episode duration. `0.0` records until stopped |
-| `feedback_rate_hz` | `2.0` | Recording feedback publish rate |
-| `record_all` | `true` | Record every topic on the graph, not only contract topics |
-| `exclude_topics` | `[]` | Regex list of topics to skip when `record_all` is on |
-| `include_topics` | `[]` | Regex list to always record, overriding `exclude_topics` |
-| `embed_contract` | `true` | Embed the contract text into bag metadata |
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `contract_path` | string | `""` | Required. The launch file defaults to `contracts/so_101.yaml`. |
+| `bag_base_dir` | string | `datasets/bags` | Relative to the current directory. |
+| `storage_id` | string | `mcap` | Passed to rosbag2 unchecked. Any installed storage plugin works. |
+| `record_all` | bool | `true` | Record every topic on the graph. |
+| `exclude_topics` | string[] | none | Regex list, `ros2 bag record --exclude` syntax. |
+| `include_topics` | string[] | none | Regex list. Matches are recorded despite `exclude_topics` and the camera rule. |
+| `default_prompt` | string | `""` | Used when a goal or service leaves `prompt` empty. |
+| `default_max_duration_s` | double | `0.0` | Zero or less records until stopped. |
+| `feedback_rate_hz` | double | `2.0` | 0.1 to 1000. |
+| `embed_contract` | bool | `true` | Write the contract text into `metadata.yaml`. |
+| `use_sim_time` | bool | `false` | Also records `/clock`. |
 
-Actions and services: `record_episode` (action), `~/start_recording`,
-`~/cancel_recording`, `~/delete_last_bag`.
+Launch arguments: `params_file`, `contract_path`, `bag_base_dir`,
+`storage_id`, `use_sim_time`, `log_level`, `configure`, `activate`.
 
-### Topic recording
+| Interface | Type |
+|---|---|
+| `record_episode` | action `rosetta_interfaces/action/RecordEpisode` |
+| `~/start_recording` | service `rosetta_interfaces/srv/StartRecording` |
+| `~/cancel_recording` | service `std_srvs/srv/Trigger` |
+| `~/delete_last_bag` | service `std_srvs/srv/Trigger`. Refused while recording. Also deletes a failed partial bag. |
 
-By default the recorder records **every topic** on the ROS 2 graph, not just
-those declared in the contract, so you never lose data you might need later.
-This behaves like `ros2 bag record -a`. Contract topics are required to be
-present. Only `/rosout` and `/parameter_events` are excluded automatically;
-`exclude_topics` excludes more, and `record_all: false` records only
-contract-declared topics.
+With the default namespace these are `/record_episode` and
+`/episode_recorder/...`.
 
-Cameras are the exception: per camera the recorder keeps one `image_transport`
-stream, preferring `/compressed` > `/zstd` > `/theora` > `/compressedDepth` >
-raw. `image_transport` republishers encode only while subscribed, so recording
-all of them makes the camera node encode every frame several ways at once.
+Topic rules:
+
+- Contract topics are every source in every section, plus `tasks` and
+  `adjunct` channels, plus `/clock` under `use_sim_time`. The recorder
+  subscribes to them at configure. A type that does not import fails
+  configure, or the first episode for a transient-local topic. A contract
+  topic with no messages at episode end is logged with `(!)`. Nothing stops
+  an episode from starting without it.
+- With `record_all`, every other topic on the graph is discovered at each
+  episode start. A topic is skipped if it matches `exclude_topics`, unless it
+  matches `include_topics`. `/rosout` and `/parameter_events` are always
+  skipped. QoS is adapted to what every publisher offers.
+- One stream per raw `sensor_msgs/msg/Image` topic and its transports, in
+  preference `/compressed`, `/zstd`, `/theora`, `/compressedDepth`, raw. A
+  transport named in the contract or in `include_topics` wins.
+- Transient-local topics such as `/tf_static` are re-subscribed per episode so
+  their latched messages land in every bag.
+- The bag stamp is the node clock at receipt. Under `use_sim_time` that is sim
+  time.
+- A write failure ends the episode `ABORTED` with `termination_reason: error`.
+
+Output: `<bag_base_dir>/<seconds>_<nanoseconds>/`, zero-padded to ten and
+nine digits. After close, `metadata.yaml` holds `custom_data` keys
+`rosetta.contract_yaml` with `embed_contract`, `lerobot.operator_prompt` when
+the prompt is non-empty, and `rosetta.goal_id` for goals.
+
+Result `termination_reason`: `stopped`, `timeout`, `cancelled`,
+`node_deactivated`, `error`. `bag_path` is set on every path.
 
 ## episode_keyboard_node
 
-Keyboard control for the recorder. Launch: `episode_keyboard_launch.py`, with
-`recorder_ns` (default `/episode_recorder`) and `default_prompt` arguments.
+Drives the recorder from a terminal. Needs a TTY. Node name
+`episode_keyboard`. Launch `episode_keyboard_launch.py`.
 
-| Key | Action |
-|-----|--------|
-| `r` / `→` | Start recording |
-| `s` / `←` | Stop and save |
-| `d` / `⌫` | Discard episode (stop + delete bag) |
-| `t` | Edit task prompt for the next episode |
-| `h` / `?` | Help |
+| Parameter | Default | Meaning |
+|---|---|---|
+| `recorder_ns` | `/episode_recorder` | Where the recorder's services live. |
+| `default_prompt` | `""` | Prompt for the next episode. |
+
+| Key | Calls |
+|---|---|
+| `r`, right arrow | `start_recording` with the current prompt |
+| `s`, left arrow | `cancel_recording`. The bag is kept. |
+| `d`, backspace | `cancel_recording` if recording, then `delete_last_bag` |
+| `t` | Edit the prompt. Enter applies, Esc cancels. |
+| `h`, `?` | Help |
 | `q` | Quit |
 
 ## policy_runner_node
 
-Wraps a policy framework's inference pipeline in ROS 2 actions. Launch:
-`policy_runner_launch.py`. The first block is declared by the node; the second
-by the resolved `framework` adapter, `lerobot_rosetta` here.
+Runs a policy on the live robot. Node name `policy_runner`. Launch
+`policy_runner_launch.py`.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `contract_path` | `contracts/so_101.yaml` | Optional when the checkpoint's dataset embeds one (launch arg) |
-| `framework` | `lerobot` | Policy framework adapter, resolved by entry-point name |
-| `is_classifier` | `false` | Publish the reward section as the action output |
-| `default_prompt` | `""` | Task used when a goal leaves `prompt` empty |
-| `default_max_duration_s` | `0.0` | Max run duration. `0.0` runs until stopped |
-| `feedback_rate_hz` | `2.0` | Execution feedback publish rate |
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `contract_path` | string | `""` | Empty resolves the contract from the checkpoint. The launch file defaults to `contracts/so_101.yaml`. |
+| `framework` | string | `lerobot` | Adapter, by entry-point name under `rosetta.policy_runners`. |
+| `is_classifier` | bool | `false` | Serve the `rewards` section as output instead of `actions`. |
+| `default_prompt` | string | `""` | |
+| `default_max_duration_s` | double | `0.0` | |
+| `feedback_rate_hz` | double | `2.0` | |
 
-| LeRobot adapter parameter | Default | Description |
-|-----------|---------|-------------|
-| `pretrained_name_or_path` | *(see params file)* | HuggingFace model ID or local path (launch arg) |
-| `server_address` | `127.0.0.1:8080` | Policy server address (launch arg) |
-| `policy_type` | `act` | `act`, `smolvla`, `diffusion`, `pi0`, `pi05`, etc. (launch arg) |
-| `policy_device` | `cuda` | `cuda`, `xpu`, `mps`, `cpu`, or `cuda:0` (falls back to `cpu` if unavailable) |
-| `actions_per_chunk` | `30` | Actions per inference chunk |
-| `chunk_size_threshold` | `0.95` | When to request a new chunk (0.0-1.0) |
-| `aggregate_fn_name` | `weighted_average` | `weighted_average`, `latest_only`, `average`, `conservative` |
-| `launch_local_server` | `true` | Auto-start the policy server at configure, with model preload (launch arg) |
-| `server_startup_timeout_sec` | `120.0` | Max wait for the server, covering model preload |
-| `obs_similarity_atol` | `-1.0` | Observation filtering tolerance. Ignored by stock LeRobot v0.6.0, where the filter is hardcoded on |
+Contract resolution with an empty `contract_path`: `pretrained_name_or_path`,
+then its `train_config.json`, then the training dataset's root or repo id,
+then `meta/rosetta_contract.yaml` there. Local paths first, then the Hugging
+Face Hub. A missing link is an error. A non-empty `contract_path` is used as
+given and never compared with the checkpoint's.
 
-With `use_sim_time` true the adapter paces observations and actions on the
-sim clock at the contract fps.
+The LeRobot adapter adds these. Defaults in the second column are the
+adapter's. `params/policy_runner.yaml` sets the third.
 
-Actions and services: `run_policy` (action), `~/start_policy`,
-`~/cancel_policy`. A launch namespace prefixes the action name, as in
-`/robot_policy/run_policy` under `hil_launch.py`.
+| Parameter | Adapter default | Params file | Meaning |
+|---|---|---|---|
+| `pretrained_name_or_path` | `""` | `iblnk/act-turtlebot3_demo` | Local path or Hub model id. |
+| `policy_type` | `act` | `act` | One of `act`, `smolvla`, `diffusion`, `tdmpc`, `vqbet`, `pi0`, `pi05`. Must match the checkpoint. |
+| `policy_device` | `cuda` | `cuda` | Falls back to `cpu` with a warning if the backend is missing. Empty means `cpu`. |
+| `server_address` | `127.0.0.1:8080` | same | |
+| `launch_local_server` | `true` | `true` | Start `python -m lerobot_rosetta.policy_server` at configure, with the model preloaded when `pretrained_name_or_path` is set. Restarted per run if it died. |
+| `server_startup_timeout_sec` | `120.0` | `120.0` | Configure waits this long for the server socket. |
+| `actions_per_chunk` | `50` | `30` | Actions returned per inference. |
+| `chunk_size_threshold` | `0.5` | `0.95` | Queue fill ratio at which the next observation is sent. |
+| `aggregate_fn_name` | `weighted_average` | same | How a new chunk merges with the queue: `weighted_average`, `latest_only`, `average`, `conservative`. |
+| `obs_similarity_atol` | `1.0` | `-1.0` | Negative disables. Ignored by stock LeRobot 0.6.0. |
 
-When `contract_path` is empty, the node resolves the contract from the
-checkpoint: `pretrained_name_or_path` → `train_config.json` → the training
-dataset → `meta/rosetta_contract.yaml`.
+Launch arguments: `params_file`, `contract_path`,
+`pretrained_name_or_path`, `policy_type`, `server_address`,
+`launch_local_server`, `use_sim_time`, `log_level`, `configure`, `activate`.
+`policy_device` is not a launch argument. Set it in the params file.
+
+With `use_sim_time`, observations and actions pace on the sim clock at the
+contract `fps`.
+
+| Interface | Type |
+|---|---|
+| `run_policy` | action `rosetta_interfaces/action/RunPolicy` |
+| `~/start_policy` | service `rosetta_interfaces/srv/StartPolicy` |
+| `~/cancel_policy` | service `std_srvs/srv/Trigger` |
+
+Under `hil_launch.py` the runner sits in namespace `robot_policy`, so the
+action is `/robot_policy/run_policy`.
 
 ## hil_manager_node
 
-Orchestrates human-in-the-loop episodes. Launch: `hil_launch.py`, which wires
-the manager, a policy runner (namespace `robot_policy`), an optional reward
-classifier (namespace `reward_classifier`), and the recorder. Params:
-`params/hil_manager.yaml` covers all four.
+Runs human-in-the-loop episodes: a policy, a teleop input muxed against it,
+an optional reward classifier, and the recorder. Node name `hil_manager`.
+Launch `hil_launch.py`, which also starts the recorder, a policy runner in
+namespace `robot_policy` and, when enabled, a second runner in namespace
+`reward_classifier`. Defaults come from `params/hil_manager.yaml`.
 
-Action: `manage_episode`. Services: `~/start_episode`, `~/end_episode` and
-`~/set_intervention` and `~/set_reward_override` (`SetBool`),
-`~/cancel_episode` and `~/clear_reward_override` (`Trigger`).
+| Parameter | Default | Meaning |
+|---|---|---|
+| `contract_path` | `""` | Required. The launch file defaults to `contracts/so_101_hil.yaml`. |
+| `enable_recording` | `true` | Send a `RecordEpisode` goal per episode. |
+| `manage_policy_lifecycle` | `true` | Send and cancel a `RunPolicy` goal per episode. |
+| `enable_reward_classifier` | `false` | |
+| `policy_action_name` | `/robot_policy/run_policy` | |
+| `reward_classifier_action_name` | `/reward_classifier/run_policy` | |
+| `recorder_action_name` | `/record_episode` | |
+| `policy_remap_prefix` | `/hil/policy` | The runner publishes actions to `<prefix><action topic>`. The manager forwards to `<action topic>` while the policy is in control. |
+| `reward_remap_prefix` | `/hil/reward` | Same for the classifier. |
+| `human_reward_positive` | `1.0` | |
+| `human_reward_negative` | `-1.0` | |
+| `default_prompt` | `""` | |
+| `default_max_duration_s` | `0.0` | |
+| `feedback_rate_hz` | `30.0` | |
 
-`~/end_episode` is the deliberate, labelled end: the goal succeeds and the
-verdict lands in `outcome`. `~/cancel_episode` abandons the take. Neither
+The launch file validates that `action_remap_from` names an action topic of
+the contract. It exposes the policy runner's model and chunking parameters,
+and the reward classifier's, as launch arguments. Run `--show-args` for the
+list. `launch_local_server` is fixed to `true`. One `feedback_rate_hz`,
+default `30.0`, goes to the manager, the recorder and both runners.
+
+| Interface | Type | Effect |
+|---|---|---|
+| `manage_episode` | action `rosetta_interfaces/action/ManageEpisode` | |
+| `~/start_episode` | service `rosetta_interfaces/srv/StartHILEpisode` | |
+| `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode. `true` labels success, `false` failure. The goal succeeds. |
+| `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. The goal ends `CANCELED`. |
+| `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
+| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. |
+| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | |
+| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Published at the feedback rate while an episode runs. |
+
+Teleop events from the contract are edge-triggered: `is_intervention` press
+hands control to teleop and release hands it back, `start_episode` starts an
+episode with `default_prompt`, `success` and `failure` set the label,
+`end_success` and `end_failure` end the episode. A label holds until the
+other button, `~/clear_reward_override`, or the next episode. No event
 deletes a bag.
 
-## ROS 2 lifecycle
-
-All Rosetta nodes are lifecycle nodes.
-
-| Transition | Effect |
-|------------|--------|
-| `configure` | Create subscriptions (start buffering), create publishers (disabled) |
-| `activate` | Enable publishers, start watchdog, open goal acceptance |
-| `deactivate` → `cleanup` | Safety action, disable publishers, destroy resources |
-
-Goals are accepted only while `active`, one at a time per node. A deactivate
-stops in-progress work and ends its goal `ABORTED` with
-`termination_reason: node_deactivated`.
+Result `termination_reason`: `stopped`, `timeout`, `reward_threshold`,
+`cancelled`, `node_deactivated`, `error`. `outcome`: `success`, `failure`,
+`unlabeled`. With `success_reward_threshold` above zero on the goal, reaching
+it ends the episode and an unlabeled outcome becomes `success`.

@@ -1,127 +1,102 @@
-# Design
+# About the contract
 
-Rosetta is built around one philosophy: the translation between a robot
-and a policy is defined once and enforced as late as possible. Defined
-once, so training and deployment cannot drift apart. Enforced late, so
-recordings stay reusable as models change. This page explains both
-halves, then shows how the packages divide the work.
+Why there's a YAML file between the robot and the policy, and what it does
+for you.
 
-## Record everything, decide later
+## Streams and frames
 
-Your robot's data outlives any single model. Demonstrations recorded today
-can retrain next year's architecture, but only if the recordings still
-contain what that architecture wants. Preprocessing at record time throws
-that option away. So Rosetta records as much as possible, as raw as
-possible, and defers every decision about what a model sees.
+A ROS 2 robot publishes topics. Each has its own message type, its own rate,
+and its own clock. A policy doesn't consume topics. It consumes frames: at
+every tick, one array per key, always the same keys, always the same shapes.
 
-Rosetta records to [rosbag2](https://github.com/ros2/rosbag2) files and
-converts them to training datasets in a separate step. Bags store every
-message at its original rate and timestamp, with no alignment,
-downsampling, or lossy transformation, and they hold topics that map to no
-training feature: diagnostics, TF trees, debug streams, extra sensors.
-They are the standard recording format in ROS 2, so playback and
-inspection tooling already exists. They are also cheap to write live,
-where training formats built on Parquet and MP4 are read-optimized and
-need in-memory buffering and post-episode video encoding. Rosetta defaults
-to [MCAP](https://mcap.dev/) storage, which adds random-access reads and
-compression.
+![Three topics at different rates above four ticks. At each tick the frame takes one sample of each key.](../_static/streams-and-frames.svg)
 
-Any tool that writes bags works, and recordings made before or without
-Rosetta convert the same way. On top of plain capture, the episode recorder
-Rosetta provides adds episode scoping through a ROS 2 action, provenance
-(the operator prompt and the contract text embedded in each bag's
-metadata), and a capture audit. It records every topic on the graph by
-default, with regex include and exclude lists for the exceptions, and at
-episode end it reports per-topic message counts and flags contract topics
-that received nothing. At record time the contract acts as a manifest
-rather than a filter. It never narrows what is recorded; it checks that
-everything you declared you will train on is arriving. The audit is only a
-log summary; there is no mid-episode warning yet and no rate check against
-the contract's `fps`.
+Turning topics into frames means deciding, for every key, which sample
+belongs to a tick and on which clock, which fields of the message to keep
+and in what order, and how the numbers change on the way in and back out. In
+the contract those are `align`, `select` and `apply`.
 
-Revising a contract never requires re-recording. Conversion reads the
-contract you pass it, treats the copy embedded in a bag as provenance only,
-and warns on mismatch. The same bags can produce different datasets as your
-schema evolves.
+## Before or after recording
 
-## The translation problem
+LeRobot's `Robot` class makes those decisions in code. `get_observation()`
+hands back a frame, so what you record is already a dataset. Compact, and
+one place to look. But anything the class didn't emit is gone. Want a
+different image size, one more joint, a different alignment rule? Record
+again.
 
-Raw data is not what a model eats. A robot speaks topics: typed messages,
-named fields, many rates, many timelines, most of it irrelevant to any one
-policy. A policy speaks frames: one flat value per key per tick, fixed
-shape, fixed rate, meaning carried by position. Getting from one to the
-other means deciding how asynchronous streams land on the frame clock,
-which fields appear in which order, and how values map between robot units
-and the ranges a policy expects.
+Rosetta makes the decisions after recording. You record bags, every message
+at its own rate and stamp, on every topic. The contract runs when you build a
+dataset and again when you run the policy. If you change it, you build and
+train again. The bags don't move.
 
-These decisions must hold twice: once when recorded data becomes a training
-dataset, and again live, when observations feed the model and its output
-becomes messages. Write them twice and nothing checks the two agree. That
-failure mode is train/serve skew, and it is quiet: the policy produces
-plausible-looking actions, performs worse than it should, and no error
-points at the cause.
+This costs disk, since bags are bigger than datasets, and it means the
+transform runs at two different times.
 
-## The contract
+## The same code, twice
 
-Rosetta puts the translation in one place. One YAML file per robot, the
-contract, declares the frames and the streams behind them, in both
-directions. Bag conversion and live inference run the same code from the
-same contract, so there is no second implementation to drift. Bags and
-datasets embed the contract text, and a checkpoint resolves its own
-translation at deploy time through the dataset it was trained on.
+Two copies of one transform drift apart. Say data preparation
+resizes with one library and inference uses another. Nothing crashes. The
+policy is a little worse than it should be, and no error points at why.
 
-The contract's territory ends at the dataset boundary: frames in robot
-units, named and shaped exactly as the dataset stores them. Model-side
-preparation (normalization from dataset statistics, batching, tokenization)
-belongs to the framework and travels with the checkpoint; LeRobot saves its
-pre- and post-processors next to the weights. The two mechanisms mirror
-each other. Rosetta keeps the robot side of the boundary identical between
-training and deployment, and the checkpoint's processors keep the model
-side identical.
+So both paths run the same three classes. `StreamIngest` reads a message on
+its timeline, selects the fields and applies the operators. `StreamBuffer`
+picks the sample for each tick. `FrameLayout` lays the values out under
+their keys. Offline, `bag_frames` feeds them from a bag. Live, `TopicBridge`
+feeds them from subscriptions.
 
-The [contract reference](../reference/contract.md) documents the schema;
-[write a contract](../how-to/write-a-contract.md) builds one up from
-scratch.
+![TopicBridge and bag_frames both feed StreamIngest, StreamBuffer and FrameLayout, which the contract configures. Frames go on to PolicyRunner or DatasetWriter.](../_static/data-flow.svg)
 
-## LeRobot
+A test in the repo feeds the same messages through `StreamBuffer` and
+`FrameLayout` by hand and checks the porter's output against them frame for
+frame. One caveat: a stream aligned on
+`receive` uses the bag's receive stamp offline and the node clock live, so it
+replays closely, not exactly. A stream aligned on `header` replays bit for
+bit.
 
-[LeRobot](https://github.com/huggingface/lerobot) is Hugging Face's
-open-source framework for
-[robot learning](https://huggingface.co/spaces/lerobot/robot-learning-tutorial).
-It provides tools for recording demonstrations, training policies (ACT,
-Diffusion Policy, VLAs like SmolVLA and Pi0), and deploying them on
-hardware. LeRobot defines a standard dataset format (v3) built on Parquet
-files and MP4 videos, with community datasets and models shared on the
-[Hugging Face Hub](https://huggingface.co/datasets?other=LeRobot).
+Actions go the other way, live only. `FrameLayout` splits the action vector,
+the operators run in reverse, and an encoder builds the message.
 
-## Architecture
+## Where the contract stops
 
-| Package | Purpose |
-|---------|---------|
-| `rosetta` | Core library, nodes, bag conversion |
-| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS 2 action and service definitions |
-| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot framework adapter: dataset writer, policy runner, inference servers |
-| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
-| [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
+At the dataset. Frames come out in robot units, named and shaped the way the
+dataset stores them. Normalization, batching and tokenization are the
+framework's job and travel with the checkpoint. LeRobot saves its processors
+next to the weights. So the contract keeps the robot side the same between
+building and serving, and the checkpoint keeps the model side the same.
 
-No framework appears in a contract. Framework adapters register through
-Python entry points (`rosetta.dataset_writers`, `rosetta.policy_runners`),
-and `rosetta_port --framework` or the policy runner's `framework` parameter
-selects one by name. `lerobot_rosetta` registers both under the name
-`lerobot`.
+The contract also travels with the data. The recorder writes it into each
+bag's metadata, and the porter writes the contract it was given into the
+dataset. A policy runner started without a contract path follows the
+checkpoint back to its training dataset and reads the contract there.
 
-The `lerobot_robot_rosetta` and `lerobot_teleoperator_rosetta` packages
-implement LeRobot's [Robot](https://huggingface.co/docs/lerobot/integrate_hardware)
-and Teleoperator interfaces, following LeRobot's plugin naming convention
-(`lerobot_robot_*`, `lerobot_teleoperator_*`) for auto-discovery.
+## Frameworks
 
-A typical LeRobot robot (like `so101_follower`) talks to hardware directly:
-motors over serial, cameras over USB, the `Robot` class is the driver. A
-Rosetta robot is a ROS 2 lifecycle node: observations arrive on topics,
-actions leave on topics, and the drivers live elsewhere in the graph. Any
-ROS 2 robot can use LeRobot's native tools this way: define a contract and
-pass `--robot.type=rosetta`. Because the plugin creates a ROS 2 node
-internally, ROS 2 must be installed even when you start it through
-LeRobot's CLI. LeRobot's `connect()` maps to the lifecycle `activate`
-transition, and `disconnect()` to `deactivate` then `cleanup`, which
-publishes the declared safety action on the way down.
+The robot side turns ROS 2 into frames. The policy side turns frames into a
+dataset or into actions. Neither imports the other. `rosetta_port` joins
+them offline and `policy_runner_node` joins them live, each looking the
+framework up by name.
+
+Entry points extend this. `rosetta.codecs` adds message types,
+`rosetta.operators` adds value transforms, `rosetta.dataset_writers` and
+`rosetta.policy_runners` add a framework. A contract names message types and
+operators but never a framework.
+
+## One numeric key on the live path
+
+The porter writes one dataset feature per contract key. LeRobot's live path
+does not: its feature builder produces one `observation.state` for all numeric
+observations and one `action` for all actions. A contract with two numeric
+observation keys ports and trains fine, then fails when the robot connects.
+
+Rosetta checks this where LeRobot is involved, in the Robot plugin's
+`connect()` and in the policy runner's configure step. The contract loader
+doesn't check it, since the contract isn't tied to LeRobot. If you hit the
+limit, merge the streams into one multi-source key.
+
+## Unstamped messages
+
+A message aligned on `header` with a stamp of `(0, 0)` is dropped. Rosetta
+doesn't fill in the arrival time. If it did, a driver that forgets to stamp
+would look fine in a dataset and behave differently live. The drop is logged
+once, and so is recovery. A message honestly stamped at the epoch is lost
+too.

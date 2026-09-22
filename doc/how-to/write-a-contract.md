@@ -1,74 +1,132 @@
 # Write a contract
 
-The contract defines the translation between ROS 2 topics and the keys LeRobot
-expects. Full field documentation: [contract reference](../reference/contract.md).
+The [Contract](../reference/contract.md) page has every key and rule. This
+page walks through writing one. If you'd rather start from an annotated file,
+copy `contracts/stone.yaml` from the repository.
 
-| ROS 2 side | | LeRobot side |
-|-----------|---|-------------|
-| `/front_camera/image_raw/compressed` | &rarr; | `observation.images.front` |
-| `/follower_arm/joint_states` (position fields) | &rarr; | `observation.state` |
-| `/leader_arm/joint_states` (position fields) | &larr; | `action` |
-| `/task_prompt` (String) | &rarr; | `task` |
-| `/reward_signal` (Float64) | &rarr; | `next.reward` |
+## Name the keys
 
-On the ROS 2 side, data lives in typed messages on named topics with rich
-structure. On the LeRobot side, data lives in flat dictionaries with
-dot-separated string keys and numpy values. The contract maps one to the other,
-handling type conversion, field extraction, timestamp alignment, and resampling.
+Decide what the model sees and what it emits. LeRobot's built-in policies
+expect `observation.images.<name>` per camera, `observation.state` for the
+numeric state, and `action` for the command.
+
+```yaml
+robot_type: my_robot
+robot_interface: ros2
+fps: 30
+
+observations:
+  observation.images.wrist: ...
+  observation.state: ...
+actions:
+  action: ...
+```
+
+`fps` is the rate the policy runs at. Your controller's update rate is a
+sensible pick.
+
+## Point each key at a channel
+
+Find the topic and its type:
+
+```bash
+ros2 topic list -t
+ros2 topic info -v /joint_states
+```
+
+Copy the type and the publisher's QoS into `channel`. A QoS mismatch means no
+messages arrive. Then check whether the type has a header and whether the
+driver fills it:
+
+```bash
+ros2 topic echo /joint_states --field header.stamp --once
+```
+
+A `sec` of `0` means unstamped.
+
+## When: `align`
+
+Every source needs `align`. There's no default.
+
+Use `timeline: header` when the type has a header and the driver stamps it.
+Header-aligned streams replay from a bag exactly. Otherwise use
+`timeline: receive`. A type with no header, like
+`std_msgs/msg/Float64MultiArray`, only has `receive`.
+
+Use `strategy: hold` unless a stale value is worse than none. `asof` with
+`tolerance_ms` rejects samples older than the tolerance. `drop` keeps only
+samples from the last frame period. When a sample is rejected, the key is
+zero-filled for that tick.
+
+```yaml
+align: {strategy: hold, timeline: header}
+```
+
+## Which: `select`
+
+List the fields in the order you want them in the vector. Syntax per type is
+on [Message types](../reference/message-types.md#decoders).
+
+```yaml
+select: [position.shoulder_pan_joint, position.elbow_flex_joint, position.gripper_joint]
+```
+
+The decoder looks joints up by name, so these have to match what the driver
+publishes. Check with `ros2 topic echo /joint_states --field name --once`.
+
+## How: `apply`
+
+Add operators where the robot's units differ from what the policy should
+learn.
+
+```yaml
+apply: [rad2deg]
+```
+
+On an action the list runs in reverse when serving. Put `clamp` first to
+bound the outgoing command in robot units:
+
+```yaml
+apply: [clamp: {min: -3.14159, max: 3.14159}, rad2deg]
+```
+
+Every image observation needs a `resize`, which fixes the stored image size.
+
+## Merge streams into one key
+
+LeRobot's live path takes one numeric observation key and one action key. To
+feed several topics into `observation.state`, list them as sources. Values
+are concatenated in order.
 
 ```yaml
 observation.state:
-  channel: {topic: /follower_arm/joint_states, type: sensor_msgs/msg/JointState}
-  align: {strategy: hold, timeline: header}
-  select: [position.shoulder_pan, position.shoulder_lift, position.elbow]
+  - channel: {topic: /arm/joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: header}
+    select: [position.j1, position.j2]
+  - channel: {topic: /gripper/state, type: std_msgs/msg/Float32}
+    align: {strategy: hold, timeline: receive}
+    select: [data]
 ```
 
-At each timestep, this **subscribes** to `/follower_arm/joint_states`,
-**extracts** the named fields using dot notation
-(`position.shoulder_pan` → `msg.position[msg.name.index("shoulder_pan")]`),
-**assembles** a numpy array, and **stores** it under `observation.state`.
+## Set the action's safety
 
-Use `timeline: header` for stamped sensors with synced clocks, `receive`
-otherwise. Use `strategy: hold` unless a stale value is worse than a fabricated
-zero, since a gap zero-fills rather than skipping the frame.
+`safety` is what gets published when actions stop arriving. Use `hold` for a
+position-controlled arm, `zeros` for a velocity command such as a Twist, and
+`none` when nothing should be sent.
 
-## Multi-source keys
-
-A **list** value under one key declares ordered sources whose values are
-concatenated in declaration order:
+Don't put a position-controlled arm on `zeros`. Zero is a pose, and the arm
+will go there.
 
 ```yaml
-observations:
-  observation.state:
-    - channel: {topic: /arm/joint_states, type: sensor_msgs/msg/JointState}
-      align: {strategy: hold, timeline: header}
-      select: [position.j1, position.j2, position.j3]
-    - channel: {topic: /gripper/state, type: std_msgs/msg/Float32}
-      align: {strategy: hold, timeline: receive}
-      # Result: observation.state = [j1, j2, j3, gripper] (4D vector)
+channel: {topic: /cmd, type: std_msgs/msg/Float64MultiArray, safety: hold}
 ```
 
-This matters because built-in policies look for specific key names by exact
-match. Feeding several topics into one key is how a rich robot stays compatible
-with them. Every source of a multi-source key needs a `select` and they must all
-resolve to the same dtype. Images never share a key.
+## Validate
 
-The live LeRobot path enforces the same shape harder: **at most one numeric
-observation key and at most one action key**, or the contract is refused at
-deploy time, after the dataset has already trained fine. See
-[key-count limit](../reference/contract.md#key-count-limit-on-the-lerobot-live-path).
+```bash
+python -c "from rosetta.contract.schema import load_contract; load_contract('robot.yaml'); print('OK')"
+```
 
-## Action safety
-
-`channel.safety` declares what the watchdog publishes when actions stop
-arriving: `none` (default), `zeros`, or `hold`. **Never put a
-position-controlled arm on `zeros`:** zero is a pose, and the arm will slam to
-it. `hold` lands in the same place before the channel has published once, since
-there is no last command to re-send.
-
-## Worked example
-
-`contracts/stone.yaml` is the annotated tour: multi-source actions, teleop, QoS
-anchors, extended sections. It declares three numeric observation keys, so read
-it for the schema and do not copy its shape. `so_101.yaml` and `turtlebot3.yaml`
-are the deployable examples.
+Loading checks every operator and codec path, and, with `rclpy` importable,
+every type, timeline and QoS key against the installed ROS 2 interfaces. Fix
+what it reports until it prints `OK`.

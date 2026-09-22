@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 210" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <text x="0" y="14" font-weight="600">streams</text>
+  <text x="130" y="42" text-anchor="end">/camera, 30 Hz</text>
+  <text x="130" y="72" text-anchor="end">/joint_states, 100 Hz</text>
+  <text x="130" y="102" text-anchor="end">/imu, 1 kHz</text>
+  <g fill="#222">
+    <rect x="150" y="34" width="6" height="8"/><rect x="176" y="34" width="6" height="8"/><rect x="202" y="34" width="6" height="8"/><rect x="228" y="34" width="6" height="8"/><rect x="254" y="34" width="6" height="8"/><rect x="280" y="34" width="6" height="8"/><rect x="306" y="34" width="6" height="8"/><rect x="332" y="34" width="6" height="8"/><rect x="358" y="34" width="6" height="8"/><rect x="384" y="34" width="6" height="8"/><rect x="410" y="34" width="6" height="8"/><rect x="436" y="34" width="6" height="8"/><rect x="462" y="34" width="6" height="8"/><rect x="488" y="34" width="6" height="8"/><rect x="514" y="34" width="6" height="8"/><rect x="540" y="34" width="6" height="8"/><rect x="566" y="34" width="6" height="8"/><rect x="592" y="34" width="6" height="8"/><rect x="618" y="34" width="6" height="8"/>
+  </g>
+  <g stroke="#222" stroke-width="1.5">
+    <path d="M152 64v8M160 64v8M168 64v8M176 64v8M184 64v8M192 64v8M200 64v8M208 64v8M216 64v8M224 64v8M232 64v8M240 64v8M248 64v8M256 64v8M264 64v8M272 64v8M280 64v8M288 64v8M296 64v8M304 64v8M312 64v8M320 64v8M328 64v8M336 64v8M344 64v8M352 64v8M360 64v8M368 64v8M376 64v8M384 64v8M392 64v8M400 64v8M408 64v8M416 64v8M424 64v8M432 64v8M440 64v8M448 64v8M456 64v8M464 64v8M472 64v8M480 64v8M488 64v8M496 64v8M504 64v8M512 64v8M520 64v8M528 64v8M536 64v8M544 64v8M552 64v8M560 64v8M568 64v8M576 64v8M584 64v8M592 64v8M600 64v8M608 64v8M616 64v8"/>
+  </g>
+  <line x1="152" y1="98" x2="622" y2="98" stroke="#222" stroke-width="2.5" stroke-dasharray="1 1.5"/>
+  <g stroke="#bbb" stroke-width="1" stroke-dasharray="3 3">
+    <line x1="190" y1="26" x2="190" y2="196"/><line x1="320" y1="26" x2="320" y2="196"/><line x1="450" y1="26" x2="450" y2="196"/><line x1="580" y1="26" x2="580" y2="196"/>
+  </g>
+  <line x1="0" y1="120" x2="640" y2="120" stroke="#ddd"/>
+  <text x="0" y="140" font-weight="600">frames</text>
+  <text x="130" y="162" text-anchor="end">observation.images</text>
+  <text x="130" y="182" text-anchor="end">observation.state</text>
+  <g fill="#222">
+    <rect x="186" y="154" width="8" height="8"/><rect x="316" y="154" width="8" height="8"/><rect x="446" y="154" width="8" height="8"/><rect x="576" y="154" width="8" height="8"/>
+    <rect x="189" y="174" width="2" height="8"/><rect x="319" y="174" width="2" height="8"/><rect x="449" y="174" width="2" height="8"/><rect x="579" y="174" width="2" height="8"/>
+  </g>
+  <g fill="#666" font-size="11" text-anchor="middle">
+    <text x="190" y="206">tick 0</text><text x="320" y="206">tick 1</text><text x="450" y="206">tick 2</text><text x="580" y="206">tick 3</text>
+  </g>
+</svg>

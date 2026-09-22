@@ -1,102 +1,201 @@
-# Train and deploy your first policy
+# From bags to a moving arm
 
-```
-  ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
-  │  DEFINE  │     │  RECORD  │     │ CONVERT  │     │  TRAIN   │     │  DEPLOY  │
-  │ Contract │────▶│  Demos   │────▶│ Dataset  │────▶│  Policy  │────▶│ on Robot │
-  └──────────┘     └──────────┘     └──────────┘     └──────────┘     └──────────┘
-```
+In this tutorial you run the whole Rosetta workflow on a simulated SO-ARM101
+in Gazebo. You'll deploy a trained policy, build a dataset from recorded
+bags, train and deploy your own policy, then change the contract without
+recording anything new.
 
-We run the full pipeline once on a two-joint arm with one camera. Substitute your
-own topics and joint names as you type. You need a ROS 2 robot you can
-teleoperate, a camera stream, and a GPU for training.
+You need a Linux machine. Training in step 6 wants a GPU. The recording is
+already done:
+[ros-physical-ai/demos](https://github.com/ros-physical-ai/demos) publishes
+60 bags, a dataset built from them, and a policy trained on that dataset.
 
-## 1. Define a contract
-
-```yaml
-# my_contract.yaml
-robot_type: my_robot
-robot_interface: ros2
-fps: 30
-
-observations:
-  observation.state:
-    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
-
-  observation.images.cam:
-    channel: {topic: /camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [480, 640]]
-
-actions:
-  action:
-    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
-```
-
-If your driver does not stamp its messages, write `timeline: receive` instead of
-`timeline: header` everywhere. Check with
-`ros2 topic echo /joint_states --field header.stamp --once`: a `sec` of `0` means
-unstamped.
-
-## 2. Record demonstrations
+## 1. Install the demos workspace
 
 ```bash
-# Terminal 1: Start the recorder
-ros2 launch rosetta episode_recorder_launch.py contract_path:=my_contract.yaml
+git clone https://github.com/ros-physical-ai/demos && cd demos
+pixi install
+pixi run install-deps
+pixi run build
 ```
+
+The build ends with a colcon summary and no failed packages.
+
+Every ROS command below runs inside `pixi shell`. Open one now. In a second
+terminal, start the Zenoh router and leave it running:
 
 ```bash
-# Terminal 2: Keyboard controller (r=start, s=save, d=discard, t=set prompt, q=quit)
-ros2 run rosetta episode_keyboard_node
+pixi run zenoh-router
 ```
 
-Teleoperate the robot through a short task, save, and repeat. Ten episodes is
-enough to close the loop, and the policy will be clumsy. Each bag is one episode.
+## 2. Start the robot
 
-## 3. Convert bags to a dataset
+In a `pixi shell`:
 
 ```bash
-rosetta_port \
-    --raw-dir ./datasets/bags \
-    --contract my_contract.yaml \
-    --repo-id my-org/my-dataset \
-    --root ./datasets/lerobot
+ros2 launch pai_bringup so_arm_gz_bringup.launch.py
 ```
 
-`ls datasets/lerobot/my-org/my-dataset/meta/` shows `info.json`, `tasks.parquet`,
-and `rosetta_contract.yaml`. That last one is the contract from step 1, now
-travelling inside the dataset.
+A Gazebo window opens with the arm at home and three cubes on the table.
+Check the topics:
 
-## 4. Train
+```bash
+ros2 topic list | grep -E 'joint_states|camera|forward_position'
+```
+
+You'll see `/joint_states`, `/wrist_camera/image_raw`,
+`/static_camera/image_raw` and `/forward_position_controller/commands`.
+
+## 3. Read the contract
+
+The contract for this robot ships with the demos. Save its path and open it:
+
+```bash
+export CONTRACT=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/so_arm101.yaml
+cat $CONTRACT
+```
+
+Three observation keys, `observation.images.wrist`,
+`observation.images.static` and `observation.state`, and one action key,
+`action`. Under each: `channel` names a topic, `align` says which sample to
+take, `apply` says how the values change, and for the joint and command
+vectors `select` says which fields. Notice the two `resize: [480, 480]`
+lines. You'll change those in step 8.
+
+Load it:
+
+```bash
+python -c "from rosetta.contract.schema import load_contract; load_contract('$CONTRACT'); print('OK')"
+```
+
+It prints `OK`.
+
+## 4. Deploy the published policy
+
+Start the policy runner with the checkpoint from the Hugging Face Hub. The
+first start downloads the weights.
+
+```bash
+ros2 launch rosetta policy_runner_launch.py \
+    params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
+    contract_path:=$CONTRACT \
+    pretrained_name_or_path:=francocipollone/rospai_act_sim_arm101_place_cubes_on_tray \
+    policy_type:=act \
+    use_sim_time:=true
+```
+
+Wait until the launch output goes quiet. In another `pixi shell`:
+
+```bash
+ros2 action send_goal /run_policy \
+    rosetta_interfaces/action/RunPolicy "{prompt: 'place cubes on tray'}"
+```
+
+Watch Gazebo. The arm picks up the cubes and puts them on the tray. Press
+Ctrl+C in the `send_goal` terminal to stop. The arm holds its last position,
+which is the `safety: hold` line in the contract.
+
+Put the cubes back:
+
+```bash
+pixi run ./pai_data_collection/scripts/gz_set_cubes_poses.py
+```
+
+## 5. Prepare a dataset from the bags
+
+Download three bag directories from the
+[demos bag folder](https://drive.google.com/drive/folders/1x-vtJqVtTHESkQLZCpj7aSnfekpI3YN4)
+into `datasets/bags/`. Each is a directory containing `metadata.yaml`. Port
+them:
+
+```bash
+ros2 run rosetta rosetta_port \
+    --raw-dir datasets/bags \
+    --contract $CONTRACT \
+    --repo-id tutorial_480 \
+    --root datasets/lerobot
+```
+
+The porter logs one line per episode. Look at what it wrote:
+
+```bash
+ls datasets/lerobot/tutorial_480/meta/
+python -c "import json; print(json.load(open('datasets/lerobot/tutorial_480/meta/info.json'))['features']['observation.images.wrist']['shape'])"
+```
+
+`meta/` holds `info.json`, `stats.json`, the episode and task tables, and
+`rosetta_contract.yaml`, a copy of the contract. The second command prints
+`[480, 480, 3]`, which came from the `resize` line.
+
+## 6. Train your own policy
+
+Train on the full published dataset. It's the same 60 bags, ported the same
+way, and it downloads on first use. This step takes a while.
 
 ```bash
 lerobot-train \
-    --dataset.repo_id=my-org/my-dataset \
+    --dataset.repo_id=francocipollone/rospai_sim_arm101_place_cubes_on_tray \
     --policy.type=act \
-    --output_dir=outputs/train/my_policy
+    --output_dir=outputs/train/act_tutorial \
+    --job_name=act_tutorial \
+    --policy.device=cuda \
+    --policy.push_to_hub=false \
+    --wandb.enable=false \
+    --steps=3000 \
+    --batch_size=32 \
+    --save_freq=1500 \
+    --log_freq=500
 ```
 
-Training is stock LeRobot, and this is the long step.
+The checkpoint ends up at
+`outputs/train/act_tutorial/checkpoints/last/pretrained_model`.
 
-## 5. Deploy
+## 7. Deploy your policy
+
+Stop the policy runner from step 4 with Ctrl+C. Start it again on your
+checkpoint:
 
 ```bash
-# Terminal 1: Start the policy runner
 ros2 launch rosetta policy_runner_launch.py \
-    contract_path:=my_contract.yaml \
-    pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model
+    params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
+    contract_path:=$CONTRACT \
+    pretrained_name_or_path:=outputs/train/act_tutorial/checkpoints/last/pretrained_model \
+    policy_type:=act \
+    use_sim_time:=true
 ```
+
+Send the same goal as in step 4. The arm moves under your policy. After 3000
+steps it'll be rougher than the published one.
+
+## 8. Change the contract
+
+Make a copy with smaller images:
 
 ```bash
-# Terminal 2: Run the policy
-ros2 action send_goal /run_policy \
-    rosetta_interfaces/action/RunPolicy "{prompt: 'pick up the red block'}"
+sed 's/resize: \[480, 480\]/resize: [240, 240]/' $CONTRACT > so_arm101_240.yaml
+diff $CONTRACT so_arm101_240.yaml
 ```
 
-Use the same prompt you recorded with. Ctrl-C stops execution. The robot now
-moves by itself, through the contract we wrote in step 1.
+The diff shows the two `resize` lines. Port the same three bags with the new
+contract:
+
+```bash
+ros2 run rosetta rosetta_port \
+    --raw-dir datasets/bags \
+    --contract so_arm101_240.yaml \
+    --repo-id tutorial_240 \
+    --root datasets/lerobot
+
+python -c "import json; print(json.load(open('datasets/lerobot/tutorial_240/meta/info.json'))['features']['observation.images.wrist']['shape'])"
+```
+
+It prints `[240, 240, 3]`. The bags didn't change. To train and deploy on
+this dataset, repeat steps 6 and 7 with `tutorial_240` and
+`so_arm101_240.yaml`.
+
+## Next
+
+- [Write a contract](../how-to/write-a-contract.md) for your own robot.
+- [Record episodes](../how-to/record-episodes.md) with the episode recorder.
+- [About the contract](../explanation/design.md) for the reasoning behind
+  the design.

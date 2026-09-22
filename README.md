@@ -2,63 +2,63 @@
   <img alt="Rosetta" src="media/rosetta_logo.png" width="100%">
 </p>
 
-**Rosetta** interfaces ROS 2 robots to robot-learning frameworks like
+Rosetta connects a ROS 2 robot to a robot-learning framework such as
 [LeRobot](https://github.com/huggingface/lerobot).
+
+A robot publishes topics at whatever rate each sensor runs. A policy wants
+one frame per tick, with a fixed set of keys. You write the mapping between
+the two in a YAML file, the contract. Rosetta applies that one file when it
+builds a dataset from bags and again when it runs the policy on the robot.
 
 **Documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)**
 
-Between a pub/sub robot and a policy sits a translation: topics
-must become training frames, and model output must become messages again.
-It has to happen identically at training and at deployment. Rosetta is built around the philosophy that this translation should be defined once and enforced as late as possible.
-
-
-A YAML contract defines the translation. A contract looks like this:
-
 ```yaml
-robot_type: my_robot
+robot_type: so_arm101
 robot_interface: ros2
-fps: 30
-
+fps: 50
 observations:
+  observation.images.wrist:                          # key: what the model calls it
+    channel: {topic: /wrist_camera/image_raw,        # channel: topic, type, QoS
+              type: sensor_msgs/msg/Image}
+    align: {strategy: hold, timeline: header}        # align: when
+    apply: [resize: [480, 480]]                      # apply: how values change
   observation.state:
     channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
     align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
-
-  observation.images.cam:
-    channel: {topic: /camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [480, 640]]
-
+    select: [position.shoulder_pan_joint, position.elbow_flex_joint]   # select: which fields
+    apply: [rad2deg]
 actions:
   action:
-    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
+    channel: {topic: /forward_position_controller/commands,
+              type: std_msgs/msg/Float64MultiArray, safety: hold}
+    align: {strategy: hold, timeline: receive}
+    select: [shoulder_pan.pos, elbow_flex.pos]
+    apply: [clamp: {min: -3.14159, max: 3.14159}, rad2deg]
 ```
 
+Five steps. When you change the contract you redo steps 2 to 5. The bags
+from step 1 stay.
 
-## Getting started
+```bash
+ros2 launch rosetta episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
+$EDITOR robot.yaml                                                                # 2 define
+ros2 run rosetta rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
+lerobot-train --dataset.repo_id=my --policy.type=act                              # 4 train
+ros2 launch rosetta policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
+```
 
-The [rosetta_ws](https://github.com/iblnkn/rosetta_ws) workspace installs
-ROS 2 Jazzy, Rosetta, and LeRobot in one command; the
-[installation guide](https://iblnkn.github.io/rosetta/installation.html)
-covers existing ROS 2 workspaces. The tutorial
-[train and deploy your first policy](https://iblnkn.github.io/rosetta/tutorials/first-policy.html)
-walks through recording demonstrations with the episode recorder,
-converting bags to a dataset with `rosetta_port`, training with LeRobot,
-and deploying with the policy runner.
-
+New here? [Install](https://iblnkn.github.io/rosetta/installation.html), then
+follow
+[From bags to a moving arm](https://iblnkn.github.io/rosetta/tutorials/first-policy.html).
 
 ## Packages
 
 | Package | Purpose |
 |---------|---------|
-| `rosetta` (this repo) | Core library, ROS 2 nodes, bag conversion |
-| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | ROS 2 action and service definitions |
-| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot framework adapter: dataset writer, policy runner, inference servers |
-| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin |
+| `rosetta` (this repo) | Contract, frame pipeline, ROS 2 nodes, bag porter |
+| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | Action and service definitions |
+| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
+| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
 
 ## License
