@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" fill="#222">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" fill="#222"/></marker></defs>
+  <g font-size="11" fill="#666"><text x="0" y="52">live</text><text x="0" y="112">offline</text></g>
+  <rect x="50.5" y="30.5" width="130" height="36" rx="3" fill="#fff" stroke="#222"/>
+  <text x="115" y="52" text-anchor="middle">TopicBridge</text>
+  <rect x="50.5" y="90.5" width="130" height="36" rx="3" fill="#fff" stroke="#222"/>
+  <text x="115" y="112" text-anchor="middle">bag_frames</text>
+  <rect x="240.5" y="30.5" width="160" height="96" rx="3" fill="#fff" stroke="#222"/>
+  <text x="320" y="52" text-anchor="middle">StreamIngest</text>
+  <text x="320" y="84" text-anchor="middle">StreamBuffer</text>
+  <text x="320" y="116" text-anchor="middle">FrameLayout</text>
+  <rect x="460.5" y="30.5" width="130" height="36" rx="3" fill="#fff" stroke="#222"/>
+  <text x="525" y="52" text-anchor="middle">PolicyRunner</text>
+  <rect x="460.5" y="90.5" width="130" height="36" rx="3" fill="#fff" stroke="#222"/>
+  <text x="525" y="112" text-anchor="middle">DatasetWriter</text>
+  <g stroke="#222" stroke-width="1" fill="none" marker-end="url(#a)">
+    <path d="M181 48h58"/><path d="M181 108h58"/><path d="M401 108h58"/>
+    <path d="M320 180v-52"/>
+  </g>
+  <path d="M239 60h-58" stroke="#222" stroke-width="1" fill="none" marker-end="url(#a)"/><path d="M401 40h58" stroke="#222" stroke-width="1" fill="none" marker-end="url(#a)"/><path d="M459 56h-58" stroke="#222" stroke-width="1" fill="none" marker-end="url(#a)"/><text x="430" y="72" text-anchor="middle" font-size="10" fill="#666">actions</text>
+  <text x="320" y="146" text-anchor="middle" font-size="11" fill="#666">configures</text><text x="210" y="72" text-anchor="middle" font-size="10" fill="#666">actions</text>
+  <rect x="250.5" y="182.5" width="140" height="32" rx="3" fill="#fff" stroke="#222" stroke-dasharray="4 3"/>
+  <text x="320" y="202" text-anchor="middle">contract.yaml</text>
+  <g font-size="11" fill="#666">
+    <text x="50" y="250">extend with entry points</text>
+    <text x="50" y="268">rosetta.codecs, rosetta.operators</text>
+    <text x="460" y="250">extend with entry points</text>
+    <text x="460" y="268">rosetta.policy_runners,</text>
+    <text x="460" y="284">rosetta.dataset_writers</text>
+  </g>
+</svg>

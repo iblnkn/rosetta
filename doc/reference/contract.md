@@ -1,192 +1,245 @@
-# Contract reference
+# Contract
 
-A contract is a YAML file that maps ROS 2 topics to LeRobot's observation/action
-interface. It covers the full LeRobot `EnvTransition` interface:
+A contract is one YAML file. This page lists every key it accepts and every
+rule the loader enforces. Message types, encoders and operators are on
+[Message types and operators](message-types.md).
 
-| Contract Section | EnvTransition Slot |
-|-----------------|-------------------|
-| `observations` | `observation.*` |
-| `actions` | `action*` |
-| `tasks` | `complementary_data.task` |
-| `rewards` | `next.reward` |
-| `signals` | `next.done`, `next.truncated` |
-| `info`, `complementary_data` | record-only columns |
+Loading a contract validates it. The loader imports every named codec
+module, checks every operator, resolves every dtype and builds the frame
+layout. With `rclpy` importable it also checks every type, timeline and QoS
+against the installed ROS 2 interfaces. Without `rclpy` those three checks
+wait until runtime. If it returns, the contract is valid in this
+environment.
 
-Not every section needs to be filled for every robot. A minimal contract only
-needs `observations` and `actions`.
+```bash
+python -c "from rosetta.contract.schema import load_contract; load_contract('robot.yaml'); print('OK')"
+```
 
-## Minimal example
+Errors raise `rosetta.contract.errors.ContractValidationError`, a subclass of
+`ValueError`.
+
+## Top level
+
+| Key | Required | Rule |
+|---|---|---|
+| `robot_type` | yes | Non-empty string. |
+| `robot_interface` | yes | `ros2`. Case-insensitive. |
+| `fps` | yes | Positive integer. An integral float such as `30.0` is accepted. |
+| `observations` | no | Mapping of key to source or list of sources. |
+| `actions` | no | Mapping of key to source or list of sources. |
+| `rewards`, `signals`, `info`, `complementary_data` | no | Mapping of key to source or list. Record-only. |
+| `tasks` | no | Mapping of key to `{channel}`. |
+| `adjunct` | no | List of `{channel}`. |
+| `teleop` | no | `input`, `events`, `feedback`. See [Teleop](#teleop). |
+| `x-*` | no | Dropped before validation. Holds YAML anchors. |
+
+An empty or null section is an error, so omit it instead. Unknown top-level
+keys, duplicate keys anywhere in the file, and a key used in two sections are
+errors too.
+
+## Sections
+
+| Section | Images | `dtype` | `align` | `safety`, `encoder` | Reaches the policy |
+|---|---|---|---|---|---|
+| `observations` | under `observation.images.*` only | optional | required | no | yes |
+| `actions` | no | optional | required | yes | yes, as output |
+| `rewards`, `signals`, `info`, `complementary_data` | no | required, never `video` | required | no | no |
+| `tasks` | no | no | no | no | as the per-frame task string |
+| `adjunct` | no | no | no | no | no, recorded only |
+| `teleop.input` | no | optional | required | no | no, diagnostic column |
+| `teleop.events` | no | no | no | no | no |
+| `teleop.feedback` | no | optional | required | `encoder` only | no, diagnostic column |
+
+An image key starts with `observation.images.`. An image key in any other
+section is an error.
+
+## Source
+
+A source is a mapping with the keys `channel`, `align`, `select`, `apply`
+and `kind`. Any other key is an error.
 
 ```yaml
-robot_type: my_robot
-robot_interface: ros2
-fps: 30
+observation.state:
+  channel:
+    topic: /joint_states
+    type: sensor_msgs/msg/JointState
+    qos: {reliability: reliable, history: keep_last, depth: 50}
+    dtype: float64
+  align: {strategy: hold, timeline: header}
+  select: [position.shoulder_pan_joint, position.elbow_flex_joint]
+  apply: [rad2deg]
+  kind: continuous
+```
 
-observations:
-  observation.state:
-    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+### `channel`
+
+| Key | Required | Rule |
+|---|---|---|
+| `topic` | yes | Non-empty string. |
+| `type` | yes | ROS 2 type such as `sensor_msgs/msg/JointState`. Must import. |
+| `qos` | no | See [QoS](#qos). |
+| `dtype` | see Sections | One of `float32`, `float64`, `int32`, `int64`, `bool`, `string`, `video`. |
+| `safety` | no | Actions only. `none` (default), `zeros`, `hold`. |
+| `decoder` | no | `module.path:function`. Decoded sections only. See [Custom codecs](message-types.md#custom-codecs). |
+| `encoder` | no | `module.path:function`. Actions and `teleop.feedback`. |
+
+`dtype` resolves in this order: explicit value, `video` for an image key,
+`float64` for a custom decoder, otherwise the decoder's native dtype. An
+explicit non-video dtype on an image key is an error. `video` on a non-image
+key is an error. A `tasks`, `adjunct` or `teleop.events` channel takes only
+`topic`, `type` and `qos`.
+
+A decoded source needs a built-in or custom decoder even with an explicit
+`dtype`. An action or `teleop.feedback` source needs an encoder and a numeric
+`dtype`.
+
+`safety` is what the watchdog publishes when actions stop arriving for at
+least two frame periods, and what deactivate publishes. `zeros` sends the zero vector
+through the inverse `apply` pipeline. `hold` re-sends the last command and
+sends zeros if nothing was sent yet. With every action channel on `none`, no
+watchdog runs.
+
+Don't put a position-controlled arm on `zeros`. Zero is a pose, and the arm
+will go there.
+
+### `qos`
+
+| Key | Values | Default |
+|---|---|---|
+| `reliability` | `reliable`, `best_effort` | `reliable` |
+| `durability` | `volatile`, `transient_local` | `volatile` |
+| `history` | `keep_last`, `keep_all` | `keep_last` |
+| `liveliness` | `automatic`, `manual_by_topic` | `automatic` |
+| `depth` | integer | 10 |
+
+Values are rclpy's short names, case-insensitive. rclpy's `system_default`,
+`unknown` and `best_available` are accepted too. An unknown key or value is
+an error. A `best_effort` publisher read with the default `reliable` delivers
+nothing.
+
+### `align`
+
+Required on every frame-clock source. There is no default.
+
+| Key | Rule |
+|---|---|
+| `strategy` | `hold`, `asof`, `drop`. |
+| `timeline` | A timeline the channel provides. Case-sensitive. |
+| `tolerance_ms` | Positive integer. Required with `asof`. An error with any other strategy. |
+
+Timelines:
+
+| Timeline | Provided by | Value live | Value offline |
+|---|---|---|---|
+| `receive` | every channel | node clock at arrival | the bag's message stamp |
+| `header` | a type with a field `header` of type `std_msgs/Header` | `header.stamp` | `header.stamp` |
+
+A `header` message whose stamp is `(0, 0)` is dropped and never re-stamped.
+The drop is logged once, and again after the stream recovers and drops again.
+
+Strategies, evaluated at each tick against the newest sample in the buffer:
+
+| Strategy | Sample used |
+|---|---|
+| `hold` | The newest, at any age. |
+| `asof` | The newest, if its age is at most `tolerance_ms`. Otherwise none. |
+| `drop` | The newest, if it arrived within the last `1 / fps`. Otherwise none. |
+
+A stamp ahead of the tick by up to `max(1 s, 2 ticks)` counts as age zero. A
+stamp further ahead clears the buffer, as a clock reset.
+
+No frame is produced until every observation source has a sample. That's
+warmup, and action and record-only sources don't gate it. After warmup, a
+source with no sample at a tick is zero-filled: numeric zeros at its width, a
+black image at its size, or an empty string. On the live path the LeRobot
+Robot plugin waits up to 5 s for warmup, then carries on with zero-filled
+frames and a warning.
+
+### `select`
+
+A list of unique field paths. The order is the order in the frame. An empty
+list is an error. Omit `select` to take the whole message.
+
+`select` is required for `sensor_msgs/msg/JointState`, `sensor_msgs/msg/Imu`,
+`nav_msgs/msg/Odometry`, `geometry_msgs/msg/Twist`,
+`geometry_msgs/msg/TwistStamped`, `control_msgs/msg/MultiDOFCommand`,
+`trajectory_msgs/msg/JointTrajectory` and `sensor_msgs/msg/Joy` unless the
+channel names a custom `decoder` or `encoder`, and for every source of a
+multi-source key. Field path syntax per type is on
+[Message types and operators](message-types.md#decoders).
+
+The width of a source is `len(select)`, or 1 without `select`.
+
+### `apply`
+
+An ordered list of operators. Each entry is a bare name or a one-key mapping.
+
+```yaml
+apply: [clamp: {min: -3.14159, max: 3.14159}, rad2deg]
+```
+
+Recording runs the list front to back through each operator's forward
+direction. Serving runs it back to front through each inverse. In the example,
+serving converts degrees to radians and then clamps radians.
+
+An action or `teleop.feedback` source accepts only operators with an inverse.
+A `resize` there is a load error. `apply` on a `string` source is an error.
+Every image observation must carry an operator with a fixed output size,
+which among the built-ins is `resize`. Operators are listed on
+[Message types and operators](message-types.md#operators).
+
+### `kind`
+
+Optional. Names the value's representation and checks its width.
+
+| `kind` | Width |
+|---|---|
+| `continuous` (default) | any |
+| `quaternion` | 4 |
+| `euler_rpy` | 3 |
+| `axis_angle` | 3 |
+| `rotation_6d` | 6 |
+| `binary` | any |
+
+A width that disagrees with `select` is an error. No shipped adapter reads
+`kind`. A `continuous` select with an `x, y, z, w` run, or with `quat` in a
+path, logs a warning.
+
+## Multi-source keys
+
+A list under one key declares ordered sources.
+
+```yaml
+observation.state:
+  - channel: {topic: /arm/joint_states, type: sensor_msgs/msg/JointState}
     align: {strategy: hold, timeline: header}
     select: [position.j1, position.j2]
-
-actions:
-  action:
-    channel: {topic: /joint_commands, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
+  - channel: {topic: /gripper/state, type: std_msgs/msg/Float32}
+    align: {strategy: hold, timeline: receive}
+    select: [data]
 ```
 
-`robot_type`, `robot_interface` (only `ros2` today), and `fps` are required.
-Top-level keys starting with `x-` are ignored, so they can hold shared YAML
-anchors such as an `x-qos:` block.
+Rules:
 
-## Observations
+- Observations concatenate in order. Actions split in order.
+- Every source needs `select`.
+- Every source resolves to the same `dtype`. Set `dtype` explicitly when the
+  natives differ.
+- Images never share a key.
+- Names get a per-topic prefix from the first topic segment that differs,
+  for example `arm.position.j1` for `/arm/joint_states` and
+  `/gripper/state`. A single-source key has no prefix. Two topics that
+  normalize to the same name are an error.
 
-```yaml
-observations:
-  # State vector (with all optional fields shown)
-  observation.state:
-    channel:
-      topic: /joint_states
-      type: sensor_msgs/msg/JointState
-      qos: {reliability: best_effort, depth: 10}
-      dtype: float64            # optional; defaults to the codec's native dtype
-    align:
-      strategy: hold            # hold | asof | drop (mandatory, no default)
-      timeline: header          # a timeline the channel provides (mandatory)
-    select: [position.j1, velocity.j1]
-    apply: [rad2deg]            # optional operator pipeline
-
-  # Camera
-  observation.images.camera:
-    channel: {topic: /camera/image_raw/compressed,
-              type: sensor_msgs/msg/CompressedImage}
-    align: {strategy: hold, timeline: header}
-    apply: [resize: [224, 224]]  # [height, width]
-```
-
-`align.timeline` selects one of the timestamps the channel carries. Every ros2
-channel provides `receive` (arrival time at the node). A message type carrying a
-std_msgs `Header` also provides `header`. Naming a timeline the channel does not
-provide is a load-time error, and a header-timeline message arriving unstamped
-is dropped at ingest.
-
-A list value under one key declares ordered sources whose values are
-concatenated. Every source then needs a `select`, all sources must resolve to
-the same dtype, and images never share a key.
-
-## Actions
-
-```yaml
-actions:
-  action:
-    channel:
-      topic: /joint_commands
-      type: sensor_msgs/msg/JointState
-      qos: {reliability: reliable, depth: 10}
-      safety: hold              # none (default) | hold | zeros
-    align: {strategy: hold, timeline: header}
-    select: [position.j1, position.j2]
-    apply: [rad2deg]            # only serveable operators allowed on actions
-```
-
-Actions read the same pipeline right-to-left: recording decodes from the
-channel, serving encodes to it. A list value splits one action vector across
-channels in order, each with its own safety behavior.
-
-`channel.safety` is the stop behavior published by the watchdog and on
-deactivate: `none` publishes nothing, `zeros` publishes the zero action vector
-run through the inverse `apply` pipeline, `hold` re-sends the last command.
-**Under position control, `zeros` commands a slam to the zero pose.** `hold`
-falls back to `zeros` when the channel has never published, so bound it with a
-`clamp` in `apply`. With every channel on `none`, no watchdog runs at all.
-
-## Key-count limit on the LeRobot live path
-
-The porter writes one dataset feature per contract key. The LeRobot live path
-cannot represent that: `hw_to_dataset_features` emits one hardcoded
-`observation.state` for all numeric observations and one hardcoded `action` for
-all actions. `lerobot_robot_rosetta` refuses such a contract at connect and at
-`policy_runner_node`'s configure transition, so it ports and trains and then
-fails to deploy.
-
-Deployable through LeRobot means **at most one numeric observation key and at
-most one action key**. Image keys are exempt, in any number. The limit counts
-keys and not sources, so merging numeric streams under one key resolves it.
-`load_contract` does not enforce this, since the contract layer stays
-backend-neutral.
-
-## Operators
-
-`apply` is an ordered operator pipeline run after `select`. On the record path
-operators run front-to-back through their forward direction; on the serve path
-they run back-to-front through their inverse.
-
-| Operator | Form | Tier | Notes |
-|----|------|------|-------|
-| `rad2deg` | `rad2deg` | `BIJECTIVE` | radians (ROS) ↔ degrees (dataset) |
-| `clamp` | `clamp: {min: lo, max: hi}` | `BIDIRECTIONAL` | clip element-wise. On actions, bounds the outgoing command |
-| `resize` | `resize: [h, w]` | `FORWARD_ONLY` | nearest-neighbor image resize. Image observations only |
-
-An action's `apply` accepts only `BIDIRECTIONAL` or `BIJECTIVE` operators. A
-`BIJECTIVE` operator is round-trip verified at load, so a wrong inverse fails
-before deployment instead of corrupting actions silently. The encode path
-refuses non-finite values: the frame drops whole and the watchdog applies the
-declared `safety` if the condition persists.
-
-## Field kinds (`kind`)
-
-`kind` is an optional per-source tag naming the value's representation:
-`continuous` (default), `quaternion` (4 dims), `euler_rpy` (3), `axis_angle`
-(3), `rotation_6d` (6), `binary`. LeRobot ignores it; framework adapters use it
-to pick normalization and rotation handling. Validation checks the dim count
-against the kind at load. Do not encode the type in the key, since
-`action.binary` becomes a separate LeRobot feature and breaks policies reading
-`action`.
-
-## Teleop
-
-For human-in-the-loop recording with a leader arm or other input device:
-
-```yaml
-teleop:
-  input:
-    - target: /arm/joint_commands   # names an existing action channel's topic
-      channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
-      align: {strategy: hold, timeline: header}
-      select: [position.j1, position.j2]
-
-  events:                 # edge-triggered; no align, events are not resampled
-    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
-    select:               # event_name -> button/axis path
-      is_intervention: buttons.5
-      success: buttons.0
-      end_success: buttons.6
-      end_failure: buttons.7
-      failure: buttons.1
-
-  feedback:
-    - origin: /arm/joint_states     # names an existing observation channel's topic
-      channel: {topic: /leader_arm/effort_feedback, type: sensor_msgs/msg/JointState}
-      align: {strategy: hold, timeline: receive}
-      select: [effort.j1, effort.j2]
-```
-
-The event vocabulary is closed: `is_intervention`, `start_episode`, `success`,
-`failure`, `end_success`, `end_failure`. An unknown event name is a load error.
-Feedback channels never declare `safety`.
-
-## Tasks, rewards, and signals
-
-These sections are optional. Use them when your workflow requires task prompts
-from ROS 2 topics, RL reward signals, or episode termination signals.
+## Tasks, rewards, signals, info, complementary_data
 
 ```yaml
 tasks:
-  task:                       # not on the frame clock, so no align
+  task:
     channel: {topic: /task_prompt, type: std_msgs/msg/String}
 
 rewards:
-  next.reward:                # extended sections: dtype is mandatory
+  next.reward:
     channel: {topic: /reward, type: std_msgs/msg/Float64, dtype: float64}
     align: {strategy: hold, timeline: receive}
 
@@ -196,110 +249,88 @@ signals:
     align: {strategy: hold, timeline: receive}
 ```
 
-The extended sections (`rewards`, `signals`, `info`, `complementary_data`) are
-ordinary frame entries with three extra rules: `dtype` is mandatory, they are
-never images, and they are record-only, never fed to a policy at inference.
+A `tasks` channel has no `align`, and its type needs a string `data` field.
+When porting, the frame's task at each tick is the newest string received at
+or before the tick. With no `tasks` section, or before the first message, the
+task is the prompt the episode was recorded with. Live, the task is the
+`RunPolicy` goal's prompt.
 
-Task labels are per-frame. For VLA policies the `task` string can also come from
-the `prompt` argument when recording or running a policy, so no ROS 2 topic is
-needed for it.
+`rewards`, `signals`, `info` and `complementary_data` are frame-clock sources
+with `dtype` required and never `video`. They are recorded into the dataset
+and never fed to a policy.
 
-## Adjunct topics
-
-Adjunct topics are recorded to the bag file but have no LeRobot feature mapping.
-Unlike auto-discovered topics, adjunct topics are **required** to be present at
-record time.
+## Adjunct
 
 ```yaml
 adjunct:
   - channel: {topic: /tf, type: tf2_msgs/msg/TFMessage}
-  - channel: {topic: /diagnostics, type: diagnostic_msgs/msg/DiagnosticArray}
+  - channel: {topic: /tf_static, type: tf2_msgs/msg/TFMessage,
+              qos: {durability: transient_local}}
 ```
 
-## Select syntax
+Adjunct channels are recorded to the bag and never decoded. The recorder
+subscribes to them as contract topics and reports any with zero messages at
+episode end.
 
-Dot notation extracts nested fields from ROS 2 messages:
+## Teleop
 
 ```yaml
-select: [position.shoulder, velocity.shoulder]       # JointState: {field}.{joint_name}
-select: [twist.twist.linear.x, pose.pose.position.z] # Odometry: nested path
+teleop:
+  input:
+    - target: /forward_position_controller/commands   # an action channel's topic
+      channel: {topic: /leader_arm/joint_states, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: header}
+      select: [position.shoulder_pan_joint, position.elbow_flex_joint]
+  events:
+    channel: {topic: /joy, type: sensor_msgs/msg/Joy}
+    select:
+      is_intervention: buttons.5
+      success: buttons.0
+      failure: buttons.1
+      end_success: buttons.6
+      end_failure: buttons.7
+  feedback:
+    - origin: /joint_states                           # an observation channel's topic
+      channel: {topic: /leader_arm/effort_feedback, type: sensor_msgs/msg/JointState}
+      align: {strategy: hold, timeline: receive}
+      select: [effort.shoulder_pan_joint, effort.elbow_flex_joint]
 ```
 
-## Alignment strategies
+| Key | Rule |
+|---|---|
+| `input[].target` | The topic of exactly one action entry. |
+| `feedback[].origin` | The topic of exactly one observation entry. |
+| `events.select` | Mapping of event name to a field path such as `buttons.N` or `axes.N`. The path is resolved per message, so a bad one is a runtime warning, not a load error. |
 
-| Strategy | Behavior |
-|----------|----------|
-| `hold` | Use most recent message, no matter how old |
-| `asof` | Use most recent message only if within `tolerance_ms`, otherwise a gap |
-| `drop` | Use most recent message only if it arrived within the current frame window |
+Event names are `is_intervention`, `start_episode`, `success`, `failure`,
+`end_success`, `end_failure`. Any other name is an error. Events are
+edge-triggered and never resampled. A `feedback` source must not declare
+`safety`.
 
-Every frame-clock entry declares one explicitly. There is no default.
+The porter writes `teleop.input` into the dataset as
+`teleop.input.<action key>` and `teleop.feedback` as
+`teleop.feedback.<observation key>`.
 
-Before **warmup**, no frames are emitted: recording and inference start once
-every observation stream has produced at least one sample. After warmup, a
-stream with no sample at a tick **zero-fills** at its static dim, so every frame
-has the declared shape. Bag conversion and the live bridge share this, so a gap
-looks identical in training data and at inference.
+## Embedding
 
-## Supported message types
+The recorder writes the contract text into the bag's `metadata.yaml` under
+`rosbag2_bagfile_information.custom_data.rosetta.contract_yaml`, with the
+prompt under `lerobot.operator_prompt`. The porter copies the contract it was
+given to `meta/rosetta_contract.yaml` in the dataset. Neither copy is read for
+decoding. The porter warns when the first bag's embedded contract differs from
+`--contract` after parsing, so comments and whitespace don't count.
 
-| Type | Auto dtype | Extracted fields |
-|------|---|------------------|
-| `sensor_msgs/msg/JointState` | `float64` | position, velocity, effort by joint name |
-| `sensor_msgs/msg/Image` | `video` | RGB uint8 array |
-| `sensor_msgs/msg/CompressedImage` | `video` | Decoded to RGB uint8 |
-| `geometry_msgs/msg/Twist` | `float64` | linear.xyz, angular.xyz |
-| `geometry_msgs/msg/TwistStamped` | `float64` | twist.linear.xyz, twist.angular.xyz |
-| `nav_msgs/msg/Odometry` | `float64` | pose, twist fields |
-| `sensor_msgs/msg/Joy` | `float32` | axes, buttons arrays |
-| `sensor_msgs/msg/Imu` | `float64` | orientation, angular_velocity, linear_acceleration |
-| `control_msgs/msg/MultiDOFCommand` | `float64` | values, values_dot by DOF name |
-| `trajectory_msgs/msg/JointTrajectory` | `float64` | first-point position/velocity/effort |
-| `std_msgs/msg/Float32`, `Float64`, `Int32`, `Int64` | matching | Scalar |
-| `std_msgs/msg/String`, `Bool` | `string`, `bool` | Text, boolean |
-| `std_msgs/msg/Float32MultiArray`, `Float64MultiArray`, `Int32MultiArray` | matching | Vector |
+Loading a contract imports every `decoder:` and `encoder:` module it names,
+so only load contracts you trust. A policy runner that resolves its contract
+through a checkpoint warns about each such path before loading.
 
-The dtype is auto-detected from the message type. Override it with the `dtype`
-field, which is required for a custom decoder, for a multi-source key whose
-sources have different natives, and in the extended sections. `video` is not a
-selectable dtype; declaring anything else on an image key is a load error.
+## Example contracts
 
-## Custom encoders and decoders
+The repository ships four under `contracts/`:
 
-Add support for a message type beyond the built-ins by writing a decoder (ROS →
-numpy) and, for actions, an encoder (numpy → ROS).
-
-```python
-from rosetta.frames.codecs import register_decoder, register_encoder
-
-@register_decoder("my_msgs/msg/MyCustomSensor", dtype="float64")
-def decode_my_sensor(msg, spec):        # spec.names holds the select list
-    return np.array([msg.field1, msg.field2], dtype=np.float64)
-
-@register_encoder("my_msgs/msg/MyCustomCommand")
-def encode_my_command(values, spec, stamp_ns=None):   # values already ran spec.operators
-    ...
-```
-
-Advertise the module under the `rosetta.codecs` entry-point group
-(`rosetta.operators` for operators) and Rosetta imports it at contract load, so
-the contract names the message type only. Registering a second codec for a
-covered type is an error.
-
-Alternatively point one source at a function by path:
-
-```yaml
-channel:
-  topic: /my_command
-  type: my_msgs/msg/MyCustomCommand
-  decoder: my_package.codecs:decode_my_command   # module:function, for reading bags
-  encoder: my_package.codecs:encode_my_command   # for publishing
-```
-
-The module must be importable. Paths are validated at contract load time.
-
-> **A contract is code-equivalent.** Loading a contract *imports* every named
-> `decoder:`/`encoder:` module and invokes those functions on robot message
-> data. Only load contracts you trust. This matters most for the policy runner's
-> sidecar fallback, which fetches `rosetta_contract.yaml` from a Hugging Face
-> Hub repo.
+| File | Shows |
+|---|---|
+| `so_101.yaml` | Three compressed cameras, JointState state and action, `rad2deg`. |
+| `so_101_hil.yaml` | The same plus `x-qos` anchors, teleop input, Joy events, a reward. |
+| `stone.yaml` | Every section, annotated. Multi-source state, `asof`, custom codecs, split action, `clamp` with `zeros`. |
+| `turtlebot3.yaml` | Two cameras, a 16-wide state from wheels, IMU and odometry, a TwistStamped action with `zeros`. |
