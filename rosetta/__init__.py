@@ -34,23 +34,6 @@ Framework adapters live in their own packages and register via entry points
 
 Usage::
 
-    from rosetta import Contract, load_contract, iter_observation_specs
+    from rosetta.contract.schema import load_contract
+    from rosetta.contract.specs import iter_observation_specs
 """
-
-from .contract.schema import Contract, load_contract, parse_contract
-from .contract.specs import (
-    ActionStreamSpec,
-    ObservationStreamSpec,
-    iter_action_specs,
-    iter_observation_specs,
-)
-
-__all__ = [
-    "ActionStreamSpec",
-    "Contract",
-    "ObservationStreamSpec",
-    "iter_action_specs",
-    "iter_observation_specs",
-    "load_contract",
-    "parse_contract",
-]
