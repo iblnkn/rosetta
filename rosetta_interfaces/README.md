@@ -11,11 +11,17 @@ actions, rewards) is plain ROS 2 topics defined by the contract YAML.
 | `RunPolicy` | action | `policy_runner` | Run policy (or classifier) inference |
 | `StartRecording` | service | `episode_recorder` | Lightweight start of recording |
 | `StartPolicy` | service | `policy_runner` | Lightweight start of policy inference |
+| `RecordEpisodeStatus`, `RecordEpisodeResult` | message | `episode_recorder` | `~/status` and `~/result` topics |
+| `RunPolicyStatus`, `RunPolicyResult` | message | `policy_runner` | `~/status` and `~/result` topics |
 
 The services exist because some clients (Foxglove, for one) can call services but
 not actions. They are thin proxies for the action operations they are named
 after, and they return immediately, per the ROS 2 design guidance that services
 "should never be used for longer running processes."
+
+Such clients also can't see action feedback or results, so each server
+publishes the same fields on a `~/status` topic while work runs and on a
+transient-local `~/result` topic when it ends, whatever started the work.
 
 Every action result reports **how** it ended, not whether it "succeeded":
 
