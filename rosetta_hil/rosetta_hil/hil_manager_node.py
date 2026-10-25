@@ -539,6 +539,8 @@ class HilManagerNode(RosettaLifecycleNode):
           end_success        end the episode, outcome success
           end_failure        end the episode, outcome failure
 
+        The four label events are ignored when no episode is running.
+
         Edge-triggered because each message reports every button's level, and
         acting on levels would let unpressed buttons undo pressed ones.
         """
@@ -562,6 +564,9 @@ class HilManagerNode(RosettaLifecycleNode):
 
         elif event_name == "start_episode":
             self._start_episode_from_button()
+
+        elif event_name in ("success", "failure", "end_success", "end_failure") and not self.busy:
+            self.get_logger().info(f"{event_name} ignored: no active episode")
 
         elif event_name in ("success", "failure"):
             reward_val = self._label_episode(event_name == "success")
@@ -722,7 +727,12 @@ class HilManagerNode(RosettaLifecycleNode):
         """Service: apply a human reward override. True = positive, False = negative.
 
         Labels the episode without ending it, like the success/failure buttons.
+        Refused when no episode is running.
         """
+        if not self.busy:
+            response.success = False
+            response.message = "No active episode"
+            return response
         reward_val = self._label_episode(request.data)
         self._publish_human_reward(reward_val)
         response.success = True
@@ -731,7 +741,14 @@ class HilManagerNode(RosettaLifecycleNode):
         return response
 
     def _on_clear_reward_override(self, _request, response: Trigger.Response) -> Trigger.Response:
-        """Service: release the human reward override, retracting the episode's label."""
+        """Service: release the human reward override, retracting the episode's label.
+
+        Refused when no episode is running.
+        """
+        if not self.busy:
+            response.success = False
+            response.message = "No active episode"
+            return response
         self._episode.clear_label()
         response.success = True
         response.message = "Reward override cleared"

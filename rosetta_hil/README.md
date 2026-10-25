@@ -101,15 +101,16 @@ episode to stop.
 | `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode. `true` labels success, `false` failure. The goal succeeds. |
 | `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. The goal ends `CANCELED`. |
 | `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
-| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. |
-| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | |
+| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. Refused with no active episode. |
+| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label. Refused with no active episode. |
 | `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Published at the feedback rate while an episode runs. |
 
 Teleop events from the contract are edge-triggered: an `is_intervention`
 press hands control to teleop and its release hands it back, `start_episode`
 starts an episode with `default_prompt`, `success` and `failure` set the
 label, and `end_success` and `end_failure` end the episode. A label holds
-until the other button, `~/clear_reward_override`, or the next episode.
+until the other button, `~/clear_reward_override`, or the next episode. The
+four label buttons are ignored when no episode is running.
 
 Result `termination_reason`: `stopped`, `timeout`, `reward_threshold`,
 `cancelled`, `node_deactivated`, `error`. `outcome`: `success`, `failure`,
