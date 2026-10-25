@@ -19,7 +19,7 @@ change without notice. `test/test_public_api.py` pins the list.
 | `rosetta.frames.protocols` | `FrameIO` | no |
 | `rosetta.policies` | `PolicyRunner`, `DatasetWriter`, their result types and loaders | no |
 | `rosetta.robots.ros2.rosetta_lifecycle_node` | `RosettaLifecycleNode`, `BridgeLifecycleNode` | yes |
-| `rosetta.robots.ros2.node_utils` | Termination reasons, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor` | yes |
+| `rosetta.robots.ros2.node_utils` | Termination reasons, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`/`RESULT_QOS` for `~/status` and `~/result` topics | yes |
 | `rosetta.robots.ros2.child_goals` | `send_goal`, `cancel_goal`, for running other action servers' goals from inside a node's work | yes |
 | `rosetta.robots.ros2.topic_bridge` | `TopicBridge` | yes |
 | `rosetta.robots.ros2.node_host` | `NodeHost` | yes |

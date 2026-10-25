@@ -30,17 +30,21 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
 
 from rosetta_interfaces.action import RecordEpisode, RunPolicy
 
 __all__ = [
+    "RESULT_QOS",
+    "STATUS_QOS",
     "TERMINATION_CANCELLED",
     "TERMINATION_COMPLETED",
     "TERMINATION_ERROR",
     "TERMINATION_NODE_DEACTIVATED",
     "TERMINATION_STOPPED",
     "TERMINATION_TIMEOUT",
+    "copy_fields",
     "finish_goal",
     "positive_rate_descriptor",
     "spin_lifecycle_node",
@@ -109,6 +113,25 @@ _ABORT_REASONS = frozenset(
 # =============================================================================
 # Goal termination
 # =============================================================================
+
+
+#: QoS for a node's ``~/status`` topic: progress while work runs.
+STATUS_QOS = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+
+#: QoS for a node's ``~/result`` topic: how the last work ended, kept for late
+#: subscribers (a client that connects after the work finished still gets it).
+RESULT_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+
+def copy_fields(src, dst):
+    """Set every field of message ``dst`` from the same-named field of ``src``; return ``dst``.
+
+    Turns a status into action feedback, or an action result into a result
+    message, without listing the fields twice.
+    """
+    for name in dst.get_fields_and_field_types():
+        setattr(dst, name, getattr(src, name))
+    return dst
 
 
 def finish_goal(goal_handle, result) -> None:
