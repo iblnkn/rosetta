@@ -35,7 +35,7 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
 from rclpy.signals import SignalHandlerOptions
 
-from rosetta_interfaces.action import ManageEpisode, RunPolicy
+from rosetta_interfaces.action import RecordEpisode, RunPolicy
 
 # =============================================================================
 # Parameter declaration
@@ -60,32 +60,21 @@ def positive_rate_descriptor(description: str) -> ParameterDescriptor:
 # =============================================================================
 
 # The .action files are the single source of these values: they are what
-# non-Python clients read, so defining them again here in Python would be two
-# places to keep in sync. Re-exported under short names because every node uses
-# them and ``ManageEpisode.Result.TERMINATION_NODE_DEACTIVATED`` does not read
-# well inline.
-#
-# ManageEpisode declares the widest reason set, so it is the natural home for
-# all but ``completed``, which only a policy run can produce.
-# test_termination_constants.py checks that each action declares every reason
-# its own server can produce.
+# non-Python clients read. Re-exported under short names because every node uses
+# them. RecordEpisode declares every shared reason; ``completed`` only a policy
+# run can produce. Apps built on rosetta declare their own extra reasons in
+# their own actions. test_termination_constants.py checks that each action
+# declares every reason its own server can produce.
 #
 # The goal's terminal GoalStatus is the coarse view -- SUCCEEDED when the work
 # reached a defined end, CANCELED when a client took it away, ABORTED when the
 # server stopped it. These values say which of those, exactly.
-TERMINATION_STOPPED = ManageEpisode.Result.TERMINATION_STOPPED
-TERMINATION_TIMEOUT = ManageEpisode.Result.TERMINATION_TIMEOUT
-TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
+TERMINATION_STOPPED = RecordEpisode.Result.TERMINATION_STOPPED
+TERMINATION_TIMEOUT = RecordEpisode.Result.TERMINATION_TIMEOUT
 TERMINATION_COMPLETED = RunPolicy.Result.TERMINATION_COMPLETED
-TERMINATION_CANCELLED = ManageEpisode.Result.TERMINATION_CANCELLED
-TERMINATION_NODE_DEACTIVATED = ManageEpisode.Result.TERMINATION_NODE_DEACTIVATED
-TERMINATION_ERROR = ManageEpisode.Result.TERMINATION_ERROR
-
-# The ``outcome`` value set (ManageEpisode only): whether the robot did the
-# task. Independent of how the episode ended.
-OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
-OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
-OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
+TERMINATION_CANCELLED = RecordEpisode.Result.TERMINATION_CANCELLED
+TERMINATION_NODE_DEACTIVATED = RecordEpisode.Result.TERMINATION_NODE_DEACTIVATED
+TERMINATION_ERROR = RecordEpisode.Result.TERMINATION_ERROR
 
 #: Reasons that must not report the work as having reached a defined end.
 #: Everything else succeeds.

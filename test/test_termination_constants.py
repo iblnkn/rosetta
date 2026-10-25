@@ -25,6 +25,7 @@ verdict is meaningful, and no result carries a ``success`` flag.
 
 import pytest
 
+from rosetta.robots.ros2.nodes import hil_manager_node as hil
 from rosetta.robots.ros2.nodes import node_utils
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 
@@ -47,7 +48,7 @@ PRODUCED = {
     ManageEpisode.Result: {
         node_utils.TERMINATION_STOPPED,
         node_utils.TERMINATION_TIMEOUT,
-        node_utils.TERMINATION_REWARD_THRESHOLD,
+        hil.TERMINATION_REWARD_THRESHOLD,
         node_utils.TERMINATION_CANCELLED,
         node_utils.TERMINATION_NODE_DEACTIVATED,
         node_utils.TERMINATION_ERROR,
@@ -67,8 +68,9 @@ def test_a_shared_reason_has_the_same_value_in_every_action(result_type):
     for name in dir(result_type):
         if not name.startswith(("TERMINATION_", "OUTCOME_")):
             continue
-        assert getattr(result_type, name) == getattr(node_utils, name), (
-            f"{result_type.__name__}.{name} disagrees with node_utils.{name}"
+        source = node_utils if hasattr(node_utils, name) else hil
+        assert getattr(result_type, name) == getattr(source, name), (
+            f"{result_type.__name__}.{name} disagrees with {source.__name__}.{name}"
         )
 
 
@@ -89,9 +91,9 @@ def test_recorder_and_policy_do_not_declare_an_outcome():
 
 def test_manage_episode_declares_the_full_outcome_vocabulary():
     assert _declared(ManageEpisode.Result, "OUTCOME_") == {
-        node_utils.OUTCOME_SUCCESS,
-        node_utils.OUTCOME_FAILURE,
-        node_utils.OUTCOME_UNLABELED,
+        hil.OUTCOME_SUCCESS,
+        hil.OUTCOME_FAILURE,
+        hil.OUTCOME_UNLABELED,
     }
 
 

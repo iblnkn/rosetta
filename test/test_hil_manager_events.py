@@ -31,15 +31,17 @@ import pytest
 from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
 
-from rosetta.robots.ros2.nodes.hil_manager_node import HilManagerNode
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.nodes.hil_manager_node import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
     OUTCOME_UNLABELED,
+    TERMINATION_REWARD_THRESHOLD,
+    HilManagerNode,
+)
+from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,
-    TERMINATION_REWARD_THRESHOLD,
     TERMINATION_STOPPED,
 )
 

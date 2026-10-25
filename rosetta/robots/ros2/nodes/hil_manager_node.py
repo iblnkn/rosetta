@@ -58,11 +58,7 @@ from rosetta.contract.specs import (
 from rosetta.frames.codecs import decode_value, encode_value
 from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.nodes.node_utils import (
-    OUTCOME_FAILURE,
-    OUTCOME_SUCCESS,
-    OUTCOME_UNLABELED,
     TERMINATION_ERROR,
-    TERMINATION_REWARD_THRESHOLD,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
     finish_goal,
@@ -74,6 +70,12 @@ from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 from rosetta_interfaces.srv import StartHILEpisode
+
+# HIL's own vocabulary, declared by ManageEpisode on top of the shared reasons.
+TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
+OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
+OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
+OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
 
 # ---------- Constants ----------
 

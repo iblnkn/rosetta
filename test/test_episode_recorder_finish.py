@@ -47,7 +47,6 @@ from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_COMPLETED,
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,
-    TERMINATION_REWARD_THRESHOLD,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
     finish_goal,
@@ -80,8 +79,8 @@ def _result(termination_reason, message=""):
     [
         TERMINATION_STOPPED,
         TERMINATION_TIMEOUT,
-        TERMINATION_REWARD_THRESHOLD,
         TERMINATION_COMPLETED,
+        "reward_threshold",  # an app's own reason (HIL declares this one) succeeds too
     ],
 )
 def test_work_that_reached_a_defined_end_succeeds(reason):
