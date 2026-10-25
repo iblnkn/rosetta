@@ -4,6 +4,10 @@ Changelog for package rosetta_hil
 
 Forthcoming
 -----------
+* Added ``~/status`` and ``~/result`` topics (``ManageEpisodeStatus``,
+  ``ManageEpisodeResult``): the action feedback and result fields for every
+  episode, including ones started by service or button. ``~/result`` is
+  transient-local.
 * ``hil_launch.py`` includes Rosetta's ``policy_runner_launch.py`` and
   ``episode_recorder_launch.py`` instead of declaring those nodes itself. Their
   settings come from ``params/robot_policy.yaml``, ``reward_classifier.yaml``

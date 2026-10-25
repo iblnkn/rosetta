@@ -21,6 +21,7 @@ them the same way, and add its own on top.
 from rosetta.robots.ros2 import node_utils
 from rosetta_hil import hil_episode
 from rosetta_hil_interfaces.action import ManageEpisode
+from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 
 PRODUCED = {
     node_utils.TERMINATION_STOPPED,
@@ -52,3 +53,9 @@ def test_outcome_vocabulary():
         hil_episode.OUTCOME_FAILURE,
         hil_episode.OUTCOME_UNLABELED,
     }
+
+
+def test_topic_messages_match_the_action():
+    """~/status and ~/result are what clients without the action see; they must not drift."""
+    assert ManageEpisodeStatus.get_fields_and_field_types() == ManageEpisode.Feedback.get_fields_and_field_types()
+    assert ManageEpisodeResult.get_fields_and_field_types() == ManageEpisode.Result.get_fields_and_field_types()

@@ -59,8 +59,11 @@ from rosetta.frames.codecs import decode_value, encode_value
 from rosetta.robots.ros2.child_goals import cancel_goal, send_goal
 from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.node_utils import (
+    RESULT_QOS,
+    STATUS_QOS,
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
+    copy_fields,
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
@@ -76,6 +79,7 @@ from rosetta_hil.hil_episode import (
     termination_reason,
 )
 from rosetta_hil_interfaces.action import ManageEpisode
+from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_hil_interfaces.srv import StartHILEpisode
 from rosetta_interfaces.action import RecordEpisode, RunPolicy
 
@@ -210,6 +214,8 @@ class HilManagerNode(RosettaLifecycleNode):
         self._reward_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
         self._teleop_feedback_publishers: dict[str, tuple] = {}  # origin topic -> (msg_cls, publisher)
         self._intervention_pub = None
+        self._status_pub = None
+        self._result_pub = None
         self._cancel_client = None
         self._episode_service = None
         self._end_service = None
@@ -369,6 +375,10 @@ class HilManagerNode(RosettaLifecycleNode):
         # hil_teacher mode) subscribes to this, so this node needs no
         # arm-specific service call.
         self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
+        # Feedback and result for every episode, including service and button
+        # starts, which have no action client to send them to.
+        self._status_pub = self.create_publisher(ManageEpisodeStatus, "~/status", STATUS_QOS)
+        self._result_pub = self.create_publisher(ManageEpisodeResult, "~/result", RESULT_QOS)
 
         # Services for callers that cannot use actions. Node-private (~/)
         # names, matching the episode recorder.
@@ -455,9 +465,11 @@ class HilManagerNode(RosettaLifecycleNode):
                 entity.destroy()
                 setattr(self, attr, None)
 
-        if self._intervention_pub is not None:
-            self.destroy_publisher(self._intervention_pub)
-            self._intervention_pub = None
+        for attr in ("_intervention_pub", "_status_pub", "_result_pub"):
+            publisher = getattr(self, attr)
+            if publisher is not None:
+                self.destroy_publisher(publisher)
+                setattr(self, attr, None)
 
         if self._cancel_client is not None:
             self.destroy_client(self._cancel_client)
@@ -883,6 +895,8 @@ class HilManagerNode(RosettaLifecycleNode):
             self._policy_goal_handle = None
             self._reward_goal_handle = None
             self._recorder_goal_handle = None
+            # Every exit, including the early failure returns above.
+            self._result_pub.publish(ManageEpisodeResult(**fields))
 
         self.get_logger().info(f"Episode finished: {fields['message']}")
         return fields
@@ -923,18 +937,19 @@ class HilManagerNode(RosettaLifecycleNode):
                 intervention_msg.data = 0 if source == Control.POLICY else 1
                 self._intervention_pub.publish(intervention_msg)
 
-            # Publish feedback (only available via action interface)
+            # outcome is the label so far. A reward-threshold end promotes an
+            # unlabeled episode to success only after the loop returns, so that
+            # never shows here.
+            status = ManageEpisodeStatus(
+                elapsed_s=elapsed,
+                current_reward=reward,
+                control_source=source,
+                outcome=outcome,
+                messages_written=self._recorder_messages_written,
+            )
+            self._status_pub.publish(status)
             if goal_handle is not None:
-                feedback = ManageEpisode.Feedback()
-                feedback.elapsed_s = elapsed
-                feedback.current_reward = reward
-                feedback.control_source = source
-                # The label so far. A reward-threshold end promotes an unlabeled
-                # episode to success only after the loop returns, so that never
-                # shows here.
-                feedback.outcome = outcome
-                feedback.messages_written = self._recorder_messages_written
-                goal_handle.publish_feedback(feedback)
+                goal_handle.publish_feedback(copy_fields(status, ManageEpisode.Feedback()))
 
         # Whoever set the stop event recorded why in stop_reason.
         return self.stop_reason or TERMINATION_STOPPED

@@ -66,7 +66,10 @@ ros2 service call /hil_manager/set_intervention std_srvs/srv/SetBool "{data: tru
 ros2 service call /hil_manager/end_episode std_srvs/srv/SetBool "{data: true}"
 ```
 
-The result reports `termination_reason` and `outcome` separately. Nothing
+The result reports `termination_reason` and `outcome` separately. An episode
+started through `~/start_episode` or the `start_episode` button has no action
+client, so follow it on `/hil_manager/status` and read how it ended on
+`/hil_manager/result`. Nothing
 here deletes a bag. For that, call the recorder's `delete_last_bag` service.
 
 To end on a reward, set `success_reward_threshold` on the goal. When the
@@ -106,6 +109,8 @@ episode to stop.
 | `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. Refused with no active episode. |
 | `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label. Refused with no active episode. |
 | `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Published at the feedback rate while an episode runs. |
+| `~/status` | topic `rosetta_hil_interfaces/msg/ManageEpisodeStatus` | The feedback fields, at the feedback rate while an episode runs, however it started. |
+| `~/result` | topic `rosetta_hil_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode. Transient-local, so a late subscriber gets the last one. |
 
 Teleop events from the contract are edge-triggered: an `is_intervention`
 press hands control to teleop and its release hands it back, `start_episode`

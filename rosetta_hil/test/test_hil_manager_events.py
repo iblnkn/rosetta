@@ -44,6 +44,7 @@ from rosetta_hil.hil_episode import (
     TERMINATION_REWARD_THRESHOLD,
 )
 from rosetta_hil.hil_manager_node import HilManagerNode
+from rosetta_hil_interfaces.msg import ManageEpisodeResult
 
 # events_spec.select maps event name -> Joy selector. Button layout:
 # 0=is_intervention, 1=end_success, 2=end_failure, 3=success, 4=failure, 5=start_episode.
@@ -63,9 +64,23 @@ def _joy(intervention=0, end_success=0, end_failure=0, success=0, failure=0, sta
     return SimpleNamespace(buttons=[intervention, end_success, end_failure, success, failure, start_episode])
 
 
+class FakePublisher:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, msg):
+        self.published.append(msg)
+
+
+def _with_fake_topics(node):
+    """Install the ~/status and ~/result publishers setup() would create, without a contract."""
+    node._status_pub, node._result_pub = FakePublisher(), FakePublisher()
+    return node
+
+
 @pytest.fixture
 def node(rclpy_ctx):
-    n = HilManagerNode()
+    n = _with_fake_topics(HilManagerNode())
     yield n
     n.destroy_node()
 
@@ -221,7 +236,7 @@ def test_start_episode_button_noop_when_node_inactive(node, monkeypatch):
 
 
 def test_manage_policy_lifecycle_false_skips_policy_send_and_cancel(rclpy_ctx, monkeypatch):
-    node = HilManagerNode(parameter_overrides=[Parameter("manage_policy_lifecycle", value=False)])
+    node = _with_fake_topics(HilManagerNode(parameter_overrides=[Parameter("manage_policy_lifecycle", value=False)]))
     try:
         calls = []
         monkeypatch.setattr(
@@ -453,3 +468,27 @@ def test_an_explicit_prompt_beats_the_node_default(node, monkeypatch):
 
     node._run_episode("open the drawer", 0.0, 0.0, threading.Event())
     assert seen and all(p == "open the drawer" for p in seen)
+
+
+# -------------------- ~/status and ~/result: visible without an action client --------------------
+
+
+def test_an_episode_publishes_the_result_it_returns(node, monkeypatch):
+    fields = _run_episode_with(node, monkeypatch, TERMINATION_REWARD_THRESHOLD, reward_threshold=1.0)
+    (published,) = node._result_pub.published
+    assert published == ManageEpisodeResult(**fields)
+
+
+def test_a_failed_start_still_publishes_its_result(node, monkeypatch):
+    monkeypatch.setattr(node, "_send_child_goal", lambda *a, **k: None)
+    monkeypatch.setattr(node, "_cancel_child", lambda *a, **k: None)
+    node._run_episode("t", 0.0, 0.0, threading.Event())
+    (published,) = node._result_pub.published
+    assert published.termination_reason == TERMINATION_ERROR
+
+
+def test_status_is_published_without_a_goal(node):
+    node.set_parameters([Parameter("feedback_rate_hz", value=200.0)])
+    assert node._feedback_loop(None, 0.05, 0.0, threading.Event()) == "timeout"
+    assert node._status_pub.published
+    assert all(s.control_source == "policy" for s in node._status_pub.published)
