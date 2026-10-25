@@ -49,12 +49,12 @@ from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 
-# Contract event names (rosetta.contract.model.TELEOP_EVENT_NAMES) mapped onto
+# Contract event names (rosetta.contract.schema.TELEOP_EVENT_NAMES) mapped onto
 # lerobot's TeleopEvents. The vocabularies differ: the contract's episode-ending
 # events compose two lerobot events (a reward label plus TERMINATE_EPISODE), and
 # ``start_episode`` has no lerobot counterpart at all (lerobot's record loop
-# starts episodes itself), so the rosetta-native path (hil_manager_node) is the
-# only consumer of that event.
+# starts episodes itself), so the rosetta-native path (rosetta_hil's HIL
+# manager) is the only consumer of that event.
 EVENT_NAME_TO_ENUMS: dict[str, tuple[TeleopEvents, ...]] = {
     "is_intervention": (TeleopEvents.IS_INTERVENTION,),
     "success": (TeleopEvents.SUCCESS,),
@@ -74,7 +74,7 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
 
     The base owns the bridge, the lifecycle callbacks, and the safety send on
     deactivate. That send is a no-op here because feedback carries no safety
-    behavior. This class extends ``_setup``/``_teardown`` with the events
+    behavior. This class extends ``setup``/``teardown`` with the events
     subscription and adds the sample/publish surface lerobot drives.
     """
 
@@ -88,12 +88,12 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
 
     # -------------------- lifecycle hooks --------------------
 
-    def _setup(self) -> None:
+    def setup(self) -> None:
         """Create the bridge entities, then the optional events subscription.
 
         ``events_spec`` is None when the contract declares no teleop events.
         """
-        super()._setup()
+        super().setup()
         events_spec = self._config.events_spec
         if events_spec:
             self._events_sub = self.create_subscription(
@@ -106,15 +106,15 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
             if unmapped:
                 self.get_logger().info(
                     f"Teleop events with no lerobot mapping, ignored on this path "
-                    f"(hil_manager_node handles them): {unmapped}"
+                    f"(a HIL app such as rosetta_hil handles them): {unmapped}"
                 )
         self.get_logger().info(
             f"Configured: {len(self._config.input_specs)} inputs, {len(self._config.feedback_specs)} feedback"
         )
 
-    def _teardown(self) -> None:
+    def teardown(self) -> None:
         """Destroy the events subscription and reset state so a reconnect starts clean."""
-        super()._teardown()
+        super().teardown()
         if self._events_sub is not None:
             self.destroy_subscription(self._events_sub)
             self._events_sub = None

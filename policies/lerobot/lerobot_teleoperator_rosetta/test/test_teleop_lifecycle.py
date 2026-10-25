@@ -66,6 +66,12 @@ def test_input_only_teleop_connects(teleop):
     assert not teleop._node.bridge._act_publishers  # genuinely input-only
 
 
+def test_connect_subscribes_to_the_contract_events(teleop):
+    # so_101_hil declares Joy events; the node's setup() override must run.
+    teleop.connect()
+    assert teleop._node._events_sub is not None
+
+
 def test_double_connect_raises(teleop):
     # lerobot device convention (and the robot adapter's behavior).
     teleop.connect()
