@@ -26,13 +26,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from lerobot_rosetta.dataset_writer import LeRobotDatasetWriter
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import (
     iter_action_specs,
     iter_observation_specs,
 )
+from rosetta.frames.codecs import discover_codecs
+
+discover_codecs()  # register the built-in codecs
 
 CONTRACT_YAML = """
 robot_type: smoke_bot

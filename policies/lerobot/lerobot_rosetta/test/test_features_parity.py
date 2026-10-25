@@ -35,13 +35,15 @@ import pytest
 from ament_index_python.packages import get_package_share_directory
 from lerobot.utils.feature_utils import hw_to_dataset_features
 
-import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register codecs
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
 from lerobot_rosetta.dataset_writer import build_lerobot_features
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import Align, Channel, Source, load_contract
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec, iter_action_specs, iter_observation_specs
+from rosetta.frames.codecs import discover_codecs
+
+discover_codecs()  # register the built-in codecs
 
 CONTRACTS = sorted((Path(get_package_share_directory("rosetta")) / "contracts").glob("*.yaml"))
 BOUNDARY_MARKERS = {"is_first", "is_last", "is_terminal"}
