@@ -59,15 +59,19 @@ from rosetta.robots.ros2.bag_topics import (
     qos_to_rosbag2,
 )
 from rosetta.robots.ros2.node_utils import (
+    RESULT_QOS,
+    STATUS_QOS,
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
+    copy_fields,
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
 )
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import RecordEpisode
+from rosetta_interfaces.msg import RecordEpisodeResult, RecordEpisodeStatus
 from rosetta_interfaces.srv import StartRecording
 
 # Regex patterns for topics excluded from auto-recording by default.
@@ -196,6 +200,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._cancel_service = None
         self._start_service = None
         self._delete_last_bag_service = None
+        self._status_pub = None
+        self._result_pub = None
 
         self._writer: rosbag2_py.SequentialWriter | None = None
         self._writer_lock = threading.Lock()
@@ -290,6 +296,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
+        # Feedback and result for every recording, including service starts,
+        # whose callers get no action feedback.
+        self._status_pub = self.create_publisher(RecordEpisodeStatus, "~/status", STATUS_QOS)
+        self._result_pub = self.create_publisher(RecordEpisodeResult, "~/result", RESULT_QOS)
+
         self.get_logger().info(f"Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}")
 
     def teardown(self) -> None:
@@ -318,6 +329,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             service = getattr(self, attr)
             if service is not None:
                 self.destroy_service(service)
+                setattr(self, attr, None)
+
+        for attr in ("_status_pub", "_result_pub"):
+            publisher = getattr(self, attr)
+            if publisher is not None:
+                self.destroy_publisher(publisher)
                 setattr(self, attr, None)
 
         self._contract = None
@@ -518,7 +535,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 discovered = self._open_writer(bag_dir)
                 writer_opened = True
 
-                feedback = RecordEpisode.Feedback() if goal_handle is not None else None
                 while not stop_event.wait(1.0 / feedback_rate):
                     elapsed = time.monotonic() - start
 
@@ -528,12 +544,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                         loop_reason = TERMINATION_TIMEOUT
                         break
 
+                    with self._writer_lock:
+                        msg_count = self._messages_written
+                    status = RecordEpisodeStatus(elapsed_s=elapsed, messages_written=msg_count)
+                    self._status_pub.publish(status)
                     if goal_handle is not None:
-                        with self._writer_lock:
-                            msg_count = self._messages_written
-                        feedback.elapsed_s = elapsed
-                        feedback.messages_written = msg_count
-                        goal_handle.publish_feedback(feedback)
+                        goal_handle.publish_feedback(copy_fields(status, RecordEpisode.Feedback()))
             except Exception as e:
                 self.get_logger().error(f"Recording error: {e}")
                 error = e
@@ -595,6 +611,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             # Terminal goal state. This thread owns the goal handle and is the
             # only place that transitions it; finish_goal uses only rcl-legal
             # transitions and reads the reason set just above.
+            self._result_pub.publish(copy_fields(result, RecordEpisodeResult()))
             if goal_handle is not None:
                 finish_goal(goal_handle, result)
             return result

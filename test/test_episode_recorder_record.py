@@ -90,6 +90,14 @@ class FakeGoalHandle:
             self._on_feedback()
 
 
+class FakePublisher:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, msg):
+        self.published.append(msg)
+
+
 class FakeRecorder:
     """Enough of EpisodeRecorderNode for _record to run unbound.
 
@@ -126,6 +134,8 @@ class FakeRecorder:
         self._topics = []
         self._contract_text = ""
         self._bag_lock = threading.Lock()
+        self._status_pub = FakePublisher()
+        self._result_pub = FakePublisher()
         self._active_bag = None
         self._discard_active = False
         self._last_bag_dir = None
@@ -407,3 +417,23 @@ def test_delete_with_no_bag_fails(tmp_path):
     response = _delete_last_bag(FakeRecorder(tmp_path))
     assert response.success is False
     assert response.message == "No bag to delete"
+
+
+def test_service_start_publishes_status_and_its_result(tmp_path):
+    """A service-started recording has no goal, so the topics are how a client follows it."""
+    fake = FakeRecorder(tmp_path, feedback_rate=200.0, max_duration=0.03)
+    fake._stop_event.clear()
+    result = _record(fake, "p")
+    assert fake._status_pub.published, "no status while recording"
+    assert all(s.messages_written == 7 for s in fake._status_pub.published)
+    (published,) = fake._result_pub.published
+    fields = ("termination_reason", "message", "bag_path", "messages_written")
+    assert [getattr(published, f) for f in fields] == [getattr(result, f) for f in fields]
+
+
+def test_failed_recording_still_publishes_its_result(tmp_path):
+    fake = FakeRecorder(tmp_path, open_error=RuntimeError("disk full"))
+    _record(fake, "p", FakeGoalHandle())
+    (published,) = fake._result_pub.published
+    assert published.termination_reason == TERMINATION_ERROR
+    assert "disk full" in published.message

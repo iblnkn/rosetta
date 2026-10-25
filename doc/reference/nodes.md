@@ -63,6 +63,8 @@ Launch arguments: `params_file`, `contract_path`, `bag_base_dir`,
 | `~/start_recording` | service `rosetta_interfaces/srv/StartRecording` |
 | `~/cancel_recording` | service `std_srvs/srv/Trigger` |
 | `~/delete_last_bag` | service `std_srvs/srv/Trigger`. Deletes the last bag, including a failed partial bag. During a recording, it deletes that recording once it ends. |
+| `~/status` | topic `rosetta_interfaces/msg/RecordEpisodeStatus`. The feedback fields, at `feedback_rate_hz` while recording, however it started. |
+| `~/result` | topic `rosetta_interfaces/msg/RecordEpisodeResult`. The result fields, once per recording. Transient-local, so a late subscriber gets the last one. |
 
 With the default namespace these are `/record_episode` and
 `/episode_recorder/...`.
