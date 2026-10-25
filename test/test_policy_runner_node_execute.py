@@ -81,12 +81,12 @@ class _FakeRunner:
         return SimpleNamespace(queue_depth=0, published_actions=0, status="ok")
 
     def request_stop(self):
-        """Called by _unblock_stop, which every _signal_stop runs."""
+        """Called by unblock_stop, which every signal_stop runs."""
 
 
 def _claim(node):
     node._accepting_work = True
-    assert node._try_claim_work() is None
+    assert node.try_claim_work() is None
 
 
 def test_execute_success_finishes_goal_and_releases_busy(node):
@@ -150,7 +150,7 @@ def test_execute_reports_the_recorded_stop_reason_over_the_runners_view(node, si
 
     node._runner = _FakeRunner(run=stopped)
     _claim(node)
-    node._signal_stop(signalled)
+    node.signal_stop(signalled)
     handle = _FakeHandle()
     handle.is_cancel_requested = signalled == TERMINATION_CANCELLED
 
@@ -163,7 +163,7 @@ def test_execute_reports_the_recorded_stop_reason_over_the_runners_view(node, si
 def test_unblock_stop_asks_the_runner_to_stop(node):
     stopped = []
     node._runner = SimpleNamespace(request_stop=lambda: stopped.append(True))
-    node._unblock_stop()
+    node.unblock_stop()
     assert stopped == [True]
 
 

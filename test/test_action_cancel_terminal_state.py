@@ -79,14 +79,14 @@ class _ProbeNode(RosettaLifecycleNode):
         self.mode = "wait"
         self.started = threading.Event()
 
-    def _setup(self):
+    def setup(self):
         self._server = ActionServer(
             self,
             RecordEpisode,
             ACTION_NAME,
             execute_callback=self._execute,
-            goal_callback=self._on_goal,
-            cancel_callback=self._on_cancel,
+            goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel,
             callback_group=self._cbg,
         )
         self._cancel_client = self.create_client(
@@ -95,7 +95,7 @@ class _ProbeNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
-    def _teardown(self):
+    def teardown(self):
         if self._server is not None:
             self._server.destroy()
             self._server = None
@@ -105,7 +105,7 @@ class _ProbeNode(RosettaLifecycleNode):
 
     def _execute(self, goal_handle):
         result = RecordEpisode.Result()
-        with self._goal_work(goal_handle) as stop_event:
+        with self.goal_work(goal_handle) as stop_event:
             self.started.set()
             if self.mode == "error":
                 result.termination_reason = TERMINATION_ERROR
@@ -144,7 +144,7 @@ def graph(rclpy_ctx):
     finally:
         # Release the execute callback first: a failed assertion must not leave
         # it holding an executor worker into the next test.
-        node._signal_stop(TERMINATION_TIMEOUT)
+        node.signal_stop(TERMINATION_TIMEOUT)
         client.destroy()
         executor.shutdown(timeout_sec=5.0)
         spin_thread.join(timeout=5.0)
@@ -179,7 +179,7 @@ def test_service_cancel_ends_canceled(graph):
     assert node.started.wait(5.0)
 
     # Exactly what ~/cancel_recording, ~/cancel_episode and ~/cancel_policy do.
-    node._cancel_current_work(node._cancel_client)
+    node.cancel_current_work(node._cancel_client)
 
     assert _terminal(goal_handle) == GoalStatus.STATUS_CANCELED
 
@@ -232,12 +232,12 @@ def test_deactivate_ends_aborted_naming_the_deactivate(graph):
 
 def test_cancel_with_no_goal_in_flight_is_harmless(graph):
     """The service-start path has no goal handle for a cancel request to match,
-    so _cancel_current_work signals the reason directly instead."""
+    so cancel_current_work signals the reason directly instead."""
     node, _client = graph
     node._accepting_work = True
-    assert node._try_claim_work() is None
+    assert node.try_claim_work() is None
     try:
-        node._cancel_current_work(node._cancel_client)
+        node.cancel_current_work(node._cancel_client)
         assert node.stop_reason == "cancelled"
     finally:
         node._busy = False

@@ -147,10 +147,10 @@ def test_end_failure_reward_distinct_from_neutral_baseline(node):
 
 def test_episode_goal_accept_is_mutually_exclusive(node):
     node._accepting_work = True
-    assert node._on_goal(None) == GoalResponse.ACCEPT
-    assert node._on_goal(None) == GoalResponse.REJECT
+    assert node.on_goal(None) == GoalResponse.ACCEPT
+    assert node.on_goal(None) == GoalResponse.REJECT
     node._busy = False
-    assert node._on_goal(None) == GoalResponse.ACCEPT
+    assert node.on_goal(None) == GoalResponse.ACCEPT
     node._busy = False
 
 
@@ -242,7 +242,7 @@ def test_manage_policy_lifecycle_true_sends_and_cancels_policy_by_default(node, 
 def _claimed(node):
     """Claim the work slot the way an accepted goal does, and hand back its event."""
     node._accepting_work = True
-    assert node._try_claim_work() is None
+    assert node.try_claim_work() is None
     return node._stop_event
 
 
@@ -252,7 +252,7 @@ def _claimed(node):
 )
 def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
     stop_event = _claimed(node)
-    node._signal_stop(reason)
+    node.signal_stop(reason)
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == reason
 
 

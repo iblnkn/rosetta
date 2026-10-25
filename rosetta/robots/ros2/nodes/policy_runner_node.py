@@ -136,7 +136,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             ),
         )
 
-        # State (resources created in _setup)
+        # State (resources created in setup)
         self._contract = None
         self._bridge: TopicBridge | None = None
         self._runner: PolicyRunner | None = None
@@ -150,7 +150,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
     # -------------------- Lifecycle hooks --------------------
 
-    def _setup(self) -> None:
+    def setup(self) -> None:
         """Load the contract, build the bridge, resolve the framework runner.
 
         Any failure raises. The base logs the traceback and routes through
@@ -193,7 +193,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
         # Assign self._runner before calling setup() on it: a setup() that
         # raises partway leaves a half-initialized runner that on_error's
-        # _teardown() must still reach in order to release it.
+        # teardown() must still reach in order to release it.
         framework = self.get_parameter("framework").value
         self._runner = load_policy_runner(framework)
         self._runner.setup(self, self._contract)
@@ -203,8 +203,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             RunPolicy,
             "run_policy",
             execute_callback=self._execute,
-            goal_callback=self._on_goal,
-            cancel_callback=self._on_cancel,
+            goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel,
             callback_group=self._cbg,
         )
 
@@ -235,8 +235,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
         self.get_logger().info(f"Configured: contract={contract_path}, framework={framework}")
 
-    def _teardown(self) -> None:
-        """Destroy everything _setup() created. Tolerates partial state."""
+    def teardown(self) -> None:
+        """Destroy everything setup() created. Tolerates partial state."""
         if self._action_server is not None:
             self._action_server.destroy()
             self._action_server = None
@@ -254,7 +254,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             self._bridge = None
         self._contract = None
 
-    def _unblock_stop(self) -> None:
+    def unblock_stop(self) -> None:
         """Also call the runner's ``request_stop()`` after the stop event is set.
 
         The event is the cooperative signal every control loop polls;
@@ -266,7 +266,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         if runner is not None:
             runner.request_stop()
 
-    def _send_safety_action(self) -> None:
+    def send_safety_action(self) -> None:
         bridge = self._bridge
         if bridge is not None:
             bridge.send_safety_action()
@@ -297,16 +297,16 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             already claimed, else True with "Policy started".
 
         """
-        return self._handle_start_service(response, self._run, (request.prompt or "",), what="policy run")
+        return self.handle_start_service(response, self._run, (request.prompt or "",), what="policy run")
 
     def _on_cancel_service(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Cancel the active policy run from a plain Trigger service call.
 
         Forwards to this server's own cancel service so the goal ends CANCELED,
         exactly as a `ros2 action` cancel would. See
-        :meth:`RosettaLifecycleNode._cancel_current_work`.
+        :meth:`RosettaLifecycleNode.cancel_current_work`.
         """
-        return self._handle_cancel_service(response, self._cancel_client, what="policy run")
+        return self.handle_cancel_service(response, self._cancel_client, what="policy run")
 
     def _execute(self, goal_handle) -> RunPolicy.Result:
         """Action-goal wrapper around the shared run loop."""
@@ -340,7 +340,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         source = "action" if goal_handle is not None else "service"
         self.get_logger().info(f"Starting ({source}): task={task!r} framework={self.get_parameter('framework').value}")
 
-        with self._goal_work(goal_handle) as stop_event:
+        with self.goal_work(goal_handle) as stop_event:
             feedback_stop = threading.Event()
             feedback_thread = None
             if goal_handle is not None:
@@ -353,13 +353,13 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
             # The run itself is one blocking call into the framework, so the
             # deadline is a timer rather than a loop check. Signalling names
-            # the reason and, via _unblock_stop, asks the runner to stop --
+            # the reason and, via unblock_stop, asks the runner to stop --
             # the same path a cancel takes.
             if max_duration <= 0.0:
                 max_duration = float(self.get_parameter("default_max_duration_s").value)
             deadline = None
             if max_duration > 0.0:
-                deadline = threading.Timer(max_duration, self._signal_stop, args=(TERMINATION_TIMEOUT,))
+                deadline = threading.Timer(max_duration, self.signal_stop, args=(TERMINATION_TIMEOUT,))
                 deadline.daemon = True
                 deadline.start()
 

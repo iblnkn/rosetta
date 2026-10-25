@@ -213,7 +213,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
     # -------------------- Lifecycle hooks --------------------
 
-    def _setup(self) -> None:
+    def setup(self) -> None:
         """Load the contract, create subscriptions, action server, and services.
 
         Every failure raises: the base logs the traceback and routes through
@@ -255,8 +255,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             RecordEpisode,
             "record_episode",
             execute_callback=self._execute,
-            goal_callback=self._on_goal,
-            cancel_callback=self._on_cancel,
+            goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel,
             callback_group=self._cbg,
         )
 
@@ -292,8 +292,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         self.get_logger().info(f"Configured: robot_type={self._contract.robot_type}, topics={len(self._topics)}")
 
-    def _teardown(self) -> None:
-        """Destroy everything _setup() created. Tolerates partial state.
+    def teardown(self) -> None:
+        """Destroy everything setup() created. Tolerates partial state.
 
         Closes any open writer first: on_shutdown reaches here even when a
         wedged recording outlived the base's bounded wait, and the bag must
@@ -410,22 +410,22 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 except Exception as e:
                     write_error = f"Write failed on {_topic}: {e}"
             if write_error is not None:
-                # Outside the writer lock: _signal_stop takes the work gate,
+                # Outside the writer lock: signal_stop takes the work gate,
                 # and the two locks are never held together.
                 self.get_logger().error(write_error)
-                self._signal_stop(TERMINATION_ERROR, write_error)
+                self.signal_stop(TERMINATION_ERROR, write_error)
 
         return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
 
     # ---------- Action callbacks ----------
 
     def _on_cancel_service(self, request, response):
-        """Cancel the active recording. See :meth:`RosettaLifecycleNode._cancel_current_work`."""
-        return self._handle_cancel_service(response, self._cancel_client, what="recording")
+        """Cancel the active recording. See :meth:`RosettaLifecycleNode.cancel_current_work`."""
+        return self.handle_cancel_service(response, self._cancel_client, what="recording")
 
     def _on_start_service(self, request, response):
         """Start a recording on a background thread, without the action protocol."""
-        return self._handle_start_service(response, self._record, (request.prompt or "",), what="recording")
+        return self.handle_start_service(response, self._record, (request.prompt or "",), what="recording")
 
     def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Delete the recording in progress when it ends, or else the last finished bag.
@@ -473,7 +473,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         publishing and the terminal goal transition; everything else is shared.
 
         The per-recording stop event and stop reason were armed at accept time
-        by _try_claim_work. They are deliberately not reset here: a cancel or
+        by try_claim_work. They are deliberately not reset here: a cancel or
         deactivate landing in the accept->execute window must not be lost.
 
         Args:
@@ -505,8 +505,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # asked for is recorded on the node instead (see the epilogue).
         loop_reason: str | None = None
 
-        # _goal_work binds the goal for cancel routing and releases the claim on every exit.
-        with self._goal_work(goal_handle) as stop_event:
+        # goal_work binds the goal for cancel routing and releases the claim on every exit.
+        with self.goal_work(goal_handle) as stop_event:
             start = time.monotonic()
             try:
                 if max_duration <= 0.0:
@@ -684,7 +684,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             if self._writer is not None:
                 self._writer.close()  # Explicitly close to finalize MCAP indices
             self._writer = None
-        # Atomic swap so two callers (record thread + _teardown) destroy disjoint sets.
+        # Atomic swap so two callers (record thread + teardown) destroy disjoint sets.
         episode_subs, self._episode_subs = self._episode_subs, {}
         for sub in episode_subs.values():
             self.destroy_subscription(sub)

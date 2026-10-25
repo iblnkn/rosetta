@@ -17,7 +17,7 @@
 - on_deactivate must stop the runner before sending the safety action, so the
   safety action is the robot's last command on the wire, not a stale policy
   action.
-- _on_goal must claim the node at accept time. Under the MultiThreadedExecutor
+- on_goal must claim the node at accept time. Under the MultiThreadedExecutor
   a check that _execute satisfies only later lets two goals both be accepted,
   running two policy loops against one runner/bridge.
 """
@@ -92,15 +92,15 @@ def test_safety_action_still_sent_when_goal_hangs(node):
 
 def test_goal_accept_is_mutually_exclusive(node):
     node._accepting_work = True
-    assert node._on_goal(None) == GoalResponse.ACCEPT
-    assert node._on_goal(None) == GoalResponse.REJECT  # busy until release
+    assert node.on_goal(None) == GoalResponse.ACCEPT
+    assert node.on_goal(None) == GoalResponse.REJECT  # busy until release
     node._busy = False
-    assert node._on_goal(None) == GoalResponse.ACCEPT
+    assert node.on_goal(None) == GoalResponse.ACCEPT
     node._busy = False
 
 
 def test_goal_rejected_before_activation(node):
-    assert node._on_goal(None) == GoalResponse.REJECT  # initial state: not accepting
+    assert node.on_goal(None) == GoalResponse.REJECT  # initial state: not accepting
     assert not node.busy  # a rejected goal claims nothing
 
 
@@ -108,25 +108,25 @@ def test_cancel_in_accept_to_execute_window_is_not_lost(node):
     # The stop event must exist from the moment a goal is accepted, and a
     # cancel landing before _execute binds the goal must still take effect:
     # the cancel callback skips signaling (no bound goal to route to), and
-    # _goal_work honors it by re-checking is_cancel_requested after binding.
+    # goal_work honors it by re-checking is_cancel_requested after binding.
     fakes = _OrderedFakes()
     node._runner = fakes.make_runner()
     node._accepting_work = True
 
-    assert node._on_goal(None) == GoalResponse.ACCEPT
+    assert node.on_goal(None) == GoalResponse.ACCEPT
     assert node._stop_event is not None and not node._stop_event.is_set()
 
     class Handle:
         goal_id = object()
         is_cancel_requested = True  # cancel accepted in the accept->bind window
 
-    assert node._on_cancel(Handle()) == CancelResponse.ACCEPT  # unrouted: no bound goal yet
+    assert node.on_cancel(Handle()) == CancelResponse.ACCEPT  # unrouted: no bound goal yet
     assert not node._stop_event.is_set()  # ...so the callback signals nothing
 
-    with node._goal_work(Handle()) as stop_event:
+    with node.goal_work(Handle()) as stop_event:
         assert stop_event.is_set()  # the bind-time re-check honored the cancel
     assert fakes.calls == ["request_stop"]
-    assert not node.busy  # released by _goal_work
+    assert not node.busy  # released by goal_work
 
 
 def test_stale_cancel_does_not_stop_next_goal(node):
@@ -141,15 +141,15 @@ def test_stale_cancel_does_not_stop_next_goal(node):
 
     goal_a, goal_b = Handle(), Handle()
 
-    assert node._on_goal(None) == GoalResponse.ACCEPT
-    with node._goal_work(goal_a):
+    assert node.on_goal(None) == GoalResponse.ACCEPT
+    with node.goal_work(goal_a):
         pass  # goal A runs and finishes
 
-    assert node._on_goal(None) == GoalResponse.ACCEPT  # goal B claims the slot
-    with node._goal_work(goal_b) as stop_b:
-        node._on_cancel(goal_a)  # stale cancel for A arrives late
+    assert node.on_goal(None) == GoalResponse.ACCEPT  # goal B claims the slot
+    with node.goal_work(goal_b) as stop_b:
+        node.on_cancel(goal_a)  # stale cancel for A arrives late
         assert not stop_b.is_set()  # B unaffected
-        node._on_cancel(goal_b)  # a cancel for the bound goal still works
+        node.on_cancel(goal_b)  # a cancel for the bound goal still works
         assert stop_b.is_set()
 
 

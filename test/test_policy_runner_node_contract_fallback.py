@@ -15,7 +15,7 @@
 """on_configure wiring of the contract fallback: with no contract_path, the
 node hands pretrained_name_or_path to find_contract_for_pretrained and fails
 the transition when the chase comes back empty. Failures are ERROR, not
-FAILURE: _setup() raises and the base routes through on_error so partial
+FAILURE: setup() raises and the base routes through on_error so partial
 construction is torn down. The chase itself is pure and covered in
 test_contract_fallback_chase.py."""
 

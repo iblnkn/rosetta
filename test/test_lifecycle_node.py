@@ -174,17 +174,17 @@ class _RecordingNode(RosettaLifecycleNode):
         super().__init__(name)
         self.calls: list[str] = []
 
-    def _setup(self):
+    def setup(self):
         self.calls.append("setup")
 
-    def _teardown(self):
+    def teardown(self):
         self.calls.append("teardown")
 
-    def _unblock_stop(self):
+    def unblock_stop(self):
         self.calls.append("unblock_stop")
-        super()._unblock_stop()
+        super().unblock_stop()
 
-    def _send_safety_action(self):
+    def send_safety_action(self):
         self.calls.append("safety")
 
 
@@ -197,7 +197,7 @@ def base_node(rclpy_ctx):
 
 def test_configure_failure_logs_and_recovers_via_on_error(rclpy_ctx):
     class BoomNode(_RecordingNode):
-        def _setup(self):
+        def setup(self):
             raise RuntimeError("setup boom")
 
     node = BoomNode("base_configure_boom")
@@ -222,7 +222,7 @@ def test_cleanup_refused_while_work_in_progress(base_node):
 def test_shutdown_from_active_stops_and_secures_before_teardown(base_node):
     assert base_node.trigger_configure() == TransitionCallbackReturn.SUCCESS
     assert base_node.trigger_activate() == TransitionCallbackReturn.SUCCESS
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
     # Work ends when told to stop, as a well-behaved goal would.
     stop_event = base_node._stop_event
     base_node.calls.clear()
@@ -232,7 +232,7 @@ def test_shutdown_from_active_stops_and_secures_before_teardown(base_node):
         stop_event.set()
         base_node._busy = False
 
-    base_node._unblock_stop = signal_and_release
+    base_node.unblock_stop = signal_and_release
     assert base_node.trigger_shutdown() == TransitionCallbackReturn.SUCCESS
     assert base_node.calls == ["unblock_stop", "safety", "teardown"]
 
@@ -246,21 +246,21 @@ def test_shutdown_teardown_runs_even_when_safety_send_raises(base_node):
         base_node.calls.append("safety")
         raise RuntimeError("encoder broke")
 
-    base_node._send_safety_action = safety_boom
+    base_node.send_safety_action = safety_boom
     assert base_node.on_shutdown(None) == TransitionCallbackReturn.ERROR  # failure surfaced
     assert "teardown" in base_node.calls  # ...but resources still released
 
 
 def test_goal_work_releases_and_unbinds_on_exception(base_node):
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
 
     class Handle:
         goal_id = object()
         is_cancel_requested = False
 
     with pytest.raises(RuntimeError, match="boom"):
-        with base_node._goal_work(Handle()):
+        with base_node.goal_work(Handle()):
             raise RuntimeError("boom")
     assert not base_node.busy  # a crashed execution can't brick the node
     assert base_node._active_goal is None
@@ -268,7 +268,7 @@ def test_goal_work_releases_and_unbinds_on_exception(base_node):
 
 def test_claim_and_stop_serialize_on_the_work_gate(base_node):
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
     claimed_event = base_node._stop_event
     assert claimed_event is not None and not claimed_event.is_set()
 
@@ -277,20 +277,20 @@ def test_claim_and_stop_serialize_on_the_work_gate(base_node):
     # The claim's event was set (the goal WILL see the stop), and acceptance
     # is closed: no new work can be claimed after deactivation began.
     assert claimed_event.is_set()
-    assert base_node._try_claim_work() is not None
+    assert base_node.try_claim_work() is not None
     base_node._busy = False
-    assert base_node._try_claim_work() is not None  # still inactive
+    assert base_node.try_claim_work() is not None  # still inactive
 
 
 def test_a_fresh_claim_clears_the_previous_stop_reason(base_node):
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
-    base_node._signal_stop(TERMINATION_CANCELLED, "user asked")
+    assert base_node.try_claim_work() is None
+    base_node.signal_stop(TERMINATION_CANCELLED, "user asked")
     assert base_node.stop_reason == TERMINATION_CANCELLED
     assert base_node.stop_detail == "user asked"
 
     base_node._busy = False  # work finished
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
     # A reason latched against the previous claim must never be read as the
     # reason THIS claim ended.
     assert base_node.stop_reason is None
@@ -302,16 +302,16 @@ def test_first_stop_reason_wins(base_node):
     # the last thing to notice. A failed bag write followed by the deactivate
     # it triggers must still read as an error.
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
-    base_node._signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
-    base_node._signal_stop(TERMINATION_NODE_DEACTIVATED)
+    assert base_node.try_claim_work() is None
+    base_node.signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
+    base_node.signal_stop(TERMINATION_NODE_DEACTIVATED)
     assert base_node.stop_reason == TERMINATION_ERROR
     assert base_node.stop_detail == "Write failed on /scan: boom"
 
 
 def test_deactivate_records_node_deactivated(base_node):
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
     base_node._stop_and_secure(wait_timeout=0.1)
     assert base_node.stop_reason == TERMINATION_NODE_DEACTIVATED
 
@@ -323,19 +323,19 @@ def test_routed_cancel_records_cancelled_and_a_stale_one_records_nothing(base_no
             self.is_cancel_requested = False
 
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
     live, stale = Handle(), Handle()
-    with base_node._goal_work(live):
+    with base_node.goal_work(live):
         # A cancel for a goal that already finished must not stop, or name,
         # the goal that replaced it.
-        base_node._on_cancel(stale)
+        base_node.on_cancel(stale)
         assert base_node.stop_reason is None
-        base_node._on_cancel(live)
+        base_node.on_cancel(live)
         assert base_node.stop_reason == TERMINATION_CANCELLED
 
 
 def test_unblock_stop_runs_outside_the_work_gate(base_node):
-    """The gate is not reentrant and _unblock_stop overrides call into foreign
+    """The gate is not reentrant and unblock_stop overrides call into foreign
     frameworks (runner.request_stop()). Holding the gate across one would stall
     every other claim on a framework's I/O."""
     observed: list[bool] = []
@@ -346,11 +346,11 @@ def test_unblock_stop_runs_outside_the_work_gate(base_node):
         if acquired:
             base_node._work_gate.release()
 
-    base_node._unblock_stop = probe
+    base_node.unblock_stop = probe
     base_node._accepting_work = True
-    assert base_node._try_claim_work() is None
+    assert base_node.try_claim_work() is None
 
-    base_node._signal_stop(TERMINATION_CANCELLED)
+    base_node.signal_stop(TERMINATION_CANCELLED)
     base_node._stop_and_secure(wait_timeout=0.1)
     assert observed and all(observed)
 
@@ -359,7 +359,7 @@ def test_concurrent_claims_admit_exactly_one_winner(base_node):
     # The goal-accept race the work gate exists to close: under a
     # MultiThreadedExecutor + ReentrantCallbackGroup, two goal requests could
     # both pass the busy check before either _execute ran, driving two loops
-    # against one runner/bridge. _try_claim_work's check-and-set under the gate
+    # against one runner/bridge. try_claim_work's check-and-set under the gate
     # must admit exactly one of a concurrent burst.
     base_node._accepting_work = True
     start = threading.Barrier(32)
@@ -367,7 +367,7 @@ def test_concurrent_claims_admit_exactly_one_winner(base_node):
 
     def worker():
         start.wait()
-        if base_node._try_claim_work() is None:
+        if base_node.try_claim_work() is None:
             wins.append(1)
 
     threads = [threading.Thread(target=worker) for _ in range(32)]

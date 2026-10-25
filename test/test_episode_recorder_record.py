@@ -94,17 +94,17 @@ class FakeRecorder:
     """Enough of EpisodeRecorderNode for _record to run unbound.
 
     Constructed pre-armed (busy claimed, stop event created, no stop reason),
-    exactly the state _try_claim_work leaves behind at accept time. The stop
+    exactly the state try_claim_work leaves behind at accept time. The stop
     event is pre-set by default so the record loop exits on its first wait;
     tests that need the loop to actually run clear it.
     """
 
     # The real work-guard machinery, unbound like _record below: the fake must
     # exercise the same release/bind and reason-latching semantics the node runs.
-    _goal_work = RosettaLifecycleNode._goal_work
-    _signal_stop = RosettaLifecycleNode._signal_stop
+    goal_work = RosettaLifecycleNode.goal_work
+    signal_stop = RosettaLifecycleNode.signal_stop
     _record_stop = RosettaLifecycleNode._record_stop
-    _unblock_stop = RosettaLifecycleNode._unblock_stop
+    unblock_stop = RosettaLifecycleNode.unblock_stop
     stop_reason = RosettaLifecycleNode.stop_reason
     stop_detail = RosettaLifecycleNode.stop_detail
     # Real, not stubbed: the goal id it derives lands in bag metadata, so a
@@ -112,7 +112,7 @@ class FakeRecorder:
     _goal_id_str = staticmethod(EpisodeRecorderNode._goal_id_str)
 
     def __init__(self, tmp_path, *, feedback_rate=50.0, max_duration=0.0, open_error=None, metadata_error=False):
-        self._busy = True  # claim held, as _try_claim_work leaves it at accept time
+        self._busy = True  # claim held, as try_claim_work leaves it at accept time
         self._work_gate = threading.Lock()
         self._active_goal = None
         self._stop_event = threading.Event()
@@ -252,7 +252,7 @@ def test_metadata_failure_fails_result_but_keeps_counts_and_bag(tmp_path):
 
 
 def test_action_cancel_finishes_canceled(tmp_path):
-    # What the base's _on_cancel does, including for the cancels that
+    # What the base's on_cancel does, including for the cancels that
     # ~/cancel_recording forwards to the action server's own cancel service.
     fake = FakeRecorder(tmp_path)
     fake._stop_reason = TERMINATION_CANCELLED
@@ -288,7 +288,7 @@ def test_bag_write_failure_aborts_with_error_reason(tmp_path):
     SUCCEEDS with a truncated bag.
     """
     fake = FakeRecorder(tmp_path)
-    fake._signal_stop(TERMINATION_ERROR, "Write failed on /camera/image: no space left on device")
+    fake.signal_stop(TERMINATION_ERROR, "Write failed on /camera/image: no space left on device")
     handle = FakeGoalHandle()
     result = _record(fake, "p", handle)
     assert handle.calls == ["abort"]
@@ -302,7 +302,7 @@ def test_signalled_error_beats_a_concurrent_timeout(tmp_path):
     """Precedence: a failed write in the same tick as a timeout is an error."""
     fake = FakeRecorder(tmp_path, max_duration=0.01)
     fake._stop_event.clear()  # let the loop actually run and hit its timeout
-    fake._signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
+    fake.signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
     handle = FakeGoalHandle()
     result = _record(fake, "p", handle)
     assert result.termination_reason == TERMINATION_ERROR
@@ -366,7 +366,7 @@ def test_stop_state_untouched_at_busy_release(tmp_path):
     claim's state."""
     fake = FakeRecorder(tmp_path)
     claimed_event = fake._stop_event
-    fake._signal_stop(TERMINATION_CANCELLED)
+    fake.signal_stop(TERMINATION_CANCELLED)
     _record(fake, "p")
     assert fake._busy is False
     assert fake._stop_event is claimed_event
@@ -383,7 +383,7 @@ def test_delete_during_recording_discards_it_when_it_ends(tmp_path):
 
     def delete_then_stop():
         responses.append(_delete_last_bag(fake))
-        fake._signal_stop(TERMINATION_CANCELLED)
+        fake.signal_stop(TERMINATION_CANCELLED)
 
     _record(fake, "p", FakeGoalHandle(on_feedback=delete_then_stop))
     assert responses[0].success is True

@@ -17,8 +17,8 @@
 :class:`RosettaLifecycleNode` owns the lifecycle transitions. It gives every
 rosetta node one discipline: fail-loud configure, one teardown path shared by
 cleanup/shutdown/error, and a work gate that keeps goal acceptance coherent
-with deactivation. Subclasses implement ``_setup()`` and ``_teardown()``, and
-where relevant extend ``_unblock_stop()`` and ``_send_safety_action()``. They
+with deactivation. Subclasses implement ``setup()`` and ``teardown()``, and
+where relevant extend ``unblock_stop()`` and ``send_safety_action()``. They
 never override the lifecycle callbacks themselves.
 
 :class:`BridgeLifecycleNode` adds :class:`TopicBridge` ownership for hosts
@@ -48,30 +48,36 @@ from rosetta.robots.ros2.topic_bridge import TopicBridge
 
 
 class RosettaLifecycleNode(Node):
-    """Lifecycle node base with one transition discipline for every rosetta node.
+    """Base class for lifecycle nodes built on rosetta.
 
-    Configure and teardown failures are surfaced as exceptions. ``_setup()``
-    raises, the base catches, logs the traceback, and returns ERROR so
-    ``on_error`` tears down whatever was partially built. The base logs
-    because rclpy swallows transition-callback exceptions silently, leaving no
-    other place for the traceback to surface.
+    **Override** (never the ``on_configure``/``on_deactivate``/... callbacks):
 
-    Work (a goal, a recording, an episode) is claimed via
-    :meth:`_try_claim_work`, usually through the default :meth:`_on_goal`, and
-    released by the :meth:`_goal_work` context manager wrapping its execution.
-    The claim and :meth:`_stop_and_secure` serialize on one lock, so every
-    accepted piece of work has a stop event that deactivation will set, and no
-    work is accepted after acceptance is closed. Action cancels are routed by
-    goal id (:meth:`_on_cancel`), so a stale cancel for a finished goal can
-    never stop the goal that replaced it.
+    - :meth:`setup`: create everything on configure. Raise on failure; the
+      base logs the traceback and returns ERROR so ``on_error`` runs
+      :meth:`teardown` on the partial state.
+    - :meth:`teardown`: destroy everything :meth:`setup` created, tolerating
+      partial state. Shared by cleanup, shutdown and error.
+    - :meth:`unblock_stop` (optional): wake work blocked in I/O after a stop.
+    - :meth:`send_safety_action` (optional): secure hardware after work stops.
 
-    Every stop signal names itself. :meth:`_signal_stop` records *why* work was
-    asked to stop alongside setting the event, and the work loop reports that
-    recorded reason instead of re-deriving the cause at terminal time. There is
-    one stop event but many stop causes (an action cancel, a cancel service, a
-    button, a deactivate, a failed write), and inferring which one fired was
-    how a deactivate came to be reported as a human stop and a failed bag write
-    came to be reported as a clean recording.
+    **Run one piece of work at a time** (a goal, a recording, an episode):
+
+    - Pass :meth:`on_goal` and :meth:`on_cancel` to your ``ActionServer``.
+      :meth:`on_goal` claims the work slot; :meth:`on_cancel` routes a cancel
+      by goal id, so a stale cancel never stops the goal that replaced it.
+    - Wrap execution in ``with self.goal_work(goal_handle) as stop_event:``.
+      It yields the stop event to poll and releases the slot on every exit.
+    - End the goal with :func:`node_utils.finish_goal`, reporting
+      :attr:`stop_reason` when set.
+    - For service-started work, :meth:`handle_start_service` claims the slot
+      and runs the work on a thread; :meth:`handle_cancel_service` cancels it.
+    - :meth:`signal_stop` asks the current work to stop and records why.
+      The first reason wins, and the work loop reports it rather than guessing.
+
+    Deactivate closes acceptance, stops in-progress work (waiting up to
+    :attr:`STOP_WORK_TIMEOUT_SEC`), then calls :meth:`send_safety_action`.
+    Hooks and helpers may be called from executor threads; the work-gate state
+    is guarded by one lock inside the base.
     """
 
     #: Bounded wait for in-progress work to end during deactivate/shutdown.
@@ -90,15 +96,15 @@ class RosettaLifecycleNode(Node):
         # Why the current claim was asked to stop, latched first-writer-wins by
         # _record_stop and cleared by the next claim. Deliberately the same
         # lifetime as _stop_event: the signal and the reason for it are one
-        # thing, so one look at _try_claim_work tells you the reason belongs to
+        # thing, so one look at try_claim_work tells you the reason belongs to
         # this claim and no other.
         self._stop_reason: str | None = None
         self._stop_detail: str = ""
-        self._active_goal = None  # bound by _goal_work for cancel routing
+        self._active_goal = None  # bound by goal_work for cancel routing
 
     # -------------------- Subclass hooks --------------------
 
-    def _setup(self) -> None:
+    def setup(self) -> None:
         """Create all resources on configure.
 
         :raises Exception: on any failure. The base catches it and routes to
@@ -107,8 +113,8 @@ class RosettaLifecycleNode(Node):
         """
         raise NotImplementedError
 
-    def _teardown(self) -> None:
-        """Destroy everything ``_setup()`` created.
+    def teardown(self) -> None:
+        """Destroy everything ``setup()`` created.
 
         Must tolerate partial state, since ``on_error`` calls it after a
         configure that raised partway through, and cleanup/shutdown/error all
@@ -116,7 +122,7 @@ class RosettaLifecycleNode(Node):
         """
         raise NotImplementedError
 
-    def _signal_stop(self, reason: str, detail: str = "") -> None:
+    def signal_stop(self, reason: str, detail: str = "") -> None:
         """Ask in-progress work to stop, recording why.
 
         The recorded reason is what the work loop reports at terminal time;
@@ -131,16 +137,16 @@ class RosettaLifecycleNode(Node):
         """
         with self._work_gate:
             self._record_stop(reason, detail)
-        self._unblock_stop()
+        self.unblock_stop()
 
     def _record_stop(self, reason: str, detail: str = "") -> None:
         """Latch the stop reason and set the stop event. Caller holds the gate.
 
         Only the two base paths that already hold :attr:`_work_gate` call this
-        directly (:meth:`_on_cancel`, :meth:`_stop_and_secure`); they pair it
-        with :meth:`_unblock_stop` after releasing. Everyone else calls
-        :meth:`_signal_stop`. The gate is not reentrant, and those two paths
-        must not release it mid-decision -- ``_on_cancel`` releasing between the
+        directly (:meth:`on_cancel`, :meth:`_stop_and_secure`); they pair it
+        with :meth:`unblock_stop` after releasing. Everyone else calls
+        :meth:`signal_stop`. The gate is not reentrant, and those two paths
+        must not release it mid-decision -- ``on_cancel`` releasing between the
         goal-id match and the signal would reopen the stale-cancel race the
         routing exists to close.
         """
@@ -151,7 +157,7 @@ class RosettaLifecycleNode(Node):
         if ev is not None:
             ev.set()
 
-    def _unblock_stop(self) -> None:
+    def unblock_stop(self) -> None:
         """Best-effort nudge for work blocked in I/O, after the stop event is set.
 
         No-op by default. Extend to add a further stop signal such as
@@ -161,7 +167,7 @@ class RosettaLifecycleNode(Node):
         with no work active.
         """
 
-    def _send_safety_action(self) -> None:
+    def send_safety_action(self) -> None:
         """Secure the robot after work has stopped.
 
         No-op unless the node commands hardware. See
@@ -170,7 +176,7 @@ class RosettaLifecycleNode(Node):
 
     # -------------------- Work gate --------------------
 
-    def _try_claim_work(self) -> str | None:
+    def try_claim_work(self) -> str | None:
         """Claim the single work slot under the gate, all-or-nothing.
 
         Checks acceptance, claims ``_busy``, and arms a fresh stop event as one
@@ -178,7 +184,7 @@ class RosettaLifecycleNode(Node):
 
         A fresh event is armed per claim and never cleared or nulled. That is
         what makes a cancel or deactivate landing in the accept->start window
-        reliable. There is always an event for :meth:`_signal_stop` to set, and
+        reliable. There is always an event for :meth:`signal_stop` to set, and
         a stale set event from finished work can never leak into new work.
 
         :returns: None on success, otherwise the rejection reason. Handlers put
@@ -199,27 +205,27 @@ class RosettaLifecycleNode(Node):
             self._stop_detail = ""
             return None
 
-    def _on_goal(self, _goal_request) -> GoalResponse:
+    def on_goal(self, _goal_request) -> GoalResponse:
         """Default action goal callback. Accept only if the work slot is claimable.
 
         :param _goal_request: the incoming goal, unused (acceptance depends on
             the work slot, not on goal contents).
-        :returns: ACCEPT when :meth:`_try_claim_work` succeeds, else REJECT.
+        :returns: ACCEPT when :meth:`try_claim_work` succeeds, else REJECT.
         """
-        reason = self._try_claim_work()
+        reason = self.try_claim_work()
         if reason is not None:
             self.get_logger().warning(f"Goal rejected: {reason}")
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
-    def _on_cancel(self, goal_handle) -> CancelResponse:
+    def on_cancel(self, goal_handle) -> CancelResponse:
         """Default action cancel callback. Stop work only if the cancel targets the bound goal.
 
         The cancel is routed by goal id. Under the reentrant callback group a
         cancel for goal A can run after A finished and goal B claimed the slot.
-        An unconditional ``_signal_stop()`` would then kill B, which is the
+        An unconditional ``signal_stop()`` would then kill B, which is the
         stale-cancel race. A cancel landing in the accept->bind window finds no
-        bound goal and skips the signal here; :meth:`_goal_work` re-checks
+        bound goal and skips the signal here; :meth:`goal_work` re-checks
         ``is_cancel_requested`` after binding, which closes that window.
 
         This is the one place a cancel reason is recorded, and it covers the
@@ -235,17 +241,17 @@ class RosettaLifecycleNode(Node):
             routed = active is not None and goal_handle.goal_id == active.goal_id
             if routed:
                 self._record_stop(TERMINATION_CANCELLED)
-        # Outside the gate: an _unblock_stop override may block on framework I/O.
+        # Outside the gate: an unblock_stop override may block on framework I/O.
         if routed:
-            self._unblock_stop()
+            self.unblock_stop()
         return CancelResponse.ACCEPT
 
     @contextmanager
-    def _goal_work(self, goal_handle):
+    def goal_work(self, goal_handle):
         """Bind claimed work for cancel routing, yield its stop event, release on exit.
 
         Wraps the execution of work already claimed via
-        :meth:`_try_claim_work`. Releasing ``_busy`` in the ``finally`` on every
+        :meth:`try_claim_work`. Releasing ``_busy`` in the ``finally`` on every
         exit path, including exceptions, is what keeps a crashed execution from
         rejecting all subsequent work until restart.
 
@@ -259,7 +265,7 @@ class RosettaLifecycleNode(Node):
         # A cancel accepted in the accept->bind window found _active_goal
         # unbound and skipped the signal. Re-check and honor it now.
         if goal_handle is not None and goal_handle.is_cancel_requested:
-            self._signal_stop(TERMINATION_CANCELLED)
+            self.signal_stop(TERMINATION_CANCELLED)
         try:
             yield stop_event
         finally:
@@ -267,7 +273,7 @@ class RosettaLifecycleNode(Node):
                 self._active_goal = None
                 self._busy = False
 
-    def _cancel_current_work(self, cancel_client) -> None:
+    def cancel_current_work(self, cancel_client) -> None:
         """Cancel in-progress work on behalf of a service caller.
 
         The cancel services exist so clients that can call services but not
@@ -291,7 +297,7 @@ class RosettaLifecycleNode(Node):
         if has_goal:
             request_cancel_all(cancel_client, warn=self.get_logger().warning)
         else:
-            self._signal_stop(TERMINATION_CANCELLED)
+            self.signal_stop(TERMINATION_CANCELLED)
 
     # -------------------- Service proxies for action operations --------------------
     # Every node exposes ~/start_* and ~/cancel_* services so clients that can
@@ -299,7 +305,7 @@ class RosettaLifecycleNode(Node):
     # the control plane. The three nodes' handlers differ only in what noun they
     # put in the message and what work they start, so the bodies live here.
 
-    def _handle_start_service(self, response, target, args: tuple, *, what: str):
+    def handle_start_service(self, response, target, args: tuple, *, what: str):
         """Claim the work slot and run ``target`` on a background thread.
 
         The service returns as soon as the work is *started*, never when it
@@ -313,7 +319,7 @@ class RosettaLifecycleNode(Node):
         :param what: lowercase noun for the message ("recording", "episode").
         :returns: the response, so handlers can ``return`` this directly.
         """
-        reason = self._try_claim_work()
+        reason = self.try_claim_work()
         if reason is not None:
             response.accepted = False
             response.message = f"Rejected: {reason}"
@@ -325,7 +331,7 @@ class RosettaLifecycleNode(Node):
         response.message = f"{what.capitalize()} started"
         return response
 
-    def _handle_cancel_service(self, response, cancel_client, *, what: str):
+    def handle_cancel_service(self, response, cancel_client, *, what: str):
         """Cancel in-progress work for a plain ``Trigger`` caller.
 
         Reports success False when nothing is running, so a caller can tell
@@ -343,7 +349,7 @@ class RosettaLifecycleNode(Node):
             return response
 
         self.get_logger().info(f"Cancel requested via service: stopping {what}")
-        self._cancel_current_work(cancel_client)
+        self.cancel_current_work(cancel_client)
         response.success = True
         response.message = "Cancel requested"
         return response
@@ -365,25 +371,25 @@ class RosettaLifecycleNode(Node):
         with self._work_gate:
             self._accepting_work = False
             self._record_stop(TERMINATION_NODE_DEACTIVATED)
-        self._unblock_stop()
+        self.unblock_stop()
         if not wait_until(lambda: not self.busy, timeout=wait_timeout):
             self.get_logger().warning(f"Work did not stop within {wait_timeout:.1f}s; sending safety action anyway")
-        self._send_safety_action()
+        self.send_safety_action()
 
     # -------------------- Lifecycle callbacks (final) --------------------
 
     def on_configure(self, _state: State) -> TransitionCallbackReturn:
-        """Build resources via ``_setup()``. Route any failure to ``on_error``.
+        """Build resources via ``setup()``. Route any failure to ``on_error``.
 
-        :returns: SUCCESS if ``_setup()`` completed, else ERROR.
+        :returns: SUCCESS if ``setup()`` completed, else ERROR.
         """
         try:
-            self._setup()
+            self.setup()
         except Exception:
             # rclpy swallows exceptions raised from transition callbacks and
             # just returns ERROR with no log, so this is the only place the
             # traceback can surface. ERROR routes through on_error, which tears
-            # down whatever _setup() partially built.
+            # down whatever setup() partially built.
             self.get_logger().error(f"Configure failed:\n{traceback.format_exc()}")
             return TransitionCallbackReturn.ERROR
         return TransitionCallbackReturn.SUCCESS
@@ -419,7 +425,7 @@ class RosettaLifecycleNode(Node):
 
         :returns: FAILURE if work is still in progress (tearing down under live
             work is a bug to surface, not to work around), ERROR if
-            ``_teardown()`` raised, else SUCCESS.
+            ``teardown()`` raised, else SUCCESS.
         """
         if self.busy:
             # Never yank resources out from under live work. A goal that
@@ -428,7 +434,7 @@ class RosettaLifecycleNode(Node):
             self.get_logger().error("Cleanup refused: work still in progress")
             return TransitionCallbackReturn.FAILURE
         try:
-            self._teardown()
+            self.teardown()
         except Exception:
             self.get_logger().error(f"Cleanup failed:\n{traceback.format_exc()}")
             return TransitionCallbackReturn.ERROR
@@ -438,7 +444,7 @@ class RosettaLifecycleNode(Node):
         """Secure then tear down, tolerating a shutdown straight from active.
 
         The two steps fail independently on purpose. The process is dying, and
-        ``_teardown()`` must still release external resources (for example a
+        ``teardown()`` must still release external resources (for example a
         policy-server subprocess) even when the safety send itself is what
         broke.
 
@@ -453,7 +459,7 @@ class RosettaLifecycleNode(Node):
             self.get_logger().error(f"Stop/secure failed during shutdown:\n{traceback.format_exc()}")
             result = TransitionCallbackReturn.ERROR
         try:
-            self._teardown()
+            self.teardown()
         except Exception:
             self.get_logger().error(f"Shutdown teardown failed:\n{traceback.format_exc()}")
             result = TransitionCallbackReturn.ERROR
@@ -468,7 +474,7 @@ class RosettaLifecycleNode(Node):
         entities may have leaked is not safely reconfigurable, so a failed
         teardown returns FAILURE rather than pretending recovery succeeded.
 
-        :returns: SUCCESS when ``_teardown()`` succeeded (node recoverable to
+        :returns: SUCCESS when ``teardown()`` succeeded (node recoverable to
             unconfigured), FAILURE when it raised (node finalized).
         """
         self.get_logger().error(f"Error in state '{state.label}', tearing down")
@@ -479,7 +485,7 @@ class RosettaLifecycleNode(Node):
             # teardown that makes the node recoverable.
             self.get_logger().error(f"Stop/secure failed during error handling:\n{traceback.format_exc()}")
         try:
-            self._teardown()
+            self.teardown()
         except Exception:
             self.get_logger().error(f"Teardown failed during error handling:\n{traceback.format_exc()}")
             return TransitionCallbackReturn.FAILURE
@@ -492,7 +498,7 @@ class RosettaLifecycleNode(Node):
         """True while a claimed piece of work is in progress.
 
         Reads ``_busy`` under the work gate, so it never races the claim or
-        release in :meth:`_try_claim_work` and :meth:`_goal_work`. Callers must
+        release in :meth:`try_claim_work` and :meth:`goal_work`. Callers must
         not already hold the gate, since the lock is not reentrant. The internal
         claim/release paths touch ``self._busy`` directly instead.
         """
@@ -530,8 +536,8 @@ class BridgeLifecycleNode(RosettaLifecycleNode):
 
     For hosts whose specs are known at construction time, meaning the framework
     adapter packages (for example ``lerobot_robot_rosetta.Rosetta``). Adapters
-    that host extra ROS entities subclass this and extend the ``_setup()`` and
-    ``_teardown()`` hooks via ``super()`` (see the teleoperator adapter).
+    that host extra ROS entities subclass this and extend the ``setup()`` and
+    ``teardown()`` hooks via ``super()`` (see the teleoperator adapter).
     """
 
     def __init__(
@@ -545,14 +551,14 @@ class BridgeLifecycleNode(RosettaLifecycleNode):
         super().__init__(node_name, **kwargs)
         self.bridge = TopicBridge(observation_specs, action_specs, fps)
 
-    def _setup(self) -> None:
+    def setup(self) -> None:
         """Create the bridge's ROS entities on configure. Subclasses extend via super()."""
         self.bridge.setup(self)
 
-    def _teardown(self) -> None:
+    def teardown(self) -> None:
         """Destroy the bridge's ROS entities. Subclasses extend via super()."""
         self.bridge.teardown()
 
-    def _send_safety_action(self) -> None:
+    def send_safety_action(self) -> None:
         """Publish the bridge's safety action, which also disarms its watchdog."""
         self.bridge.send_safety_action()
