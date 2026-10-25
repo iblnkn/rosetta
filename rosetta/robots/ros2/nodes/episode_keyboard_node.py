@@ -53,23 +53,8 @@ import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
+from rosetta.robots.ros2.nodes.episode_keys import KeyDecoder, PromptEditor
 from rosetta_interfaces.srv import StartRecording
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Key codes
-# ─────────────────────────────────────────────────────────────────────────────
-_ESC = 27
-_BACKSPACE_1 = 127  # most terminals
-_BACKSPACE_2 = 8  # Ctrl-H / some terminals
-_ENTER_1 = 13  # CR
-_ENTER_2 = 10  # LF
-_ARROW_RIGHT = ord("C")  # ESC [ C
-_ARROW_LEFT = ord("D")  # ESC [ D
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Terminal raw-mode helper
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class RawTerminal:
@@ -122,11 +107,6 @@ class RawTerminal:
         return os.read(sys.stdin.fileno(), 64)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ROS 2 node
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class EpisodeKeyboardNode(Node):
     """Keyboard controller that drives the Rosetta episode recorder via services."""
 
@@ -149,22 +129,22 @@ class EpisodeKeyboardNode(Node):
         self._service_pending: bool = False
         self._rec_start: float | None = None
 
-        # Task prompt inline editor state
-        self._editing_task: bool = False
-        self._task_buffer: str = ""
-
-        # ESC sequence state machine (0=none, 1=got ESC, 2=got ESC[)
-        self._esc_state: int = 0
+        self._keys = KeyDecoder()
+        self._editor = PromptEditor()
+        self._commands = {
+            "start": self._handle_start,
+            "stop": self._handle_stop,
+            "discard": self._handle_discard,
+            "edit": self._begin_task_edit,
+            "help": self._print_help,
+            "quit": self._handle_quit,
+        }
 
         # Timers
         self._key_timer = self.create_timer(0.02, self._poll_keyboard)  # 50 Hz
         self._display_timer = self.create_timer(0.25, self._update_display)  # 4 Hz
 
         self._print_help()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Display helpers
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _print_help(self) -> None:
         prompt_line = f'  Current prompt: "{self._current_prompt}"' if self._current_prompt else ""
@@ -194,7 +174,7 @@ class EpisodeKeyboardNode(Node):
 
     def _update_display(self) -> None:
         """Refresh the recording timer on the current line (4 Hz)."""
-        if not self._recording or self._editing_task or self._rec_start is None:
+        if not self._recording or self._editor.active or self._rec_start is None:
             return
         elapsed = time.monotonic() - self._rec_start
         mm = int(elapsed) // 60
@@ -205,99 +185,50 @@ class EpisodeKeyboardNode(Node):
         sys.stdout.write(f"\r\033[K  \U0001f534 REC  [{label}]  {mm:02d}:{ss:02d}  ")
         sys.stdout.flush()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Keyboard polling
-    # ─────────────────────────────────────────────────────────────────────────
-
     def _poll_keyboard(self) -> None:
         for ch in self._term.read_bytes():
             self._process_byte(ch)
 
     def _process_byte(self, ch: int) -> None:
-        # Task edit mode intercepts all keystrokes
-        if self._editing_task:
-            self._handle_task_input(ch)
+        if self._editor.active:
+            self._edit_prompt(ch)
             return
-
-        # ESC sequence state machine for arrow keys (ESC [ C / ESC [ D)
-        if self._esc_state == 0:
-            if ch == _ESC:
-                self._esc_state = 1
-                return
-        elif self._esc_state == 1:
-            if ch == ord("["):
-                self._esc_state = 2
-                return
-            self._esc_state = 0
-            # Fall through to handle the byte as a regular key
-        elif self._esc_state == 2:
-            self._esc_state = 0
-            if ch == _ARROW_RIGHT:
-                self._handle_start()
-            elif ch == _ARROW_LEFT:
-                self._handle_stop()
-            return
-
-        # Single-character keys
-        if ch in (ord("r"), ord("R")):
-            self._handle_start()
-        elif ch in (ord("s"), ord("S")):
-            self._handle_stop()
-        elif ch in (ord("d"), ord("D"), _BACKSPACE_1, _BACKSPACE_2):
-            self._handle_discard()
-        elif ch in (ord("t"), ord("T")):
-            self._begin_task_edit()
-        elif ch in (ord("h"), ord("H"), ord("?")):
-            self._print_help()
-        elif ch in (ord("q"), ord("Q")):
-            self._handle_quit()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Task prompt inline editor
-    # ─────────────────────────────────────────────────────────────────────────
+        command = self._keys.feed(ch)
+        if command is not None:
+            self._commands[command]()
 
     def _begin_task_edit(self) -> None:
         if self._service_pending:
-            return self._msg("⏳ Service call in progress, please wait...")
-        self._editing_task = True
-        self._task_buffer = self._current_prompt
+            self._msg("⏳ Service call in progress, please wait...")
+            return
+        self._editor.begin(self._current_prompt)
         self._msg("📝 Edit task prompt (Enter=apply, Esc=cancel):")
         self._redraw_task_prompt()
-        return None
 
-    def _handle_task_input(self, ch: int) -> None:
-        if ch == _ESC:
-            self._editing_task = False
-            self._task_buffer = ""
+    def _edit_prompt(self, ch: int) -> None:
+        outcome = self._editor.feed(ch)
+        if outcome == "cancelled":
             self._msg("✗  Task edit cancelled")
-        elif ch in (_ENTER_1, _ENTER_2):
-            self._editing_task = False
-            self._current_prompt = self._task_buffer
-            self._task_buffer = ""
+        elif outcome == "applied":
+            self._current_prompt = self._editor.text
             self._msg(f'✅ Task prompt → "{self._current_prompt}"')
-        elif ch in (_BACKSPACE_1, _BACKSPACE_2):
-            if self._task_buffer:
-                self._task_buffer = self._task_buffer[:-1]
-            self._redraw_task_prompt()
-        elif 32 <= ch < 127:  # printable ASCII
-            self._task_buffer += chr(ch)
+        else:
             self._redraw_task_prompt()
 
     def _redraw_task_prompt(self) -> None:
-        sys.stdout.write(f"\r\033[KTask> {self._task_buffer}")
+        sys.stdout.write(f"\r\033[KTask> {self._editor.text}")
         sys.stdout.flush()
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Action handlers
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _handle_start(self) -> None:
         if self._service_pending:
-            return self._msg("⏳ Service call in progress, please wait...")
+            self._msg("⏳ Service call in progress, please wait...")
+            return
         if self._recording:
-            return self._msg("⚠  Already recording — stop or discard first")
+            self._msg("⚠  Already recording — stop or discard first")
+            return
         if not self._start_client.service_is_ready():
-            return self._msg("✗  start_recording service not available — is the recorder running?")
+            self._msg("✗  start_recording service not available — is the recorder running?")
+            return
         prompt = self._current_prompt
         self._msg(f'▶  Starting recording... (prompt: "{prompt}")')
         self._service_pending = True
@@ -305,7 +236,6 @@ class EpisodeKeyboardNode(Node):
         req.prompt = prompt
         future = self._start_client.call_async(req)
         future.add_done_callback(self._on_start_done)
-        return None
 
     def _on_start_done(self, future) -> None:
         self._service_pending = False
@@ -323,16 +253,18 @@ class EpisodeKeyboardNode(Node):
 
     def _handle_stop(self) -> None:
         if self._service_pending:
-            return self._msg("⏳ Service call in progress, please wait...")
+            self._msg("⏳ Service call in progress, please wait...")
+            return
         if not self._recording:
-            return self._msg("⚠  Not recording — nothing to stop")
+            self._msg("⚠  Not recording — nothing to stop")
+            return
         if not self._cancel_client.service_is_ready():
-            return self._msg("✗  cancel_recording service not available")
+            self._msg("✗  cancel_recording service not available")
+            return
         self._msg("⏹  Stopping recording...")
         self._service_pending = True
         future = self._cancel_client.call_async(Trigger.Request())
         future.add_done_callback(self._on_stop_done)
-        return None
 
     def _on_stop_done(self, future) -> None:
         self._service_pending = False
@@ -351,22 +283,24 @@ class EpisodeKeyboardNode(Node):
 
     def _handle_discard(self) -> None:
         if self._service_pending:
-            return self._msg("⏳ Service call in progress, please wait...")
+            self._msg("⏳ Service call in progress, please wait...")
+            return
         if not self._recording and not self._has_last_bag:
-            return self._msg("⚠  No episode to discard")
+            self._msg("⚠  No episode to discard")
+            return
         self._msg("🗑  Discarding episode...")
         self._service_pending = True
         if self._recording:
             # Still recording: cancel first, then delete
             if not self._cancel_client.service_is_ready():
                 self._service_pending = False
-                return self._msg("✗  cancel_recording service not available")
+                self._msg("✗  cancel_recording service not available")
+                return
             future = self._cancel_client.call_async(Trigger.Request())
             future.add_done_callback(self._on_discard_cancel_done)
         else:
             # Already stopped: go straight to delete
             self._do_delete_last_bag()
-        return None
 
     def _on_discard_cancel_done(self, future) -> None:
         try:
@@ -410,11 +344,6 @@ class EpisodeKeyboardNode(Node):
         self._display_timer.cancel()
         self._term.restore()
         rclpy.shutdown()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def main(args=None) -> int:
