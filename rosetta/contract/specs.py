@@ -351,26 +351,27 @@ def _build_observation_spec(
     namespace: str | None,
     contract: Contract,
     *,
+    context: str,
     is_image: bool = False,
-    image_resize: tuple[int, int] | None = None,
-    dtype_context: str = "",
-    operators: tuple[Operator, ...] | None = None,
 ) -> ObservationStreamSpec:
     """Build one observation-shaped spec from channel to dtype/operators to spec.
 
     Used by observations, extended sections, and teleop input. All are decoded
-    at ingest, so dtype resolution always requires decodability. Callers keep
-    whatever validation genuinely differs (image/depth checks on observations,
-    none on the others). ``operators`` lets a caller pass an already-built
-    pipeline. Observations need it pre-built to check for a resize operator
-    before yielding. Omit it to build fresh from ``src.apply``.
+    at ingest, so dtype resolution always requires decodability. An image must
+    declare its output geometry through its operators; depth images are
+    rejected at decode time, where the message's encoding is authoritative.
     """
+    operators = _build_operators(src.apply, is_image=is_image)
+    image_resize = _image_hw_from_operators(operators) if is_image else None
+    if is_image and image_resize is None:
+        raise ContractValidationError(
+            f"Image observation '{key}' must declare its output geometry via "
+            f"an operator with a fixed output size (apply: [resize: [h, w]])"
+        )
     ch = src.channel
-    resolved_dtype = _resolve_spec_dtype(ch.dtype, ch.decoder, ch.type, is_image=is_image, context=dtype_context)
+    resolved_dtype = _resolve_spec_dtype(ch.dtype, ch.decoder, ch.type, is_image=is_image, context=context)
     if not is_image:
-        _require_select_for_decoder(src, dtype_context or f"'{key}'")
-    if operators is None:
-        operators = _build_operators(src.apply, is_image=is_image)
+        _require_select_for_decoder(src, context)
     _require_numeric_apply(resolved_dtype, operators, key)
     return ObservationStreamSpec(
         key=key,
@@ -392,21 +393,16 @@ def _build_action_spec(
     namespace: str | None,
     contract: Contract,
     *,
-    operators: tuple[Operator, ...] | None = None,
-    dtype_context: str = "",
+    context: str,
 ) -> ActionStreamSpec:
     """Build one action-shaped spec from channel to dtype/operators to spec.
 
     Used by actions, reward-as-action, and teleop feedback. All are
     encode-capable because they publish, so a type with only a custom encoder
-    is acceptable and its recorded column defaults to float64. Callers keep
-    whatever validation genuinely differs (encoder-registration checks,
-    serveable-operator checks). ``operators`` lets a caller pass an
-    already-built pipeline. Reward-as-action needs it pre-built to validate
-    serveability before yielding. Omit it to build fresh from ``src.apply``.
+    is acceptable and its recorded column defaults to float64.
     """
     ch = src.channel
-    resolved_dtype = _resolve_spec_dtype(ch.dtype, ch.decoder, ch.type, decode_required=False, context=dtype_context)
+    resolved_dtype = _resolve_spec_dtype(ch.dtype, ch.decoder, ch.type, decode_required=False, context=context)
     if resolved_dtype not in SUPPORTED_NUMERIC_DTYPES:
         raise ContractValidationError(
             f"Action-shaped entry '{key}' (topic {ch.topic}) resolves to dtype "
@@ -415,9 +411,8 @@ def _build_action_spec(
         )
     # Actions are decoded too (the porter records them), so a registry
     # decoder's select requirement applies here as well.
-    _require_select_for_decoder(src, dtype_context or f"'{key}'")
-    if operators is None:
-        operators = _build_operators(src.apply)
+    _require_select_for_decoder(src, context)
+    operators = _build_operators(src.apply)
     return ActionStreamSpec(
         key=key,
         names=names,
@@ -470,29 +465,14 @@ def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec
             )
 
         for src, namespace in _sources_with_namespaces(entry):
-            # Geometry must be checked before yielding. An image without a
-            # declared output size is a load-time error, not a spec with
-            # image_resize=None. Depth images are rejected at decode time,
-            # where the message's encoding field is authoritative. A name
-            # heuristic here would both false-positive and false-negative.
-            operators = _build_operators(src.apply, is_image=is_image)
-            resize = _image_hw_from_operators(operators)
-            if is_image and resize is None:
-                raise ContractValidationError(
-                    f"Image observation '{entry.key}' must declare its output geometry via "
-                    f"an operator with a fixed output size (apply: [resize: [h, w]])"
-                )
-
             yield _build_observation_spec(
                 entry.key,
                 tuple(src.select or ()),
                 src,
                 namespace,
                 contract,
+                context=f"observation '{entry.key}'",
                 is_image=is_image,
-                image_resize=resize,
-                dtype_context=f"observation '{entry.key}'",
-                operators=operators,
             )
 
 
@@ -507,7 +487,7 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
                 src,
                 namespace,
                 contract,
-                dtype_context=f"action '{entry.key}'",
+                context=f"action '{entry.key}'",
             )
 
 
@@ -543,32 +523,9 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
     seen_names: set[tuple[str | None, str]] = set()
     for entry, src in pairs:
         ch = src.channel
-
-        # A reward-as-action always publishes via the built-in encoder
-        # registry (custom encoders are not supported on rewards), so an
-        # unregistered type must fail here, not at first publish. This holds
-        # even when a custom decoder is set, because decoders only cover
-        # recording.
-        if not has_encoder(ch.type):
-            raise ContractValidationError(
-                f"No encoder registered for '{ch.type}' in reward '{entry.key}'. "
-                f"Reward-as-action publishes via the built-in encoder "
-                f"registry; add an encoder in encoders.py."
-            )
-        if not src.select and encoder_requires_select(ch.type):
-            raise ContractValidationError(
-                f"'{ch.type}' in reward '{entry.key}' (as action): its encoder "
-                f"scatters values by selected field names; add 'select:' to declare them."
-            )
-
-        # A reward used as an action must be serveable (it publishes).
-        operators = _build_operators(src.apply)
-        for operator in operators:
-            if not operator.kind.serveable:
-                raise ContractValidationError(
-                    f"Reward '{entry.key}' used as an action has {operator.kind.name} "
-                    f"operator '{operator.name}' in apply (no serve direction); remove it."
-                )
+        context = f"reward '{entry.key}' (as action)"
+        # Reward channels cannot declare a custom encoder, so this requires a registered one.
+        _require_publishable(ch, src.select, context)
 
         # Reward channels cannot declare safety/encoder (rejected at load), so
         # reading them through source agrees with the old forced values
@@ -594,12 +551,18 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
                 )
             seen_names.add(namespaced)
 
-        yield _build_action_spec(
-            "action", names, src, ns, contract, operators=operators, dtype_context=f"reward '{entry.key}' (as action)"
-        )
+        spec = _build_action_spec("action", names, src, ns, contract, context=context)
+        # It publishes, so every operator needs a serve direction.
+        for operator in spec.operators:
+            if not operator.kind.serveable:
+                raise ContractValidationError(
+                    f"Reward '{entry.key}' used as an action has {operator.kind.name} "
+                    f"operator '{operator.name}' in apply (no serve direction); remove it."
+                )
+        yield spec
 
 
-def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
+def _iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
     """Yield specs from extended categories (rewards, signals, info, complementary_data).
 
     Extended streams are decoded at ingest like observations, so their
@@ -615,7 +578,7 @@ def iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
                     src,
                     namespace,
                     contract,
-                    dtype_context=f"{section} '{entry.key}'",
+                    context=f"{section} '{entry.key}'",
                 )
 
 
@@ -633,7 +596,7 @@ def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStr
     """
     yield from iter_observation_specs(contract)
     yield from iter_action_specs(contract)
-    yield from iter_extended_specs(contract)
+    yield from _iter_extended_specs(contract)
     yield from iter_teleop_input_specs(contract)
     yield from iter_teleop_feedback_specs(contract)
 
@@ -706,7 +669,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             src,
             namespaces[i],
             contract,
-            dtype_context=f"teleop input (target '{tis.target}')",
+            context=f"teleop input (target '{tis.target}')",
         )
         # The decoded teleop value is re-encoded onto its (numeric) target
         # action topic by hil_manager_node; a non-numeric input would load
@@ -747,5 +710,5 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
             src,
             namespaces[i],
             contract,
-            dtype_context=f"teleop feedback (origin '{tfs.origin}')",
+            context=f"teleop feedback (origin '{tfs.origin}')",
         )

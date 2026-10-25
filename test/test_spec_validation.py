@@ -36,9 +36,9 @@ from rosetta.contract.schema import (
 )
 from rosetta.contract.specs import (
     iter_action_specs,
-    iter_extended_specs,
     iter_observation_specs,
     iter_reward_as_action_specs,
+    iter_specs,
     iter_teleop_feedback_specs,
     iter_teleop_input_specs,
 )
@@ -184,13 +184,13 @@ def test_undecodable_extended_channel_rejected_at_load():
     undecodable signal loaded fine and silently dropped every message at ingest."""
     c = _contract(signals=[_entry("battery", _source("/battery", "my_msgs/msg/NoDecoder", ["v"], dtype="float64"))])
     with pytest.raises(ContractValidationError, match="No decoder registered"):
-        list(iter_extended_specs(c))
+        list(iter_specs(c))
 
 
 def test_bool_signal_resolves_bool_dtype():
     """std_msgs/msg/Bool has a built-in decoder (stone.yaml's next.done relies on it)."""
     c = _contract(signals=[_entry("done", _source("/done", "std_msgs/msg/Bool", dtype="bool"))])
-    (spec,) = iter_extended_specs(c)
+    (spec,) = iter_specs(c)
     assert spec.dtype == "bool"
 
 
