@@ -71,3 +71,21 @@ def test_teleop_feedback_reaches_the_device_in_its_units(name):
         feedback = encode_value(decode_value(follower, observations[tfs.origin]), feedback_spec)
         sent = _positions(feedback)
         assert sent == pytest.approx({k: v for k, v in _positions(follower).items() if k in sent})
+
+
+@pytest.mark.parametrize("name", TELEOP_CONTRACTS)
+def test_teleop_input_is_named_like_the_action_it_drives(name):
+    """Leader-side columns line up with the robot's action columns, namespace included."""
+    contract = load_contract(CONTRACTS_DIR / name)
+    actions = {s.source.channel.topic: s for s in iter_action_specs(contract)}
+    for tis, spec in zip(contract.teleop.input, iter_teleop_input_specs(contract), strict=True):
+        target = actions[tis.target]
+        assert (spec.namespace, spec.names) == (target.namespace, target.names)
+
+
+@pytest.mark.parametrize("name", TELEOP_CONTRACTS)
+def test_teleop_feedback_shares_its_origins_namespace(name):
+    contract = load_contract(CONTRACTS_DIR / name)
+    observations = {s.source.channel.topic: s for s in iter_observation_specs(contract)}
+    for tfs, spec in zip(contract.teleop.feedback, iter_teleop_feedback_specs(contract), strict=True):
+        assert spec.namespace == observations[tfs.origin].namespace

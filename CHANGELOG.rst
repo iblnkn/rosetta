@@ -4,6 +4,11 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Fixed: teleop columns are named like the source they drive.** A teleop
+  input or feedback aimed at one source of a multi-source entry now takes that
+  source's namespace (e.g. ``arm.``), so leader-side names match the robot's
+  action and observation names. This changes the recorded
+  ``teleop.input.*``/``teleop.feedback.*`` feature names for such contracts.
 * **Breaking: the human-in-the-loop manager moved to its own package.**
   ``hil_manager_node``, ``hil_launch.py`` and ``params/hil_manager.yaml`` are
   now in ``rosetta_hil``, and ``ManageEpisode``/``StartHILEpisode`` in

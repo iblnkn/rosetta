@@ -485,24 +485,14 @@ def iter_policy_specs(contract: Contract) -> Iterable[ObservationStreamSpec | Ac
     yield from iter_action_specs(contract)
 
 
-def _teleop_namespaces(resolved: list[tuple[Source, str]]) -> dict[int, str | None]:
-    """Index -> namespace for teleop sources.
+def _namespace_in_entry(entries: Iterable[FrameEntry], key: str, topic: str) -> str | None:
+    """The namespace the source on ``topic`` has inside entry ``key``.
 
-    Several teleop sources can share one synthesized key (two targets in one
-    multi-source action entry); those get per-topic namespaces.
+    A teleop source takes the namespace of the source it targets (or forwards),
+    so its feature names match that source's names exactly.
     """
-    by_key: dict[str, list[int]] = {}
-    for i, (_, key) in enumerate(resolved):
-        by_key.setdefault(key, []).append(i)
-
-    namespaces: dict[int, str | None] = dict.fromkeys(range(len(resolved)))
-    for indices in by_key.values():
-        if len(indices) <= 1:
-            continue
-        ns_map = _namespaces_by_topic(resolved[i][0] for i in indices)
-        for i in indices:
-            namespaces[i] = ns_map.get(resolved[i][0].channel.topic) or None
-    return namespaces
+    entry = next(e for e in entries if e.key == key)
+    return next(ns for src, ns in _sources_with_namespaces(entry) if src.channel.topic == topic)
 
 
 def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
@@ -519,14 +509,12 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
     resolved = [
         (tis.source, owning_key(contract.actions, tis.target, "teleop.input: target")) for tis in contract.teleop.input
     ]
-    namespaces = _teleop_namespaces(resolved)
-    for i, tis in enumerate(contract.teleop.input):
-        src, key = resolved[i]
+    for tis, (src, key) in zip(contract.teleop.input, resolved, strict=True):
         spec = _build_observation_spec(
             f"{TELEOP_INPUT_KEY}.{key}",
             tuple(src.select or ()),
             src,
-            namespaces[i],
+            _namespace_in_entry(contract.actions, key, tis.target),
             contract,
             context=f"teleop input (target '{tis.target}')",
         )
@@ -551,15 +539,13 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
         (tfs.source, owning_key(contract.observations, tfs.origin, "teleop.feedback: origin"))
         for tfs in contract.teleop.feedback
     ]
-    namespaces = _teleop_namespaces(resolved)
-    for i, tfs in enumerate(contract.teleop.feedback):
-        src, key = resolved[i]
+    for tfs, (src, key) in zip(contract.teleop.feedback, resolved, strict=True):
         _require_publishable(src.channel, src.select, f"teleop feedback (origin '{tfs.origin}')")
         yield _build_action_spec(
             f"{TELEOP_FEEDBACK_KEY}.{key}",
             tuple(src.select or ()),
             src,
-            namespaces[i],
+            _namespace_in_entry(contract.observations, key, tfs.origin),
             contract,
             context=f"teleop feedback (origin '{tfs.origin}')",
         )

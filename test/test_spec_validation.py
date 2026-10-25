@@ -331,8 +331,8 @@ def test_owning_key_ambiguous_topic_raises():
 
 def test_teleop_inputs_sharing_owning_key_get_namespaces():
     """Two targets inside one multi-source action entry share the synthesized
-    'teleop.input.action' key; their leader-side names get distinguishing
-    namespaces so flattened feature names stay unique in the teleop adapter."""
+    'teleop.input.action' key; each takes its target's namespace, so the names
+    stay unique and match the action's."""
     action = _entry(
         "action",
         _source("/arm/cmd", "sensor_msgs/msg/JointState", ["position.j1"]),
@@ -356,8 +356,35 @@ def test_teleop_inputs_sharing_owning_key_get_namespaces():
     assert [s.namespace for s in specs] == ["arm", "gripper"]
 
 
+def test_teleop_input_takes_its_targets_namespace():
+    """One input driving one source of a multi-source entry is named like that source."""
+    action = _entry(
+        "action",
+        _source("/arm/cmd", "sensor_msgs/msg/JointState", ["position.j1"]),
+        _source("/gripper/cmd", "std_msgs/msg/Float64", ["data"]),
+    )
+    c = _teleop_input("/arm/cmd", [action])
+    (spec,) = iter_teleop_input_specs(c)
+    assert spec.namespace == "arm"
+
+
+def test_teleop_feedback_takes_its_origins_namespace():
+    state = _entry(
+        "observation.state",
+        _source("/arm/joint_states", "sensor_msgs/msg/JointState", ["position.j1"]),
+        _source("/gripper/joint_states", "sensor_msgs/msg/JointState", ["position.g"]),
+    )
+    feedback = TeleopFeedbackSource(
+        source=_source("/leader/feedback", "sensor_msgs/msg/JointState", ["position.j1"]),
+        origin="/arm/joint_states",
+    )
+    c = _contract(observations=[state], teleop=Teleop(input=(), events=None, feedback=(feedback,)))
+    (spec,) = iter_teleop_feedback_specs(c)
+    assert spec.namespace == "arm"
+
+
 def test_single_teleop_input_gets_no_namespace():
-    """The common case (one input per owning key) is unchanged: no namespace."""
+    """A single-source target has no namespace, so neither does its input."""
     c = _teleop_input("/cmd", [_entry("action", _source("/cmd", "sensor_msgs/msg/JointState", ["position.j1"]))])
     (spec,) = iter_teleop_input_specs(c)
     assert spec.namespace is None
