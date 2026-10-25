@@ -94,18 +94,17 @@ def qos_profile_from_dict(d: dict[str, Any] | None) -> QoSProfile:
     policies = {}
     for key, enum_cls in _QOS_ENUMS.items():
         if key in d:
-            value = str(d[key]).strip()
-            try:
-                # get_from_short_key is case-insensitive and raises KeyError on
-                # an unknown value; remap it to the ValueError the loader expects.
-                policies[key] = enum_cls.get_from_short_key(value)
-            except KeyError:
-                raise ValueError(f"Invalid qos {key} '{value}'. Valid: {enum_cls.short_keys()}") from None
+            # Exact short names only: get_from_short_key alone would accept any case.
+            value = d[key]
+            if value not in enum_cls.short_keys():
+                raise ValueError(f"Invalid qos {key} {value!r}. Valid: {enum_cls.short_keys()}")
+            policies[key] = enum_cls.get_from_short_key(value)
 
-    try:
-        depth = int(d.get("depth", 10))
-    except (TypeError, ValueError):
-        raise ValueError(f"Invalid qos depth {d.get('depth')!r}: must be an integer") from None
+    depth = d.get("depth", 10)
+    if isinstance(depth, float) and depth.is_integer():
+        depth = int(depth)
+    if not isinstance(depth, int) or isinstance(depth, bool):
+        raise ValueError(f"Invalid qos depth {depth!r}: must be an integer")
     return QoSProfile(depth=depth, **policies)
 
 

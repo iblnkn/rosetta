@@ -622,12 +622,13 @@ def test_invalid_codec_paths_rejected(path, match, tmp_path):
     _expect_error(tmp_path, text, match)
 
 
-def test_whitespace_codec_path_treated_as_absent(tmp_path):
+@pytest.mark.parametrize("bad", ["''", "'   '", "' pkg.mod:fn'"])
+def test_blank_or_padded_codec_path_rejected(bad, tmp_path):
     text = BASE.replace(
         "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}",
-        "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, decoder: '   '}",
+        f"channel: {{topic: /joint_states, type: sensor_msgs/msg/JointState, decoder: {bad}}}",
     )
-    assert _load(tmp_path, text).observations[0].sources[0].channel.decoder is None
+    _expect_error(tmp_path, text, "codec path")
 
 
 # ---------------------------------------------------------------------------
@@ -816,3 +817,34 @@ signals:
 """
     )
     _expect_error(tmp_path, text, "exactly one section")
+
+
+# ---------------------------------------------------------------------------
+# Strict scalars: values are used exactly as written, never case-folded,
+# stripped or coerced from another YAML type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "match"),
+    [
+        ("robot_interface: ros2", "robot_interface: ROS2", "robot_interface"),
+        ("robot_type: test", "robot_type: ' test'", "robot_type"),
+        (
+            "strategy: hold, timeline: receive}\n    select",
+            "strategy: HOLD, timeline: receive}\n    select",
+            "strategy",
+        ),
+        ("timeline: receive}\n    select", "timeline: 1}\n    select", "timeline"),
+        ("timeline: receive}\n    select", "timeline: ' receive'}\n    select", "timeline"),
+        ("select: [position.j1]\nactions", "select: [position.j1]\n    kind: Continuous\nactions", "kind"),
+        ("type: sensor_msgs/msg/JointState}", "type: sensor_msgs/msg/JointState, dtype: FLOAT64}", "dtype"),
+        ("type: sensor_msgs/msg/JointState}", "type: sensor_msgs/msg/JointState, qos: {reliability: RELIABLE}}", "qos"),
+        ("type: sensor_msgs/msg/JointState}", "type: sensor_msgs/msg/JointState, qos: {depth: '10'}}", "qos"),
+        ("  observation.state:", "  1:", "frame key"),
+        ("select: [position.j1]\nactions", "select: [position.j1]\n    apply: [{1: null}]\nactions", "operator name"),
+    ],
+)
+def test_scalars_are_not_coerced(old, new, match, tmp_path):
+    assert old in BASE
+    _expect_error(tmp_path, BASE.replace(old, new, 1), match)

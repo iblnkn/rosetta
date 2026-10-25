@@ -112,7 +112,7 @@ will go there.
 | `liveliness` | `automatic`, `manual_by_topic` | `automatic` |
 | `depth` | integer | 10 |
 
-Values are rclpy's short names, case-insensitive. rclpy's `system_default`,
+Values are rclpy's short names, written exactly as shown. rclpy's `system_default`,
 `unknown` and `best_available` are accepted too. An unknown key or value is
 an error. A `best_effort` publisher read with the default `reliable` delivers
 nothing.

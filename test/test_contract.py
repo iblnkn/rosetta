@@ -178,7 +178,7 @@ def test_supported_numeric_dtypes_load(tmp_path, dtype):
     load_contract(p)
 
 
-@pytest.mark.parametrize("dtype", ["uint8", "float16", "image", "not_a_dtype", "flot32", ""])
+@pytest.mark.parametrize("dtype", ["uint8", "float16", "image", "not_a_dtype", "flot32", "Float32"])
 def test_unsupported_dtypes_rejected_at_load(tmp_path, dtype):
     # The vocabulary is closed and checked at load: anything FrameLayout
     # cannot assemble is refused here, not at bridge configure / writer open.

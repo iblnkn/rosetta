@@ -141,16 +141,21 @@ def _load_interface_capability(robot_interface: str) -> Any | None:
 EnumT = TypeVar("EnumT", bound=StrEnum)
 
 
+def _require_str(value: Any, desc: str) -> str:
+    """A non-empty string, used exactly as written: no case folding, stripping or coercion."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ContractValidationError(f"{desc} must be a non-empty string without surrounding spaces, got {value!r}")
+    return value
+
+
 def _validate_enum(value: Any, enum_cls: type[EnumT], field_name: str, context: str) -> EnumT:
     """Validate a string against an enum and return the member (a str subclass)."""
-    normalized = str(value).lower().strip()
+    value = _require_str(value, f"'{field_name}' in {context}")
     try:
-        return enum_cls(normalized)
+        return enum_cls(value)
     except ValueError:
         valid = sorted(e.value for e in enum_cls)
-        raise ContractValidationError(
-            f"Invalid {field_name} '{normalized}' in {context}. Must be one of: {valid}"
-        ) from None
+        raise ContractValidationError(f"Invalid {field_name} '{value}' in {context}. Must be one of: {valid}") from None
 
 
 def _check_keys(data: dict[str, Any], allowed: frozenset[str] | set[str], ctx: str) -> None:
@@ -194,7 +199,7 @@ def _validate_dtype(dtype: str | None, context: str, required: bool = False) -> 
             raise ContractValidationError(f"Missing required field 'dtype' in {context}")
         return None
 
-    dtype = str(dtype).lower()
+    dtype = _require_str(dtype, f"'dtype' in {context}")
     if not is_valid_dtype(dtype):
         raise ContractValidationError(
             f"Invalid dtype '{dtype}' in {context}. Supported: "
@@ -263,10 +268,7 @@ def _validate_codec_path(path: str | None, context: str) -> str | None:
     """
     if path is None:
         return None
-
-    path = str(path).strip()
-    if not path:
-        return None
+    path = _require_str(path, f"codec path in {context}")
 
     try:
         load_codec(path)
@@ -377,9 +379,9 @@ def _parse_select_map(raw: Any, ctx: str) -> dict[str, str]:
     if not raw:
         raise ContractValidationError(f"'select' in {ctx} is present but empty — an events block must map at least one")
     for k, v in raw.items():
-        if not isinstance(v, str):
-            raise ContractValidationError(f"select.{k} in {ctx} must be a string field path, got {v!r}")
-    return {str(k): v for k, v in raw.items()}
+        _require_str(k, f"event name in {ctx}")
+        _require_str(v, f"select.{k} in {ctx}")
+    return dict(raw)
 
 
 def _parse_apply(raw: Any, ctx: str, *, require_serveable: bool = False) -> list[tuple[str, Any]]:
@@ -406,7 +408,7 @@ def _parse_apply(raw: Any, ctx: str, *, require_serveable: bool = False) -> list
                     f"apply[{i}] in {ctx} must be a single-key mapping, got keys {sorted(item)}"
                 )
             ((name, args),) = item.items()
-            name = str(name)
+            name = _require_str(name, f"apply[{i}] operator name in {ctx}")
         else:
             raise ContractValidationError(
                 f"apply[{i}] in {ctx} must be a string or single-key mapping, got {type(item).__name__}"
@@ -480,11 +482,8 @@ def _parse_align(data: Any, ctx: str) -> Align:
     _require_fields(data, ["strategy", "timeline"], ctx)
 
     strategy = _validate_enum(data["strategy"], ResamplePolicy, "strategy", ctx)
-    # Timelines are open names produced by the robot interface — selected
-    # verbatim (no case folding), matching provided_timelines().
-    timeline = str(data["timeline"]).strip()
-    if not timeline:
-        raise ContractValidationError(f"Empty timeline in {ctx}")
+    # Timelines are open names produced by the robot interface, matched verbatim.
+    timeline = _require_str(data["timeline"], f"'timeline' in {ctx}")
 
     tol_raw = data.get("tolerance_ms")
     if strategy is ResamplePolicy.ASOF:
@@ -552,7 +551,7 @@ def _parse_frame_section(data: Any, section: SectionSpec) -> tuple[FrameEntry, .
 
     entries: list[FrameEntry] = []
     for raw_key, value in data.items():
-        key = str(raw_key)
+        key = _require_str(raw_key, f"frame key in '{section.name}'")
         if section.name != "observations" and key.startswith(IMAGE_KEY_PREFIX):
             raise ContractValidationError(
                 f"{section.name}.{key}: keys under '{IMAGE_KEY_PREFIX}' are only "
@@ -582,7 +581,7 @@ def _parse_tasks(data: Any) -> tuple[Task, ...]:
         _check_keys(entry, {"channel"}, ctx)
         _require_fields(entry, ["channel"], ctx)
         channel = _parse_channel(entry["channel"], f"{ctx}.channel", BARE_CHANNEL_RULES)
-        tasks.append(Task(key=str(key), channel=channel))
+        tasks.append(Task(key=_require_str(key, "task key"), channel=channel))
     return tuple(tasks)
 
 
@@ -664,7 +663,7 @@ def _parse_teleop_role_source(data: Any, ctx: str, role: _TeleopRole, owners: di
     _check_keys(data, _SOURCE_KEYS | {role.ref_field}, ctx)
     _require_fields(data, [role.ref_field, "channel", "align"], ctx)
 
-    ref = str(data[role.ref_field]).strip()
+    ref = _require_str(data[role.ref_field], f"'{role.ref_field}' in {ctx}")
     _resolve_teleop_topic(ref, owners, role.ref_field, role.ref_pool, ctx)
 
     source = _parse_source({k: v for k, v in data.items() if k != role.ref_field}, ctx, role.rules)
@@ -782,15 +781,12 @@ def _parse_header(data: dict[str, Any]) -> tuple[str, str, int]:
     """Parse and validate the contract header scalars: robot_type, robot_interface, fps."""
     if "robot_type" not in data:
         raise ContractValidationError("robot_type is required")
-    raw_type = data["robot_type"]
-    robot_type = raw_type.strip() if isinstance(raw_type, str) else ""
-    if not robot_type:
-        raise ContractValidationError(f"robot_type must be a non-empty string, got {raw_type!r}")
+    robot_type = _require_str(data["robot_type"], "robot_type")
 
     robot_interface = data.get("robot_interface")
     if not robot_interface:
         raise ContractValidationError(f"robot_interface is required. Supported: {sorted(SUPPORTED_ROBOT_INTERFACES)}")
-    robot_interface = str(robot_interface).lower().strip()
+    robot_interface = _require_str(robot_interface, "robot_interface")
     if robot_interface not in SUPPORTED_ROBOT_INTERFACES:
         raise ContractValidationError(
             f"Unsupported robot_interface '{robot_interface}'. Supported: {sorted(SUPPORTED_ROBOT_INTERFACES)}"

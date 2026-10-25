@@ -41,8 +41,6 @@ from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
         ({"depth": 5}, QoSProfile(depth=5)),
         # Integral floats coerce: YAML writers produce 5.0.
         ({"depth": 5.0}, QoSProfile(depth=5)),
-        # get_from_short_key is case-insensitive; we strip surrounding space.
-        ({"reliability": " BEST_EFFORT "}, QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)),
         # liveliness is a real (enum) policy too, delegated the same way.
         ({"liveliness": "manual_by_topic"}, QoSProfile(depth=10, liveliness=LivelinessPolicy.MANUAL_BY_TOPIC)),
         (
@@ -68,6 +66,12 @@ def test_valid_mappings(d, expected):
         ({"history": "keep-all"}, "Invalid qos history"),
         ({"durability": "transient-local"}, "Invalid qos durability"),
         ({"depth": "ten"}, "Invalid qos depth"),
+        ({"depth": "10"}, "Invalid qos depth"),
+        ({"depth": 5.5}, "Invalid qos depth"),
+        ({"depth": True}, "Invalid qos depth"),
+        # Exact short names only: no case folding or stripping.
+        ({"reliability": "BEST_EFFORT"}, "Invalid qos reliability"),
+        ({"reliability": " best_effort"}, "Invalid qos reliability"),
     ],
 )
 def test_invalid_mappings_raise(d, match):
