@@ -69,7 +69,7 @@ from .schema import (
     Contract,
     FrameEntry,
     Source,
-    topic_owners,
+    owning_key,
 )
 
 # =============================================================================
@@ -656,26 +656,6 @@ def iter_policy_specs(contract: Contract) -> Iterable[ObservationStreamSpec | Ac
 # =============================================================================
 
 
-def _owning_key(entries: Iterable[FrameEntry], topic: str) -> str:
-    """Frame key of the single entry whose sources include ``topic``.
-
-    ``topic`` is a teleop input's ``target`` or a teleop feedback's
-    ``origin``. schema.py already validates both conditions at YAML load
-    (the topic exists, and belongs to exactly one entry), so the raises here
-    guard only directly-constructed Contracts. They use the same error type,
-    so a programmatic caller sees a contract problem, not an internal one.
-    """
-    owners = topic_owners(entries).get(topic, [])
-    if not owners:
-        raise ContractValidationError(f"Teleop references topic '{topic}', which no entry's sources declare.")
-    if len(owners) > 1:
-        raise ContractValidationError(
-            f"Teleop references topic '{topic}', which belongs to multiple entries "
-            f"({owners}); a teleop target/origin must belong to exactly one entry."
-        )
-    return owners[0]
-
-
 def _teleop_namespaces(resolved: list[tuple[Source, str]]) -> dict[int, str | None]:
     """Index -> namespace for teleop sources, namespacing only shared owning keys.
 
@@ -686,8 +666,8 @@ def _teleop_namespaces(resolved: list[tuple[Source, str]]) -> dict[int, str | No
     flattened feature names stay unique downstream.
     """
     by_key: dict[str, list[int]] = {}
-    for i, (_, owning_key) in enumerate(resolved):
-        by_key.setdefault(owning_key, []).append(i)
+    for i, (_, key) in enumerate(resolved):
+        by_key.setdefault(key, []).append(i)
 
     namespaces: dict[int, str | None] = dict.fromkeys(range(len(resolved)))
     for indices in by_key.values():
@@ -714,12 +694,14 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
 
     # Yield order must match contract.teleop.input: hil_manager_node zips
     # these specs strict=True against the declaration list.
-    resolved = [(tis.source, _owning_key(contract.actions, tis.target)) for tis in contract.teleop.input]
+    resolved = [
+        (tis.source, owning_key(contract.actions, tis.target, "teleop.input: target")) for tis in contract.teleop.input
+    ]
     namespaces = _teleop_namespaces(resolved)
     for i, tis in enumerate(contract.teleop.input):
-        src, owning_key = resolved[i]
+        src, key = resolved[i]
         spec = _build_observation_spec(
-            f"{TELEOP_INPUT_KEY}.{owning_key}",
+            f"{TELEOP_INPUT_KEY}.{key}",
             tuple(src.select or ()),
             src,
             namespaces[i],
@@ -749,15 +731,18 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
         return
 
     # Yield order must match contract.teleop.feedback (see input counterpart).
-    resolved = [(tfs.source, _owning_key(contract.observations, tfs.origin)) for tfs in contract.teleop.feedback]
+    resolved = [
+        (tfs.source, owning_key(contract.observations, tfs.origin, "teleop.feedback: origin"))
+        for tfs in contract.teleop.feedback
+    ]
     namespaces = _teleop_namespaces(resolved)
     for i, tfs in enumerate(contract.teleop.feedback):
-        src, owning_key = resolved[i]
+        src, key = resolved[i]
         # Feedback publishes (to the human device), so it faces the same
         # load-time encoder requirement as actions, not a first-publish error.
         _require_publishable(src.channel, src.select, f"teleop feedback (origin '{tfs.origin}')")
         yield _build_action_spec(
-            f"{TELEOP_FEEDBACK_KEY}.{owning_key}",
+            f"{TELEOP_FEEDBACK_KEY}.{key}",
             tuple(src.select or ()),
             src,
             namespaces[i],

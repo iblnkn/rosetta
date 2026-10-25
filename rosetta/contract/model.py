@@ -45,6 +45,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Iterable
 
+from .errors import ContractValidationError
+
 # =============================================================================
 # Enums
 # =============================================================================
@@ -257,14 +259,7 @@ EXTENDED_SECTIONS = FRAME_SECTIONS[2:]
 
 
 def topic_owners(entries: Iterable[FrameEntry]) -> dict[str, list[str]]:
-    """Topic -> distinct entry keys whose sources include it.
-
-    The single home for the "topic owned by exactly one entry" rule: schema
-    resolves teleop ``target``/``origin`` references against it at parse, and
-    specs resolves the synthesized teleop recording key from it. A topic owned
-    by several entries makes those resolutions ambiguous and is rejected by
-    the callers; sharing a topic across entries stays legal everywhere else.
-    """
+    """Topic -> distinct entry keys whose sources include it."""
     owners: dict[str, list[str]] = {}
     for entry in entries:
         for src in entry.sources:
@@ -272,6 +267,27 @@ def topic_owners(entries: Iterable[FrameEntry]) -> dict[str, list[str]]:
             if entry.key not in keys:
                 keys.append(entry.key)
     return owners
+
+
+def owning_key(entries: Iterable[FrameEntry], topic: str, ref: str) -> str:
+    """Key of the one entry whose sources include ``topic``.
+
+    A teleop ``target``/``origin`` must name exactly one entry: its recording
+    column is named after that entry, and the HIL node routes by topic.
+    Sharing a topic across entries stays legal everywhere else. ``ref`` names
+    the reference in errors, e.g. ``"teleop.input[0]: target"``.
+    """
+    owners = topic_owners(entries)
+    keys = owners.get(topic, [])
+    if not keys:
+        raise ContractValidationError(
+            f"{ref} '{topic}' does not match any entry's channel topic. Known topics: {sorted(owners)}"
+        )
+    if len(keys) > 1:
+        raise ContractValidationError(
+            f"{ref} '{topic}' belongs to multiple entries ({keys}); a teleop target/origin must belong to exactly one."
+        )
+    return keys[0]
 
 
 @dataclass(frozen=True, slots=True)

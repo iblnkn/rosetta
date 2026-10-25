@@ -314,7 +314,7 @@ def test_owning_key_unknown_topic_raises_contract_error():
     """A programmatically built contract with a dangling target surfaces as a
     contract problem, not an AssertionError."""
     c = _teleop_input("/nope", [_entry("action", _source("/cmd", "sensor_msgs/msg/JointState", ["position.j1"]))])
-    with pytest.raises(ContractValidationError, match="no entry's sources declare"):
+    with pytest.raises(ContractValidationError, match="does not match any"):
         list(iter_teleop_input_specs(c))
 
 

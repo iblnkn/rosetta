@@ -406,7 +406,7 @@ teleop:
       align: {strategy: hold, timeline: receive}
 """
     )
-    _expect_error(tmp_path, text, "belongs to multiple action entries")
+    _expect_error(tmp_path, text, "belongs to multiple entries")
 
 
 def test_unknown_teleop_event_name_rejected(tmp_path):

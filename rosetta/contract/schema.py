@@ -51,7 +51,6 @@ from __future__ import annotations
 import importlib.util
 import warnings
 from collections.abc import Hashable
-from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterable, TypeVar
@@ -91,7 +90,7 @@ from .model import (
     TeleopEventMap,
     TeleopFeedbackSource,
     TeleopInputSource,
-    topic_owners,
+    owning_key,
 )
 from .operators import lookup_operator
 
@@ -566,95 +565,36 @@ def _parse_teleop_events(data: Any) -> TeleopEventMap:
     return TeleopEventMap(channel=channel, select=select)
 
 
-@dataclass(frozen=True, slots=True)
-class _TeleopRole:
-    """How one teleop role section parses.
+def _parse_teleop_refs(data: Any, section: str, ref_field: str, entries: tuple[FrameEntry, ...], wrap) -> tuple:
+    """Parse ``teleop.input`` or ``teleop.feedback``: sources each bound to one topic.
 
-    ``input`` and ``feedback`` entries are the same shape — a Source plus one
-    reference field binding it to an action/observation topic — so both parse
-    through one code path, parameterized by this record. ``wrap`` is the
-    role's dataclass; both take ``(source, ref)`` positionally.
+    ``ref_field`` (``target``/``origin``) must name a topic owned by exactly
+    one of ``entries``, and no two sources may name the same topic.
     """
-
-    section: str  # "teleop.input" | "teleop.feedback"
-    ref_field: str  # "target" | "origin"
-    ref_pool: str  # which section's topics the reference must name (error wording)
-    dup_rule: str  # error tail for a repeated reference
-    wrap: type[TeleopInputSource] | type[TeleopFeedbackSource]
-
-
-def _resolve_teleop_topic(topic: str, owners: dict[str, list[str]], field: str, section: str, ctx: str) -> None:
-    """Validate a teleop ``target``/``origin`` names exactly one owning entry."""
-    if topic not in owners:
-        raise ContractValidationError(
-            f"{ctx}: {field} '{topic}' does not match any {section} channel topic. "
-            f"Known {section} topics: {sorted(owners)}"
-        )
-    if len(owners[topic]) > 1:
-        raise ContractValidationError(
-            f"{ctx}: {field} '{topic}' belongs to multiple {section} entries "
-            f"({owners[topic]}); a teleop {field} must belong to exactly one entry."
-        )
-
-
-def _parse_teleop_role_source(data: Any, ctx: str, role: _TeleopRole, owners: dict[str, list[str]]) -> Any:
-    """Parse one teleop entry: a Source plus its ``target``/``origin`` reference.
-
-    The reference is validated against every channel topic the referenced
-    section declares and must belong to exactly one of its entries.
-    """
-    data = _mapping(data, ctx, allowed=_SOURCE_KEYS | {role.ref_field}, required=(role.ref_field, "channel", "align"))
-
-    ref = _require_str(data[role.ref_field], f"'{role.ref_field}' in {ctx}")
-    _resolve_teleop_topic(ref, owners, role.ref_field, role.ref_pool, ctx)
-
-    source = _parse_source({k: v for k, v in data.items() if k != role.ref_field}, ctx, role.section)
-    return role.wrap(source, ref)
-
-
-def _parse_teleop_role_list(data: Any, role: _TeleopRole, owners: dict[str, list[str]]) -> tuple[Any, ...]:
-    """Parse one teleop role section: independently-referenced sources, one per referenced topic."""
     if data is None:
         return ()
-    name = role.section.partition(".")[2]
     if not isinstance(data, list):
-        raise ContractValidationError(
-            f"'{role.section}' must be a list of teleop {name} entries, got {type(data).__name__}"
-        )
+        raise ContractValidationError(f"'{section}' must be a list, got {type(data).__name__}")
     if not data:
-        raise ContractValidationError(f"'{role.section}' has an empty source list")
-    entries = tuple(
-        _parse_teleop_role_source(item, f"{role.section}[{i}]", role, owners) for i, item in enumerate(data)
-    )
-
+        raise ContractValidationError(f"'{section}' has an empty source list")
+    parsed = []
     seen: set[str] = set()
-    for i, item in enumerate(entries):
-        ref = getattr(item, role.ref_field)
+    for i, raw in enumerate(data):
+        ctx = f"{section}[{i}]"
+        item = _mapping(raw, ctx, allowed=_SOURCE_KEYS | {ref_field}, required=(ref_field, "channel", "align"))
+        ref = _require_str(item[ref_field], f"'{ref_field}' in {ctx}")
+        owning_key(entries, ref, f"{ctx}: {ref_field}")
         if ref in seen:
-            raise ContractValidationError(f"{role.section}[{i}]: duplicate {role.ref_field} '{ref}' — {role.dup_rule}")
+            raise ContractValidationError(
+                f"{ctx}: duplicate {ref_field} '{ref}'; each topic may appear once in {section}."
+            )
         seen.add(ref)
-    return entries
+        source = _parse_source({k: v for k, v in item.items() if k != ref_field}, ctx, section)
+        parsed.append(wrap(source, ref))
+    return tuple(parsed)
 
 
-_TELEOP_ROLES = {
-    "input": _TeleopRole(
-        section="teleop.input",
-        ref_field="target",
-        ref_pool="action",
-        dup_rule="each action topic may be driven by at most one teleop input.",
-        wrap=TeleopInputSource,
-    ),
-    "feedback": _TeleopRole(
-        section="teleop.feedback",
-        ref_field="origin",
-        ref_pool="observation",
-        dup_rule="each observation topic may feed at most one teleop feedback.",
-        wrap=TeleopFeedbackSource,
-    ),
-}
-
-
-def _parse_teleop(data: Any, actions: Iterable[FrameEntry], observations: Iterable[FrameEntry]) -> Teleop | None:
+def _parse_teleop(data: Any, actions: tuple[FrameEntry, ...], observations: tuple[FrameEntry, ...]) -> Teleop | None:
     """Parse teleop role sections: input / events / feedback.
 
     ``actions``/``observations`` are the already-parsed frame entries, so a
@@ -678,9 +618,11 @@ def _parse_teleop(data: Any, actions: Iterable[FrameEntry], observations: Iterab
         events = _parse_teleop_events(data["events"])
 
     return Teleop(
-        input=_parse_teleop_role_list(data.get("input"), _TELEOP_ROLES["input"], topic_owners(actions)),
+        input=_parse_teleop_refs(data.get("input"), "teleop.input", "target", actions, TeleopInputSource),
         events=events,
-        feedback=_parse_teleop_role_list(data.get("feedback"), _TELEOP_ROLES["feedback"], topic_owners(observations)),
+        feedback=_parse_teleop_refs(
+            data.get("feedback"), "teleop.feedback", "origin", observations, TeleopFeedbackSource
+        ),
     )
 
 
@@ -842,10 +784,14 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
     # user-declared key of the same name would silently merge with the
     # diagnostic column (FrameLayout groups by key).
     if teleop is not None:
-        action_owners = topic_owners(sections["actions"])
-        obs_owners = topic_owners(sections["observations"])
-        synthesized = [f"{TELEOP_INPUT_KEY}.{action_owners[tis.target][0]}" for tis in teleop.input]
-        synthesized += [f"{TELEOP_FEEDBACK_KEY}.{obs_owners[tfs.origin][0]}" for tfs in teleop.feedback]
+        synthesized = [
+            f"{TELEOP_INPUT_KEY}.{owning_key(sections['actions'], tis.target, 'teleop.input: target')}"
+            for tis in teleop.input
+        ]
+        synthesized += [
+            f"{TELEOP_FEEDBACK_KEY}.{owning_key(sections['observations'], tfs.origin, 'teleop.feedback: origin')}"
+            for tfs in teleop.feedback
+        ]
         for skey in synthesized:
             if skey in key_owners:
                 raise ContractValidationError(
