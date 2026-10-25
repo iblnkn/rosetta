@@ -117,7 +117,7 @@ teleop:
   # adapter consumes: no frame-key level, unlike the keyed sections above.
   # demonstrates: teleop input, a list of independently-targeted sources.
   # Each entry names the action channel topic it drives via `target`
-  # (validated at load time against every declared action topic); hil_manager_node
+  # (validated at load time against every declared action topic); rosetta_hil's HIL manager
   # decodes this source and encodes+publishes it onto `target` live, so the
   # action's own topic already carries the human's command during teleop.
   # This one drives only the arm; the gripper source of the `action` key is

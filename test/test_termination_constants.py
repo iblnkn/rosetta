@@ -19,15 +19,15 @@ files are the single source of these values -- ``node_utils`` re-exports them
 rather than restating them -- so what is left to check is coverage: that
 ``RecordEpisode`` declares everything the recorder can report, and so on.
 
-Also pins the shape of the vocabulary: ``outcome`` exists only where a task
-verdict is meaningful, and no result carries a ``success`` flag.
+Also pins the shape of the vocabulary: no core result carries ``outcome``
+(apps such as rosetta_hil add it where a task verdict is meaningful), and no
+result carries a ``success`` flag.
 """
 
 import pytest
 
 from rosetta.robots.ros2 import node_utils
-from rosetta.robots.ros2.nodes import hil_episode as hil
-from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
+from rosetta_interfaces.action import RecordEpisode, RunPolicy
 
 # What each action's server can produce, as the node code decides it.
 PRODUCED = {
@@ -41,14 +41,6 @@ PRODUCED = {
     RunPolicy.Result: {
         node_utils.TERMINATION_COMPLETED,
         node_utils.TERMINATION_TIMEOUT,
-        node_utils.TERMINATION_CANCELLED,
-        node_utils.TERMINATION_NODE_DEACTIVATED,
-        node_utils.TERMINATION_ERROR,
-    },
-    ManageEpisode.Result: {
-        node_utils.TERMINATION_STOPPED,
-        node_utils.TERMINATION_TIMEOUT,
-        hil.TERMINATION_REWARD_THRESHOLD,
         node_utils.TERMINATION_CANCELLED,
         node_utils.TERMINATION_NODE_DEACTIVATED,
         node_utils.TERMINATION_ERROR,
@@ -68,9 +60,8 @@ def test_a_shared_reason_has_the_same_value_in_every_action(result_type):
     for name in dir(result_type):
         if not name.startswith(("TERMINATION_", "OUTCOME_")):
             continue
-        source = node_utils if hasattr(node_utils, name) else hil
-        assert getattr(result_type, name) == getattr(source, name), (
-            f"{result_type.__name__}.{name} disagrees with {source.__name__}.{name}"
+        assert getattr(result_type, name) == getattr(node_utils, name), (
+            f"{result_type.__name__}.{name} disagrees with node_utils.{name}"
         )
 
 
@@ -89,20 +80,12 @@ def test_recorder_and_policy_do_not_declare_an_outcome():
     assert not hasattr(RunPolicy.Result(), "outcome")
 
 
-def test_manage_episode_declares_the_full_outcome_vocabulary():
-    assert _declared(ManageEpisode.Result, "OUTCOME_") == {
-        hil.OUTCOME_SUCCESS,
-        hil.OUTCOME_FAILURE,
-        hil.OUTCOME_UNLABELED,
-    }
-
-
 def test_no_feedback_carries_a_status_field():
     """`status` was a hardcoded constant at all three publish sites, advertising
     states ("starting", "stopping") that were never emitted. Feedback arriving
     at all is the "running" signal; GoalStatus and termination_reason cover the
     end."""
-    for action in (RecordEpisode, RunPolicy, ManageEpisode):
+    for action in (RecordEpisode, RunPolicy):
         assert not hasattr(action.Feedback(), "status")
 
 

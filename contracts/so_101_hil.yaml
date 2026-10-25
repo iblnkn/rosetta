@@ -60,8 +60,8 @@ teleop:
       apply: [rad2deg]
 
   events:
-    # This contract wires up 4 of hil_manager_node's teleop events (see its
-    # _on_teleop_events docstring for the full set), each on its OWN button
+    # This contract wires up 4 of the 6 teleop events (TELEOP_EVENT_NAMES lists
+    # them; rosetta_hil's README says what each does), each on its OWN button
     # so they fire independently. Nothing here ever deletes a
     # recording; a bad take is filtered later from the recorded reward
     # stream, not discarded at record time.

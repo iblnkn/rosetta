@@ -30,7 +30,6 @@ setup(
         "console_scripts": [
             "episode_recorder_node = rosetta.robots.ros2.nodes.episode_recorder_node:main",
             "episode_keyboard_node = rosetta.robots.ros2.nodes.episode_keyboard_node:main",
-            "hil_manager_node = rosetta.robots.ros2.nodes.hil_manager_node:main",
             "policy_runner_node = rosetta.robots.ros2.nodes.policy_runner_node:main",
             "rosetta_port = rosetta.robots.ros2.offline.port:main",
         ],

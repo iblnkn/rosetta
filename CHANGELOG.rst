@@ -4,6 +4,19 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Breaking: the human-in-the-loop manager moved to its own package.**
+  ``hil_manager_node``, ``hil_launch.py`` and ``params/hil_manager.yaml`` are
+  now in ``rosetta_hil``, and ``ManageEpisode``/``StartHILEpisode`` in
+  ``rosetta_hil_interfaces``. Launch with ``ros2 launch rosetta_hil
+  hil_launch.py``. ``contracts/so_101_hil.yaml`` stays here.
+* **Breaking: a declared public Python API.** Public modules list their names
+  in ``__all__`` (see ``doc/reference/python-api.md``); everything else is
+  internal. ``node_utils`` moved from ``rosetta.robots.ros2.nodes`` to
+  ``rosetta.robots.ros2``, and ``RosettaLifecycleNode``'s hooks and helpers
+  dropped their underscores (``setup``, ``teardown``, ``goal_work``,
+  ``signal_stop``, ``on_goal``, ``on_cancel``, ...). New
+  ``rosetta.robots.ros2.child_goals`` sends and cancels goals on other action
+  servers.
 * **Breaking: action results report how work ended, not whether it "succeeded".**
   ``bool success`` is gone from all three results (see ``rosetta_interfaces``);
   the terminal ``GoalStatus`` is the mechanics and ``termination_reason`` names

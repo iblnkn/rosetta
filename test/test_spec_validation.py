@@ -226,7 +226,7 @@ def _teleop_feedback(feedback_source):
 def test_teleop_feedback_requires_encoder():
     """Teleop feedback gets the same encoder check as the other publish paths
     (actions, reward-as-action), so failure comes at load, not at first
-    publish in hil_manager_node."""
+    publish in rosetta_hil's HIL manager."""
     c = _teleop_feedback(_source("/leader/fb", "my_msgs/msg/NoEncoder", ["a"]))
     with pytest.raises(ContractValidationError, match="No encoder registered"):
         list(iter_teleop_feedback_specs(c))
@@ -319,7 +319,7 @@ def test_owning_key_unknown_topic_raises_contract_error():
 
 def test_owning_key_ambiguous_topic_raises():
     """One topic in two action entries makes the owning recording column
-    ambiguous (and would diverge from hil_manager's last-wins topic mux)."""
+    ambiguous (and a HIL app routing by topic could not tell which entry it drives)."""
     actions = [
         _entry("action.arm", _source("/cmd", "sensor_msgs/msg/JointState", ["position.j1"])),
         _entry("action.alt", _source("/cmd", "sensor_msgs/msg/JointState", ["velocity.j1"])),

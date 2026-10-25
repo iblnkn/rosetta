@@ -1,11 +1,11 @@
 # Nodes
 
-Four executables in the `rosetta` package. The recorder, policy runner and
-human-in-the-loop launch files read a params file from `params/` and expose
-deployment values as launch arguments. For the recorder and policy runner, an
-empty launch argument keeps the params-file value, except `contract_path`,
-which is passed as given. `hil_launch.py` fills its defaults from the params
-files up front, so an empty argument is an empty value.
+Three executables in the `rosetta` package. The recorder and policy runner
+launch files read a params file from `params/` and expose deployment values as
+launch arguments. An empty launch argument keeps the params-file value, except
+`contract_path`, which is passed as given. The human-in-the-loop manager is a
+separate app built on these nodes, in
+[`rosetta_hil`](https://github.com/iblnkn/rosetta_hil).
 
 ```bash
 ros2 launch rosetta <launch_file> --show-args
@@ -13,18 +13,17 @@ ros2 launch rosetta <launch_file> --show-args
 
 ## Lifecycle
 
-`episode_recorder_node`, `policy_runner_node` and `hil_manager_node` are
-lifecycle nodes. `episode_keyboard_node` is a plain node.
+`episode_recorder_node` and `policy_runner_node` are lifecycle nodes. `episode_keyboard_node` is a plain node.
 
 | Transition | Effect |
 |---|---|
 | `configure` | Load the contract, create subscriptions and inactive publishers. An error returns the node to `unconfigured`, or finalizes it if teardown fails too. |
 | `activate` | Enable publishers, then accept goals. |
-| `deactivate` | Stop accepting goals, stop in-progress work (waits up to 5 s, 10 s for `hil_manager_node`), publish the safety action, disable publishers. |
+| `deactivate` | Stop accepting goals, stop in-progress work (waits up to 5 s), publish the safety action, disable publishers. |
 | `cleanup` | Refused while work is in progress. Otherwise release resources. |
 | `shutdown` | Stop, secure, release. |
 
-The three lifecycle launch files take `configure` (default `true`) and
+Both lifecycle launch files take `configure` (default `true`) and
 `activate` (default `true`), which drive the transitions at start.
 
 A node runs one goal at a time. A goal sent while busy or while not active is
@@ -164,59 +163,5 @@ contract `fps`.
 | `~/start_policy` | service `rosetta_interfaces/srv/StartPolicy` |
 | `~/cancel_policy` | service `std_srvs/srv/Trigger` |
 
-Under `hil_launch.py` the runner sits in namespace `robot_policy`, so the
-action is `/robot_policy/run_policy`.
-
-## hil_manager_node
-
-Runs human-in-the-loop episodes: a policy, a teleop input muxed against it,
-an optional reward classifier, and the recorder. Node name `hil_manager`.
-Launch `hil_launch.py`, which also starts the recorder, a policy runner in
-namespace `robot_policy` and, when enabled, a second runner in namespace
-`reward_classifier`. Defaults come from `params/hil_manager.yaml`.
-
-| Parameter | Default | Meaning |
-|---|---|---|
-| `contract_path` | `""` | Required. The launch file defaults to `contracts/so_101_hil.yaml`. |
-| `enable_recording` | `true` | Send a `RecordEpisode` goal per episode. |
-| `manage_policy_lifecycle` | `true` | Send and cancel a `RunPolicy` goal per episode. |
-| `enable_reward_classifier` | `false` | |
-| `policy_action_name` | `/robot_policy/run_policy` | |
-| `reward_classifier_action_name` | `/reward_classifier/run_policy` | |
-| `recorder_action_name` | `/record_episode` | |
-| `policy_remap_prefix` | `/hil/policy` | The runner publishes actions to `<prefix><action topic>`. The manager forwards to `<action topic>` while the policy is in control. |
-| `reward_remap_prefix` | `/hil/reward` | Same for the classifier. |
-| `human_reward_positive` | `1.0` | |
-| `human_reward_negative` | `-1.0` | |
-| `default_prompt` | `""` | |
-| `default_max_duration_s` | `0.0` | |
-| `feedback_rate_hz` | `30.0` | |
-
-The launch file validates that `action_remap_from` names an action topic of
-the contract. It exposes the policy runner's model and chunking parameters,
-and the reward classifier's, as launch arguments. Run `--show-args` for the
-list. `launch_local_server` is fixed to `true`. One `feedback_rate_hz`,
-default `30.0`, goes to the manager, the recorder and both runners.
-
-| Interface | Type | Effect |
-|---|---|---|
-| `manage_episode` | action `rosetta_interfaces/action/ManageEpisode` | |
-| `~/start_episode` | service `rosetta_interfaces/srv/StartHILEpisode` | |
-| `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode. `true` labels success, `false` failure. The goal succeeds. |
-| `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. The goal ends `CANCELED`. |
-| `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
-| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. |
-| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | |
-| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Published at the feedback rate while an episode runs. |
-
-Teleop events from the contract are edge-triggered: `is_intervention` press
-hands control to teleop and release hands it back, `start_episode` starts an
-episode with `default_prompt`, `success` and `failure` set the label,
-`end_success` and `end_failure` end the episode. A label holds until the
-other button, `~/clear_reward_override`, or the next episode. No event
-deletes a bag.
-
-Result `termination_reason`: `stopped`, `timeout`, `reward_threshold`,
-`cancelled`, `node_deactivated`, `error`. `outcome`: `success`, `failure`,
-`unlabeled`. With `success_reward_threshold` above zero on the goal, reaching
-it ends the episode and an unlabeled outcome becomes `success`.
+Under `rosetta_hil`'s `hil_launch.py` the runner sits in namespace
+`robot_policy`, so the action is `/robot_policy/run_policy`.

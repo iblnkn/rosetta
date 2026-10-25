@@ -160,7 +160,7 @@ def test_teleop_leaks_into_iter_specs_but_not_policy_specs():
 
 
 def test_teleop_input_non_numeric_dtype_rejected():
-    # A String teleop input decodes to str, which hil_manager_node would then
+    # A String teleop input decodes to str, which rosetta_hil's HIL manager would then
     # try to re-encode onto the numeric action topic — failing on every
     # message at teleop rate. Reject at load instead.
     obs = _entry("observation.state", "/joints", "sensor_msgs/msg/JointState", ["position.j1"])

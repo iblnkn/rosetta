@@ -56,7 +56,7 @@ def typed_config(context, name: str, data_type):
 def yaml_params(path: str, node_name: str) -> dict:
     """One node's ``ros__parameters`` mapping from a plain params YAML file.
 
-    For launch files that merge parameter dicts in Python (hil_launch's
+    For launch files that merge parameter dicts in Python (rosetta_hil's hil_launch,
     layered defaults). Namespaced nodes also need this instead of passing the
     file path. A params file's bare top-level node key only matches the
     root-namespace node name, so the file is silently inert for a namespaced
@@ -75,7 +75,7 @@ def _flag_condition(name: str, context) -> IfCondition:
     the event handler eventually fires, in whatever configuration scope
     exists then — which read the wrong value when the launch file was
     included from a launch XML on Jazzy. Without a context (a declaratively
-    built launch file, e.g. hil_launch), the lazy substitution is the only
+    built launch file, e.g. rosetta_hil's hil_launch), the lazy substitution is the only
     option.
     """
     if context is None:
