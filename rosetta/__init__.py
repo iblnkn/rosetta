@@ -41,7 +41,7 @@ each module's ``__all__``; every other module is internal:
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
 - ROS 2 node toolkit: ``robots.ros2.rosetta_lifecycle_node``,
-  ``robots.ros2.node_utils``, ``robots.ros2.topic_bridge``,
+  ``robots.ros2.node_utils``, ``robots.ros2.child_goals``, ``robots.ros2.topic_bridge``,
   ``robots.ros2.node_host``, ``robots.ros2.rclpy_utils``,
   ``robots.ros2.field_access``, ``robots.ros2.launch_utils``
 

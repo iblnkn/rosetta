@@ -56,6 +56,7 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 from rosetta.frames.codecs import decode_value, encode_value
+from rosetta.robots.ros2.child_goals import cancel_goal, send_goal
 from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
@@ -64,7 +65,6 @@ from rosetta.robots.ros2.node_utils import (
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
-    wait_until,
 )
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
@@ -76,19 +76,6 @@ TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
 OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
 OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
 OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
-
-# ---------- Constants ----------
-
-ACTION_CLIENT_TIMEOUT_SEC = 10.0
-GOAL_RESPONSE_TIMEOUT_SEC = 10.0
-CANCEL_TIMEOUT_SEC = 5.0
-RESULT_TIMEOUT_SEC = 10.0
-FUTURE_POLL_SEC = 0.01
-
-
-def _wait_for_future(future, timeout_sec: float) -> bool:
-    """Poll a future until done or timeout. Returns True if completed."""
-    return wait_until(future.done, timeout_sec, poll=FUTURE_POLL_SEC)
 
 
 class HilManagerNode(RosettaLifecycleNode):
@@ -1082,57 +1069,12 @@ class HilManagerNode(RosettaLifecycleNode):
     # ====================================================================
 
     def _send_child_goal(self, client, goal, name: str, *, feedback_callback=None):
-        """Send a goal to a child action server; return the handle or None.
-
-        One implementation for all three children (recorder, policy, reward
-        classifier) — they only differ in client, goal type, log name, and
-        an optional feedback callback.
-        """
-        if not client.wait_for_server(timeout_sec=ACTION_CLIENT_TIMEOUT_SEC):
-            self.get_logger().error(f"{name} action server not available")
-            return None
-
-        future = client.send_goal_async(goal, feedback_callback=feedback_callback)
-        if not _wait_for_future(future, GOAL_RESPONSE_TIMEOUT_SEC):
-            self.get_logger().error(f"{name} goal send timed out")
-            return None
-
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().error(f"{name} goal rejected")
-            return None
-
-        self.get_logger().info(f"{name} started")
-        return goal_handle
+        """Send a goal to a child action server; return the handle or None."""
+        return send_goal(client, goal, name=name, logger=self.get_logger(), feedback_callback=feedback_callback)
 
     def _cancel_child(self, goal_handle, name: str, wait_result: bool = False):
-        """Best-effort cancel of a child goal; None-safe.
-
-        ``wait_result=True`` additionally waits for the goal to finish
-        executing — so the child's active-goal slot is free before the next
-        episode sends a new goal — and returns its result (None on timeout).
-        A cancel timeout is only a warning: the goal may still terminate, so
-        the result wait proceeds regardless.
-        """
-        if goal_handle is None:
-            return None
-        try:
-            cancel_future = goal_handle.cancel_goal_async()
-            if not _wait_for_future(cancel_future, CANCEL_TIMEOUT_SEC):
-                self.get_logger().warning(f"{name} cancel timed out")
-            if not wait_result:
-                self.get_logger().info(f"{name} cancelled")
-                return None
-
-            result_future = goal_handle.get_result_async()
-            if not _wait_for_future(result_future, RESULT_TIMEOUT_SEC):
-                self.get_logger().warning(f"{name} result timed out after cancel")
-                return None
-            self.get_logger().info(f"{name} cancelled")
-            return result_future.result().result
-        except Exception as e:
-            self.get_logger().warning(f"Failed to cancel {name}: {e}")
-            return None
+        """Best-effort cancel of a child goal; with ``wait_result``, return its result."""
+        return cancel_goal(goal_handle, name=name, logger=self.get_logger(), wait_result=wait_result)
 
     def _on_recorder_feedback(self, fb) -> None:
         """Track the recorder's live message count for ManageEpisode feedback."""

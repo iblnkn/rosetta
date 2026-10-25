@@ -98,6 +98,7 @@ PUBLIC_API = {
         "load_dataset_writer",
         "load_policy_runner",
     },
+    "rosetta.robots.ros2.child_goals": {"cancel_goal", "send_goal"},
     "rosetta.robots.ros2.field_access": {"dot_get", "dot_set", "resolve_indexed"},
     "rosetta.robots.ros2.launch_utils": {"autostart_handlers", "typed_config", "yaml_params"},
     "rosetta.robots.ros2.node_host": {"NodeHost"},
