@@ -32,6 +32,21 @@ training data matches inference input sample-for-sample by construction.
 Framework adapters live in their own packages and register via entry points
 (see :mod:`rosetta.policies`), e.g. ``lerobot_rosetta``.
 
+Public API. Other packages import only these modules, and only the names in
+each module's ``__all__``; every other module is internal:
+
+- Contract: ``contract.schema``, ``contract.specs``, ``contract.errors``,
+  ``contract.sidecar``, ``contract.operators`` (operator plugins)
+- Frames: ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
+  ``frames.naming``, ``frames.protocols``
+- Policies: ``policies``
+- ROS 2 node toolkit: ``robots.ros2.rosetta_lifecycle_node``,
+  ``robots.ros2.node_utils``, ``robots.ros2.topic_bridge``,
+  ``robots.ros2.node_host``, ``robots.ros2.rclpy_utils``,
+  ``robots.ros2.field_access``, ``robots.ros2.launch_utils``
+
+The contract, frames and policies modules import without ROS.
+
 Usage::
 
     from rosetta.contract.schema import load_contract

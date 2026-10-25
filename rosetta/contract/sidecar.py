@@ -32,6 +32,13 @@ from typing import Callable, Literal
 
 import yaml
 
+__all__ = [
+    "CONTRACT_SIDECAR_FILENAME",
+    "LEROBOT_CONTRACT_SIDECAR_PATH",
+    "find_contract_for_pretrained",
+    "scan_inline_codec_paths",
+]
+
 CONTRACT_SIDECAR_FILENAME = "rosetta_contract.yaml"
 """Bare sidecar filename; tar-shard dataset layouts put it at the output root."""
 

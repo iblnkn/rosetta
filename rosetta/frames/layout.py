@@ -72,6 +72,13 @@ from ..contract.specs import (
 )
 from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
+__all__ = [
+    "FrameLayout",
+    "KeyLayout",
+    "SpecSlice",
+    "build_feature",
+]
+
 # All supported image encodings are normalized to 3-channel uint8 RGB by the
 # decoders (3ch color as-is, 4ch drops alpha, mono->rgb). Depth/RGBD encodings
 # are explicitly rejected at decode (see decoders.DepthEncodingNotSupported).

@@ -46,6 +46,11 @@ from rosetta.robots.ros2.node_utils import (
 from rosetta.robots.ros2.rclpy_utils import LIFECYCLE_CONFIGURED_LABELS, lifecycle_state_label
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 
+__all__ = [
+    "BridgeLifecycleNode",
+    "RosettaLifecycleNode",
+]
+
 
 class RosettaLifecycleNode(Node):
     """Base class for lifecycle nodes built on rosetta.

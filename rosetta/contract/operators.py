@@ -39,6 +39,14 @@ import numpy as np
 from .errors import ContractValidationError
 from .plugins import load_entry_point_plugins
 
+__all__ = [
+    "OPERATOR_ENTRY_POINT_GROUP",
+    "Invertibility",
+    "Operator",
+    "OperatorContext",
+    "register_operator",
+]
+
 
 class Invertibility(Enum):
     """

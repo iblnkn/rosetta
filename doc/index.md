@@ -76,6 +76,7 @@ reference/message-types
 reference/rosetta-port
 reference/nodes
 reference/interfaces
+reference/python-api
 reference/packages
 ```
 

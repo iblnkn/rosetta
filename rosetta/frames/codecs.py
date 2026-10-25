@@ -49,6 +49,19 @@ import numpy as np
 from ..contract.operators import forward_pipeline, inverse_pipeline
 from ..contract.plugins import load_entry_point_plugins
 
+__all__ = [
+    "CODEC_ENTRY_POINT_GROUP",
+    "SUPPORTED_NUMERIC_DTYPES",
+    "DecoderFn",
+    "EncoderFn",
+    "NonFiniteActionError",
+    "decode_value",
+    "discover_codecs",
+    "encode_value",
+    "register_decoder",
+    "register_encoder",
+]
+
 if TYPE_CHECKING:
     from ..contract.specs import ActionStreamSpec, ObservationStreamSpec
 

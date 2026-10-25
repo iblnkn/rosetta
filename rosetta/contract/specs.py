@@ -55,6 +55,19 @@ from .schema import (
     owning_key,
 )
 
+__all__ = [
+    "ActionStreamSpec",
+    "ObservationStreamSpec",
+    "StreamSpec",
+    "iter_action_specs",
+    "iter_observation_specs",
+    "iter_policy_specs",
+    "iter_reward_as_action_specs",
+    "iter_specs",
+    "iter_teleop_feedback_specs",
+    "iter_teleop_input_specs",
+]
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StreamSpec:

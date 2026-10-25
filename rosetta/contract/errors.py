@@ -14,6 +14,10 @@
 
 """Contract exception types, in a module with no imports so every layer can raise them."""
 
+__all__ = [
+    "ContractValidationError",
+]
+
 
 class ContractValidationError(ValueError):
     """A user-fixable problem: an invalid contract, or a plugin it needs failing to load.

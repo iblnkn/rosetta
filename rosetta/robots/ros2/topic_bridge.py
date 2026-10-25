@@ -49,6 +49,10 @@ from rosetta.frames.resample import StreamBuffer
 from rosetta.robots.ros2.ingest import StreamIngest
 from rosetta.robots.ros2.rclpy_utils import lifecycle_state_label, qos_profile_from_dict
 
+__all__ = [
+    "TopicBridge",
+]
+
 if TYPE_CHECKING:
     from rclpy.lifecycle import LifecycleNode
 

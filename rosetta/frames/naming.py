@@ -28,6 +28,12 @@ spec's type, via ``KeyLayout.is_action`` in :mod:`rosetta.frames.layout`.
 
 import re
 
+__all__ = [
+    "IMAGE_KEY_PREFIX",
+    "camera_name",
+    "sanitize_field_name",
+]
+
 #: Contract-key prefix marking an image stream.
 IMAGE_KEY_PREFIX = "observation.images."
 

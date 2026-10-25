@@ -34,6 +34,19 @@ from rclpy.signals import SignalHandlerOptions
 
 from rosetta_interfaces.action import RecordEpisode, RunPolicy
 
+__all__ = [
+    "TERMINATION_CANCELLED",
+    "TERMINATION_COMPLETED",
+    "TERMINATION_ERROR",
+    "TERMINATION_NODE_DEACTIVATED",
+    "TERMINATION_STOPPED",
+    "TERMINATION_TIMEOUT",
+    "finish_goal",
+    "positive_rate_descriptor",
+    "spin_lifecycle_node",
+    "wait_until",
+]
+
 # =============================================================================
 # Parameter declaration
 # =============================================================================

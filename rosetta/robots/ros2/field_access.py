@@ -33,6 +33,12 @@ from typing import Iterable
 
 import numpy as np
 
+__all__ = [
+    "dot_get",
+    "dot_set",
+    "resolve_indexed",
+]
+
 
 def dot_get(obj, path: str):
     """

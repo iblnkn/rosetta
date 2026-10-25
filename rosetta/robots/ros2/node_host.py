@@ -32,6 +32,10 @@ from rclpy.context import Context
 from rclpy.executors import Executor, ExternalShutdownException, SingleThreadedExecutor
 from rclpy.node import Node
 
+__all__ = [
+    "NodeHost",
+]
+
 THREAD_JOIN_TIMEOUT_SEC = 1.0
 
 
