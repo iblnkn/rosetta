@@ -70,8 +70,6 @@ from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.srv import StartRecording
 
-# ---------- Constants ----------
-
 # Regex patterns for topics excluded from auto-recording by default.
 # Uses the same regex convention as ``ros2 bag record --exclude``.
 _DEFAULT_BLACKLIST = (
@@ -106,7 +104,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         """
         super().__init__("episode_recorder", **kwargs)
 
-        # Parameters with descriptors for introspection (ros2 param describe)
         self.declare_parameter(
             "contract_path",
             "",
@@ -185,7 +182,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             ),
         )
 
-        # Initialize state variables (resources created in lifecycle callbacks)
         self._contract = None
         self._contract_text: str = ""
         self._bag_base: Path | None = None
@@ -201,11 +197,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._start_service = None
         self._delete_last_bag_service = None
 
-        # Recording state. The writer's existence gates the subscription write
-        # path. The base work gate (the busy flag plus a per-claim stop event)
-        # is claimed at accept time, before the writer opens. That stops two
-        # concurrent starts (service plus service, or service plus action)
-        # from both proceeding through the writer-open window.
         self._writer: rosbag2_py.SequentialWriter | None = None
         self._writer_lock = threading.Lock()
         self._messages_written = 0
@@ -251,19 +242,14 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         include_patterns = tuple(p for p in self.get_parameter("include_topics").value if p)
         self._include_regex = re.compile("|".join(include_patterns)) if include_patterns else None
 
-        # Build topic list from contract
         # use_sim_time is auto-declared on every rclpy node, so the read cannot fail.
         self._topics = contract_topics(self._contract, use_sim_time=self.get_parameter("use_sim_time").value)
 
-        # Persistent subscriptions for non-latched contract topics only
-        # (callbacks no-op while no writer is open). Latched topics get
-        # per-episode subscriptions in _open_writer so the RMW redelivers
-        # their latched samples into each new bag.
+        # Latched contract topics subscribe per episode instead (see the class docstring).
         for topic, type_str, qos in self._topics:
             if qos.durability != DurabilityPolicy.TRANSIENT_LOCAL:
                 self._subs[topic] = self._create_sub(topic, type_str, qos)
 
-        # Create action server
         self._action_server = ActionServer(
             self,
             RecordEpisode,
@@ -274,22 +260,15 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
-        # Client to this server's own cancel service, so ~/cancel_recording can
-        # perform a real cancel rather than a lookalike. The name is relative,
-        # so it expands through the same node-namespace rules that expanded the
-        # action name above -- hand-composing an absolute name would break
-        # silently under a namespace.
+        # This server's own cancel service, so ~/cancel_recording performs a
+        # real cancel. A relative name, so it expands under the node namespace.
         self._cancel_client = self.create_client(
             CancelGoal,
             "record_episode/_action/cancel_goal",
             callback_group=self._cbg,
         )
 
-        # Service to allow external callers to cancel an active recording.
-        # Useful for users who can't (or don't want to) interact with the
-        # action protocol directly -- Foxglove can call services but not
-        # actions. It forwards to the cancel service above, so a dashboard
-        # button and a `ros2 action` cancel are the same event.
+        # Service wrappers for clients that can call services but not actions (Foxglove).
         self._cancel_service = self.create_service(
             Trigger,
             "~/cancel_recording",
@@ -297,9 +276,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
-        # Service to start recording without using the ROS2 action protocol.
-        # Useful for Foxglove extensions and other clients that cannot call
-        # the hidden _action/* services.
         self._start_service = self.create_service(
             StartRecording,
             "~/start_recording",
@@ -307,7 +283,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             callback_group=self._cbg,
         )
 
-        # Service to delete the most recently completed bag directory.
         self._delete_last_bag_service = self.create_service(
             Trigger,
             "~/delete_last_bag",
@@ -435,12 +410,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 except Exception as e:
                     write_error = f"Write failed on {_topic}: {e}"
             if write_error is not None:
-                # Signalled outside the writer lock (_signal_stop takes the work
-                # gate; keeping the two disjoint means nobody has to reason
-                # about their order). Naming the reason is what makes the
-                # epilogue report an error: this used to just set the stop
-                # event, so the loop exited normally and the goal SUCCEEDED
-                # while handing back a truncated bag.
+                # Outside the writer lock: _signal_stop takes the work gate,
+                # and the two locks are never held together.
                 self.get_logger().error(write_error)
                 self._signal_stop(TERMINATION_ERROR, write_error)
 
@@ -449,39 +420,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
     # ---------- Action callbacks ----------
 
     def _on_cancel_service(self, request, response):
-        """Cancel the active recording from a plain Trigger service call.
-
-        Forwards to this server's own ``_action/cancel_goal`` with the action
-        spec's cancel-all wildcard, so the goal takes the ordinary cancel path:
-        the base's goal-id-routed ``_on_cancel`` records the reason, the goal
-        enters CANCELING, and _record ends it CANCELED. A dashboard button and
-        a `ros2 action` cancel are the same event, down to the terminal state.
-
-        A service start (no goal handle) has nothing to cancel through the
-        action protocol, so it stops via the recorded reason alone.
-
-        Returns:
-            The response with success False when nothing is recording, else
-            True with a "Cancel requested" message.
-
-        """
+        """Cancel the active recording. See :meth:`RosettaLifecycleNode._cancel_current_work`."""
         return self._handle_cancel_service(response, self._cancel_client, what="recording")
 
     def _on_start_service(self, request, response):
-        """Start a recording without the ROS2 action protocol.
-
-        The primary interface for Foxglove extensions, since the foxglove
-        bridge cannot route to the hidden _action/* services.
-
-        Returns:
-            The response with accepted False and a reason when the slot is
-            already claimed, else True with "Recording started".
-
-        """
-        # The base claims the recording slot before the writer exists, so a
-        # concurrent start (another service call or an action goal) is rejected.
-        # The shared record loop runs on a background thread; the action path
-        # runs the same loop on the action executor thread instead.
+        """Start a recording on a background thread, without the action protocol."""
         return self._handle_start_service(response, self._record, (request.prompt or "",), what="recording")
 
     def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
@@ -527,10 +470,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         """The one record loop, shared by both start paths.
 
         ``goal_handle=None`` marks a service start. That path skips feedback
-        publishing, cancel-request polling, and the terminal goal transition.
-        Everything else is identical by construction: writer lifecycle,
-        timeout, metadata, per-topic summary, and state reconciliation. The
-        two paths were once parallel copies that had drifted.
+        publishing and the terminal goal transition; everything else is shared.
 
         The per-recording stop event and stop reason were armed at accept time
         by _try_claim_work. They are deliberately not reset here: a cancel or
@@ -541,16 +481,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 the ``default_prompt`` parameter.
             goal_handle: Action goal handle, or None for a service start.
             max_duration: Auto-stop after this many seconds. 0 or negative
-                falls back to the ``default_max_duration_s`` parameter, which is
-                what the service-start path always uses -- the lightweight
-                service start takes node defaults; the goal can override them.
+                falls back to the ``default_max_duration_s`` parameter.
 
         Returns:
             The populated RecordEpisode.Result.
 
         """
-        # Resolved here rather than at each entry point, so the action goal,
-        # the service call, and any future caller all fall back the same way.
         prompt = prompt or self.get_parameter("default_prompt").value
 
         self._messages_written = 0
@@ -569,10 +505,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # asked for is recorded on the node instead (see the epilogue).
         loop_reason: str | None = None
 
-        # _goal_work releases the claim on every exit, including a goal-handle
-        # transition that raises. No path can leave the busy flag held and
-        # brick all later recordings. It also binds the goal for cancel
-        # routing. None on the service path means no routing.
+        # _goal_work binds the goal for cancel routing and releases the claim on every exit.
         with self._goal_work(goal_handle) as stop_event:
             start = time.monotonic()
             try:
@@ -596,10 +529,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                         break
 
                     if goal_handle is not None:
-                        # No is_cancel_requested poll: every cancel now sets the
-                        # stop event via the base's _on_cancel, including the
-                        # ones the cancel service forwards.
-                        # Read message count under lock for thread safety.
                         with self._writer_lock:
                             msg_count = self._messages_written
                         feedback.elapsed_s = elapsed
@@ -733,14 +662,9 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         with self._writer_lock:
             self._writer = writer
 
-        # Per-episode subscriptions, created only now that the writer is live
-        # so everything they deliver takes the write path:
-        # - all auto-discovered topics;
-        # - latched (TRANSIENT_LOCAL) contract topics: the RMW redelivers each
-        #   publisher's latched sample to the fresh subscription, landing
-        #   pre-episode data (e.g. /tf_static) in every bag. The subscription
-        #   depth is widened so one publisher's redelivered sample can't
-        #   evict another's (see latched_sub_depth).
+        # Per-episode subscriptions (see the class docstring), created only now
+        # that the writer is live. Latched depth is widened so one publisher's
+        # redelivered sample can't evict another's.
         for topic, type_str, qos in discovered:
             self._episode_subs[topic] = self._create_sub(topic, type_str, qos)
         for topic, type_str, qos in self._topics:
