@@ -56,11 +56,17 @@ class SafetyBehavior(StrEnum):
 
     ``ZEROS`` are action-space zeros: they go through the inverse operator
     pipeline like any command, so a declared ``clamp`` still bounds them.
+
+    ``HOLD`` re-sends the stream's last command. Before the stream has sent
+    one (since the bridge was set up, or since its last state reset between
+    episodes) there is nothing to hold, so it sends zeros, exactly like
+    ``ZEROS``. On a position-controlled arm that zero is a pose the arm will
+    move to.
     """
 
     NONE = "none"  # No safety action (default)
     ZEROS = "zeros"  # Send zero commands (action-space)
-    HOLD = "hold"  # Hold last action
+    HOLD = "hold"  # Re-send the last command; zeros if none was sent yet
 
 
 class FieldKind(StrEnum):

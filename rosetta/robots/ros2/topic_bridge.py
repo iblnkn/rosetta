@@ -218,9 +218,9 @@ class TopicBridge:
     def send_safety_action(self) -> None:
         """Publish each active stream's declared safety command, then disarm.
 
-        Zeros for ``safety: zero`` (also the fallback for ``hold`` with nothing
-        cached yet), the last sent vector for ``safety: hold``, nothing for
-        ``safety: none``. Inactive publishers are skipped. Clearing
+        Zeros for ``safety: zeros``, the last sent vector for ``safety: hold``
+        (zeros when nothing was sent since setup or the last ``reset_state``),
+        nothing for ``safety: none``. Inactive publishers are skipped. Clearing
         ``_last_action_ns`` disarms the watchdog until a real frame arms it
         again, so this fires once per stall, not every tick.
 

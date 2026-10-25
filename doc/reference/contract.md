@@ -100,7 +100,10 @@ sends zeros if nothing was sent yet. With every action channel on `none`, no
 watchdog runs.
 
 Don't put a position-controlled arm on `zeros`. Zero is a pose, and the arm
-will go there.
+will go there. `hold` carries the same risk until the first command is sent:
+a stop or deactivate before then has nothing to hold and sends zeros. The
+lerobot robot plugin clears the held command between episodes, so this
+applies at the start of every episode.
 
 ### `qos`
 

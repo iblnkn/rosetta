@@ -76,7 +76,7 @@ actions:
     - channel: {topic: /arm/joint_commands,
                 type: sensor_msgs/msg/JointState,
                 qos: {reliability: reliable, history: keep_last, depth: 10},
-                safety: hold}     # on stop/watchdog: republish last command
+                safety: hold}     # on stop/watchdog: republish last command (zeros if none sent yet)
       align: {strategy: hold, timeline: header}
       select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
                position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
