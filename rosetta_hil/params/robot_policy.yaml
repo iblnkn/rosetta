@@ -1,0 +1,7 @@
+# The policy runner hil_launch.py starts in namespace robot_policy, layered
+# over rosetta's params/policy_runner.yaml (only the keys that differ).
+policy_runner:
+  ros__parameters:
+    pretrained_name_or_path: "models/ACT/checkpoints/last/pretrained_model"
+    feedback_rate_hz: 30.0
+    launch_local_server: true

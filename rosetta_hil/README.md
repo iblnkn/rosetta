@@ -32,12 +32,22 @@ isn't one. With a reward classifier, `reward_remap_from` names the reward
 topic the same way. Run `--show-args` for every argument; `contract_path`
 defaults to Rosetta's `so_101_hil.yaml`.
 
-This starts the manager, Rosetta's recorder, and a Rosetta policy runner in
-namespace `robot_policy`. With `enable_reward_classifier:=true` it also starts
-a classifier in namespace `reward_classifier`. The runner publishes to
-`/hil/policy<topic>`, and the manager forwards to `<topic>` while the policy
-has control. One `feedback_rate_hz`, default `30.0`, goes to the manager, the
-recorder and both runners.
+The launch file includes Rosetta's own `policy_runner_launch.py` (in namespace
+`robot_policy`) and `episode_recorder_launch.py`, and starts the manager next
+to them. With `enable_reward_classifier:=true` it includes the policy runner a
+second time, as a classifier in namespace `reward_classifier`. The runner
+publishes to `/hil/policy<topic>`, and the manager forwards to `<topic>` while
+the policy has control.
+
+Each included node takes a params file from this package's `params/`, layered
+over Rosetta's defaults: `robot_policy.yaml`, `reward_classifier.yaml` (which
+sets `is_classifier: true`) and `episode_recorder.yaml`. They hold only what
+HIL changes, such as a 30 Hz feedback rate. Tuning such as `actions_per_chunk`
+goes in your own copy, passed as `robot_policy_params_file:=`,
+`reward_classifier_params_file:=` or `episode_recorder_params_file:=`.
+Deployment values (`pretrained_name_or_path`, `policy_type`, `policy_device`,
+`server_address`, `bag_base_dir`, `storage_id`) are launch arguments, where
+empty keeps the params-file value.
 
 ## Run an episode
 
