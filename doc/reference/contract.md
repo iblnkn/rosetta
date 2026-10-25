@@ -291,15 +291,16 @@ teleop:
       end_failure: buttons.7
   feedback:
     - origin: /joint_states                           # an observation channel's topic
-      channel: {topic: /leader_arm/effort_feedback, type: sensor_msgs/msg/JointState}
+      channel: {topic: /leader_arm/joint_feedback, type: sensor_msgs/msg/JointState}
       align: {strategy: hold, timeline: receive}
-      select: [effort.shoulder_pan_joint, effort.elbow_flex_joint]
+      select: [position.shoulder_pan_joint, position.elbow_flex_joint]
+      apply: [rad2deg]
 ```
 
 | Key | Rule |
 |---|---|
 | `input[].target` | The topic of exactly one action entry. |
-| `feedback[].origin` | The topic of exactly one observation entry. |
+| `feedback[].origin` | The topic of exactly one observation entry. The origin is decoded with that entry's `select` and `apply`, so the feedback `select` must match it in width and units. |
 | `events.select` | Mapping of event name to a field path such as `buttons.N` or `axes.N`. The path is resolved per message, so a bad one is a runtime warning, not a load error. |
 
 Event names are `is_intervention`, `start_episode`, `success`, `failure`,

@@ -130,6 +130,7 @@ teleop:
       align: {strategy: hold, timeline: header}
       select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
                position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+      apply: [rad2deg]   # same units as the target action source
 
   # demonstrates: edge-triggered event mapping (map-form select: event <- field;
   # no align, events are not resampled)
@@ -141,16 +142,21 @@ teleop:
 
   # demonstrates: teleop feedback, a list of independently-sourced entries.
   # Each names the observation channel topic it forwards via `origin`
-  # (validated against every declared observation topic): here, the arm's own
-  # joint_states (which also carries effort) is re-encoded and published back
-  # to the leader arm as force feedback.
+  # (validated against every declared observation topic). The origin is
+  # decoded with that observation's own select and apply, so feedback carries
+  # what the observation carries: here the follower arm's six joint positions
+  # (degrees), re-encoded to radians so the leader arm can mirror the follower.
+  # Effort is not reachable this way, because observation.state selects only
+  # positions.
   feedback:
     - origin: /arm/joint_states
-      channel: {topic: /human/leader_arm/effort_feedback,
+      channel: {topic: /human/leader_arm/joint_feedback,
                 type: sensor_msgs/msg/JointState,
                 qos: {reliability: reliable, history: keep_last, depth: 10}}
       align: {strategy: hold, timeline: receive}
-      select: [effort.shoulder_pan, effort.shoulder_lift, effort.elbow]
+      select: [position.shoulder_pan, position.shoulder_lift, position.elbow,
+               position.wrist_pitch, position.wrist_roll, position.wrist_yaw]
+      apply: [rad2deg]
 
 # Extended sections (rewards / signals / info / complementary_data) are
 # ordinary frame entries (same channel -> align -> key pipeline, into the
