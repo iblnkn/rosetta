@@ -15,34 +15,14 @@
 """
 The contract: one YAML file per robot declaring what to translate.
 
-A contract binds channels to frame keys. Every frame-clock entry reads
-``channel (provides) -> align (chooses a timeline; mandatory) -> select
-(field projection) -> apply (an operator pipeline) -> the mapping key`` — actions
-are the same pipeline right-to-left, plus teleop roles, tasks, and safety.
-Everything else in Rosetta executes what this package declares. (At runtime,
-select/apply are pure per-message transforms and commute with alignment, so
-they run once per message at ingest — observationally identical.)
+- :mod:`.schema`: ``load_contract`` and the document types (from :mod:`.model`).
+- :mod:`.specs`: the runtime ``StreamSpec`` family and ``iter_*_specs``.
+- :mod:`.operators`, :mod:`.builtin_operators`: the ``apply`` pipeline.
+- :mod:`.plugins`: entry-point loader for operators and codecs.
+- :mod:`.sidecar`: finding a dataset's or checkpoint's contract file.
 
-Modules: :mod:`.model` is the pure document model (enums, dataclasses, the
-section descriptor table — no YAML, no parsing); :mod:`.schema` is what the
-contract *says* (parsing, ``load_contract``, and full load-time validation —
-it re-exports the model types, so import them from here); :mod:`.specs` is
-what the runtime *consumes* (the ``StreamSpec`` family and the
-``iter_*_specs`` resolution that produces them — resolution carries the
-registry-backed validation rules, and ``load_contract`` drains it eagerly so
-a returned contract is fully valid in this environment); :mod:`.operators`
-is the ``apply``-pipeline framework (registry, invertibility tiers,
-round-trip gate) and :mod:`.builtin_operators` the in-tree plugins
-(``rad2deg``, ``resize``, ``clamp``) registered into it; :mod:`.plugins` is
-the shared entry-point loader behind the operator/codec registries;
-:mod:`.sidecar` names the contract's on-disk sidecar placement
-(``rosetta_contract.yaml``) and resolves it best-effort from a checkpoint or
-dataset, local or Hub; :mod:`.errors`.
-
-Together with :mod:`rosetta.frames`, this package is Rosetta's waist: the
-robot side (:mod:`rosetta.robots`) and the policy side
-(:mod:`rosetta.policies`) import only these two packages and never each
-other. Import from the concrete modules (``rosetta.contract.schema``,
-``rosetta.contract.specs``); this ``__init__`` stays import-free to keep the
-schema <-> codec-registry module graph acyclic.
+With :mod:`rosetta.frames`, this is the only code the robot side
+(:mod:`rosetta.robots`) and the policy side (:mod:`rosetta.policies`) share.
+This ``__init__`` imports nothing (an import here would create a cycle with
+the codec registry); import from the modules directly.
 """

@@ -13,30 +13,25 @@
 # limitations under the License.
 
 """
-The contract document model: enums and dataclasses.
+The contract document model: enums and dataclasses, no parsing.
 
-Pure data — no YAML, no numpy, no parsing. :mod:`.schema` parses and
-validates YAML into these types (and re-exports them, so external code
-imports from schema); :mod:`.specs` projects a built document into runtime
-stream specs. Like :mod:`.errors`, this is a leaf every layer can import
-without cycles.
+:mod:`.schema` parses YAML into these types and re-exports them;
+:mod:`.specs` resolves them into runtime stream specs. This module imports
+only :mod:`.errors`, so any layer can import it without cycles.
 
 A contract binds channels to frame keys. Every frame-clock entry reads::
 
     channel (provides) -> align (chooses a timeline; mandatory) -> select
     -> apply -> the mapping key
 
-The dataclasses mirror that shape exactly: a :class:`Channel` is the
-robot-interface half of an entry (topic/type/qos speak the interface's
-dialect), an :class:`Align` chooses a timeline by name, a :class:`Source` is
-one channel+align+select+apply pipeline, and a :class:`FrameEntry` is a frame
-key with one or more ordered sources (several sources = concatenation for
-observations, splitting for actions).
+A :class:`Channel` is the robot-interface half (topic/type/qos), an
+:class:`Align` picks a timeline by name, a :class:`Source` is one
+channel+align+select+apply pipeline, and a :class:`FrameEntry` is a frame key
+with one or more ordered sources (concatenated for observations, split for
+actions).
 
-All types are frozen with slots. Parsers build fully-immutable instances
-(tuples for sequences, copied dicts for qos); tests constructing them directly
-may pass lists — the dataclasses don't coerce, and every consumer only
-iterates.
+The parser builds tuples and copied dicts. The dataclasses don't coerce, so
+tests may pass lists; consumers only iterate.
 """
 
 from __future__ import annotations
@@ -46,10 +41,6 @@ from enum import StrEnum
 from typing import Any, Iterable
 
 from .errors import ContractValidationError
-
-# =============================================================================
-# Enums
-# =============================================================================
 
 
 class ResamplePolicy(StrEnum):
@@ -61,17 +52,14 @@ class ResamplePolicy(StrEnum):
 
 
 class SafetyBehavior(StrEnum):
-    """Safety behavior when policy fails to produce actions.
+    """What to publish when the policy stops producing actions.
 
-    ``ZEROS`` means action-space (dataset-space) zeros: the zero vector runs
-    through ``encode_value``'s inverse operator pipeline like any command, so
-    a declared ``clamp`` maps it into the safe wire range. The contract
-    author puts the safe range in ``apply``; the safety path deliberately
-    honors it rather than bypassing to raw wire zeros.
+    ``ZEROS`` are action-space zeros: they go through the inverse operator
+    pipeline like any command, so a declared ``clamp`` still bounds them.
     """
 
     NONE = "none"  # No safety action (default)
-    ZEROS = "zeros"  # Send zero commands (action-space; see class docstring)
+    ZEROS = "zeros"  # Send zero commands (action-space)
     HOLD = "hold"  # Hold last action
 
 
@@ -79,8 +67,7 @@ class FieldKind(StrEnum):
     """Value type of a state/action field.
 
     Tells the VLA frameworks how to normalize or rotate the values. LeRobot
-    ignores it. Default is continuous (plain min_max), which leaves existing
-    contracts unchanged.
+    ignores it. Default is continuous (plain min_max).
     """
 
     CONTINUOUS = "continuous"  # plain scalar/vector (joints, positions, velocities)
@@ -106,24 +93,14 @@ _FIELD_KIND_DIMS: dict[FieldKind, int | None] = {
 }
 
 
-# =============================================================================
-# Contract Dataclasses (mirror the YAML shape)
-# =============================================================================
-
-
 @dataclass(frozen=True, slots=True)
 class Channel:
-    """One robot-interface channel: what a different pub/sub ecosystem would replace.
+    """One robot-interface channel plus its codec settings.
 
-    Fields speak the declared interface's dialect (ros2: topic/type/qos).
-    Codec concerns live here too: dtype, custom decoder/encoder, and the
-    safety behavior for command channels. Image pixel encoding is not one of
-    them — it's read from the message itself at decode time (``sensor_msgs/Image``
-    carries a required ``encoding`` field; ``CompressedImage`` decodes to RGB
-    unconditionally via cv2), so there is nothing to declare here.
-
-    Which fields a section may declare is enforced at parse, so e.g. an
-    observation's ``safety`` is always ``NONE`` by construction.
+    topic/type/qos speak the interface's dialect (ros2). Image pixel encoding
+    is not declared: it is read from the message at decode time. Which fields
+    a section may set is enforced at parse, so e.g. an observation's
+    ``safety`` is always ``NONE``.
     """
 
     topic: str
@@ -137,11 +114,10 @@ class Channel:
 
 @dataclass(frozen=True, slots=True)
 class Align:
-    """How a source's samples land on the clock defined by the contract's ``fps``.
+    """How a source's samples land on the contract's ``fps`` clock.
 
-    ``timeline`` is an open name selecting one of the timelines the channel
-    provides (the robot interface produces them; align only chooses).
-    Mandatory on every observation/action entry — there are no defaults.
+    ``timeline`` names one of the timelines the robot interface provides for
+    the channel's type.
     """
 
     strategy: ResamplePolicy  # "hold" | "asof" | "drop"
@@ -162,12 +138,7 @@ class Source:
 
 @dataclass(frozen=True, slots=True)
 class FrameEntry:
-    """A frame key and its ordered sources.
-
-    Several sources mean concatenation (observations: values joined in
-    order) or splitting (actions: one vector sliced across channels in
-    order).
-    """
+    """A frame key and its ordered sources (concatenated for observations, split for actions)."""
 
     key: str
     sources: tuple[Source, ...]
@@ -175,16 +146,14 @@ class FrameEntry:
 
 @dataclass(frozen=True, slots=True)
 class Task:
-    """Task channel (e.g. prompts). Not sampled on the frame's tick clock — no align."""
+    """Task channel (e.g. prompts). Not sampled on the frame clock, so no align."""
 
     key: str
     channel: Channel
 
 
-#: The teleop event vocabulary: every name the HIL manager's edge dispatch
-#: acts on. ``teleop.events.select`` keys are validated against this set at
-#: load, so a typo'd event is a contract error, not a button that silently
-#: does nothing.
+#: Every event name the HIL manager acts on; ``teleop.events.select`` keys are
+#: checked against it at load.
 TELEOP_EVENT_NAMES = frozenset(
     {
         "is_intervention",  # level: mux teleop/policy while held
@@ -199,7 +168,7 @@ TELEOP_EVENT_NAMES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class TeleopEventMap:
-    """Teleoperator event button mappings for HIL-SERL. No align — events are edges."""
+    """Teleoperator event button mappings for HIL-SERL. No align: events are edges."""
 
     channel: Channel
     select: dict[str, str]  # event_name -> field path (dict form of select)
@@ -207,11 +176,10 @@ class TeleopEventMap:
 
 @dataclass(frozen=True, slots=True)
 class TeleopInputSource:
-    """One teleop input source: a channel -> align -> select -> apply pipeline, decoded like an observation.
+    """A teleop input source, decoded like an observation.
 
-    ``target`` is the topic of the action-section Source it drives, validated
-    at load time against every declared action channel topic, so a typo'd
-    target is a load-time error, not a message silently going nowhere.
+    ``target`` is the topic of the action entry it drives; it must belong to
+    exactly one action entry.
     """
 
     source: Source
@@ -220,11 +188,10 @@ class TeleopInputSource:
 
 @dataclass(frozen=True, slots=True)
 class TeleopFeedbackSource:
-    """One teleop feedback source: a channel -> align -> select -> apply pipeline, encoded like an action.
+    """A teleop feedback source, encoded like an action.
 
-    ``origin`` is the topic of the observation-section Source whose decoded
-    value is forwarded here, validated at load time against every declared
-    observation channel topic.
+    ``origin`` is the topic of the observation entry whose decoded value is
+    forwarded here; it must belong to exactly one observation entry.
     """
 
     source: Source
@@ -233,12 +200,10 @@ class TeleopFeedbackSource:
 
 @dataclass(frozen=True, slots=True)
 class Teleop:
-    """Teleoperator role sections: input / events / feedback.
+    """Teleoperator sections: input / events / feedback.
 
-    ``input``/``feedback`` are tuples, not single entries: each source
-    independently names the action/observation topic it drives via
-    ``target``/``origin``, so a contract can teleop just one action, several,
-    or none, without touching the actions/observations sections themselves.
+    Each input/feedback source names its own action/observation topic, so a
+    contract can teleop any subset of its actions.
     """
 
     input: tuple[TeleopInputSource, ...] = ()

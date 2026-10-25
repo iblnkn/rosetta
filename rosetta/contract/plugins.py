@@ -13,18 +13,11 @@
 # limitations under the License.
 
 """
-Shared entry-point plugin loader for Rosetta's open registries.
+Entry-point plugin loader shared by the operator and codec registries.
 
-Both plugin surfaces -- operators (``rosetta.operators``, see
-:mod:`.operators`) and codecs (``rosetta.codecs``, see
-:mod:`rosetta.frames.codecs`) -- discover third-party extensions the same
-way: each entry point's value is a module path, and importing that module
-runs its ``@register_*`` decorators. This module is the one implementation
-of that scan; the registries own only their group name.
-
-Like :mod:`.errors`, this is a dependency-free leaf so every registry can
-import it without cycles: ``errors <- plugins <- operators <- frames.codecs
-<- schema <- specs``.
+Each entry point names a module; importing it runs its ``@register_*``
+decorators. Imports only :mod:`.errors`, so either registry can use it
+without cycles.
 """
 
 from __future__ import annotations
@@ -37,36 +30,19 @@ from .errors import ContractValidationError
 _loaded_groups: set[str] = set()
 _failed_groups: dict[str, ContractValidationError] = {}
 
-# RLock, not Lock: ep.load() imports arbitrary plugin modules, which may
-# themselves touch discovery at import time -- a plain lock would deadlock.
+# RLock: a plugin module may trigger discovery while being imported.
 _scan_lock = threading.RLock()
 
 
 def load_entry_point_plugins(group: str, noun: str) -> None:
     """
-    Import every module advertised under entry-point ``group``. Idempotent per group.
+    Import every module advertised under entry-point ``group``, once per process.
 
-    A plugin that fails to import is a hard error, not a silent skip -- a
-    half-registered plugin set would surface later as a confusing "Unknown
-    operator"/"No decoder registered". A failure is latched just like a
-    success: every subsequent call re-raises the original error, so a broken
-    plugin environment is fatal and stable until the process restarts. (A
-    rescan could not recover anyway: a plugin module that registered
-    something before failing mid-import leaves its registrations behind, so
-    re-executing it would hit the duplicate-registration guard and mask the
-    real error.)
-
-    Args:
-    ----
-        group: Entry-point group to scan (e.g. ``"rosetta.operators"``).
-        noun: What a plugin in this group provides (e.g. ``"operator"``),
-            used in the failure message.
-
-    Raises:
-    ------
-        ContractValidationError: If any advertised plugin fails to import --
-            the same error on every call for a group that has already failed.
-
+    ``noun`` names the plugin kind in the error message. A plugin that fails
+    to import raises ContractValidationError, and every later call re-raises
+    the same error. Retrying would not help: a module that registered
+    something before failing would hit the duplicate-registration guard and
+    hide the real error.
     """
     with _scan_lock:
         if group in _loaded_groups:
@@ -75,11 +51,11 @@ def load_entry_point_plugins(group: str, noun: str) -> None:
             raise _failed_groups[group]
         for ep in _ilm.entry_points(group=group):
             try:
-                ep.load()  # imports the module -> runs its @register_* decorators
+                ep.load()
             except Exception as e:
                 err = ContractValidationError(
                     f"Failed to load {noun} plugin '{ep.name}' ({ep.value}) from entry-point group '{group}': {e}"
                 )
-                _failed_groups[group] = err  # latch: fail the same way every time
+                _failed_groups[group] = err
                 raise err from e
         _loaded_groups.add(group)

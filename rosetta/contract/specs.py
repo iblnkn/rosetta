@@ -14,35 +14,18 @@
 
 """Resolve a parsed contract into the runtime ``StreamSpec`` objects the pipeline consumes.
 
-Spec resolution turns a loaded :class:`~rosetta.contract.schema.Contract`
-(what the YAML declares) into the runtime stream specs defined here. It does
-three distinct jobs.
+Each spec holds the :class:`~rosetta.contract.schema.Source` it came from
+(read declaration facts through ``spec.source``) plus fields computed here:
+dtype, operators, namespace, image geometry.
 
-1. Reference. Each spec carries its declaration. ``source`` is the
-   :class:`~rosetta.contract.schema.Source` it was resolved from. Declaration
-   facts are read through it (``spec.source.channel.topic``,
-   ``spec.source.align``, ``spec.source.kind``). Nothing is copied, so a
-   declaration field can never silently go missing from a spec.
-2. Compute. The flat fields the runtime needs are derived here. The dtype
-   precedence rule (explicit > video > custom-decoder float64 > native codec
-   dtype) consults the codec registry. ``apply`` name/arg pairs become
-   ``Operator`` objects. Per-topic ``namespace`` prefixes keep shared-key
-   feature names unique. ``image_resize`` comes from the pipeline's declared
-   output geometry (``Operator.output_hw``). Two fields are carried verbatim:
-   ``fps`` from the contract root and ``names`` from ``select``.
-3. Project. The same document is read differently per consumer.
-   ``iter_reward_as_action_specs`` re-casts the rewards section as the action
-   output (classifier flow, forcing ``key="action"``). ``iter_teleop_*_specs``
-   re-cast teleop entries as observation/action-shaped streams.
-   ``iter_policy_specs`` and the recorder's view select different subsets.
+The ``iter_*_specs`` functions are different views of one contract:
+``iter_specs`` is everything the recorder records, ``iter_policy_specs`` is
+observations and actions only, ``iter_reward_as_action_specs`` recasts
+rewards as the action output for a reward classifier, and
+``iter_teleop_*_specs`` recast teleop sources as diagnostic columns.
 
-One runtime spec per source. A multi-source entry yields its specs in source
-order, which is concatenation/splitting order in FrameLayout.
-
-Layout machinery (FrameLayout, feature building, zero-fill) lives in
-rosetta.frames.layout. Resampling (StreamBuffer) lives in
-rosetta.frames.resample. Frame-key naming helpers live in
-rosetta.frames.naming. Import them from there.
+One spec per source. A multi-source entry yields its specs in source order,
+which is the concatenation/splitting order in FrameLayout.
 """
 
 from __future__ import annotations
@@ -72,53 +55,33 @@ from .schema import (
     owning_key,
 )
 
-# =============================================================================
-# Runtime Stream Specs
-# =============================================================================
-#
-# Design note: composition, not copies. A spec holds `source: Source` (its
-# declaration) plus flat fields that are either derived (dtype, namespace,
-# operators, image geometry) or carried verbatim (fps, names). Declaration
-# facts are read through the reference, so there is no per-field copy step to
-# forget. The silent-default hazard the old flat design guarded with a parity
-# test is now structurally impossible. The derivations are pinned by
-# test_spec_resolution_parity.py.
-
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StreamSpec:
     """Base configuration for observation and action streams.
 
     ``source`` is the declaration this spec was resolved from; read
-    declaration facts through it (``source.channel.topic``,
-    ``source.channel.qos``, ``source.align``, ``source.kind``, ...).
+    declaration facts through it (``source.channel.topic``, ``source.align``).
 
-    ``dtype`` has no default: it is always the output of
-    ``_resolve_spec_dtype`` (the builders pass it), never an implicit guess.
-
-    ``kw_only=True``: every construction site already uses keyword arguments
-    (see ``_build_observation_spec``/``_build_action_spec``), and it removes a
-    foot-gun for subclasses. Without it, adding any defaulted field to this
-    base class would push a subclass's non-default fields after a default
-    field and raise ``TypeError`` at class-definition time.
+    ``kw_only`` lets subclasses add required fields after this class's
+    defaulted ones.
     """
 
     key: str
     names: tuple[str, ...]
     fps: int
     source: Source
-    dtype: str  # resolved via _resolve_spec_dtype; observations decode-required, actions float64-capable
+    dtype: str  # from _resolve_spec_dtype
     namespace: str | None = None
-    operators: tuple[Operator, ...] = ()  # Resolved pipeline; forward to decode, inverse to serve
-    is_image: bool = False  # only observation.images.* keys; the honest answer everywhere else
+    operators: tuple[Operator, ...] = ()  # forward to decode, inverse to serve
+    is_image: bool = False  # True only for observation.images.* keys
 
     @property
     def dim(self) -> int:
-        """Static vector width: len(names), or 1 for a select-less scalar.
+        """Vector width: len(names), or 1 for a select-less scalar.
 
-        THE dim formula. Layout slices, zero-fill, and safety actions all
-        derive from it. A select-less numeric stream is a scalar by contract
-        (enforced at frame assembly), never a dynamic-width vector.
+        Layout slices, zero-fill and safety actions all use it. A select-less
+        numeric stream is a scalar (enforced at frame assembly).
         """
         return max(len(self.names), 1)
 
@@ -134,34 +97,23 @@ class StreamSpec:
 class ObservationStreamSpec(StreamSpec):
     """Resolved observation stream configuration for runtime use."""
 
-    image_resize: tuple[int, int] | None  # output (h, w); the pipeline's last declared output_hw
+    image_resize: tuple[int, int] | None  # output (h, w): the pipeline's last declared output_hw
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ActionStreamSpec(StreamSpec):
-    """Resolved action stream configuration (dtype: native decoder dtype, or float64 for custom/encode-only)."""
-
-
-# =============================================================================
-# Namespace Derivation
-# =============================================================================
+    """Resolved action stream configuration for runtime use."""
 
 
 def _derive_namespaces(topics: list[str]) -> dict[str, str]:
     """
-    Derive unique namespace for each topic from path segments.
+    Map each topic to a namespace that tells it apart from the others.
 
-    Finds the first segment that uniquely identifies each topic.
+    Uses the first path segment that differs across all topics; failing that,
+    dotted segment prefixes of increasing depth.
 
-    Keys are the topics passed in. The first path segment that tells every
-    topic apart wins; when no single segment does, dotted segment prefixes are
-    tried in increasing depth.
-
-    Examples
-    --------
         ['/arm/state', '/base/state'] -> {'/arm/state': 'arm', '/base/state': 'base'}
         ['/arm/pos', '/arm/vel'] -> {'/arm/pos': 'pos', '/arm/vel': 'vel'}
-
     """
     if len(topics) <= 1:
         return dict.fromkeys(topics, "")
@@ -169,21 +121,18 @@ def _derive_namespaces(topics: list[str]) -> dict[str, str]:
     parts_list = [[p for p in t.split("/") if p] for t in topics]
     max_depth = max(len(p) for p in parts_list)
 
-    # Find first segment where all topics differ
     for i in range(max_depth):
         segments = [p[i] if i < len(p) else "" for p in parts_list]
         if len(set(segments)) == len(topics):
             return dict(zip(topics, segments, strict=True))
 
-    # No single segment unique - build compound namespace
     for depth in range(2, max_depth + 1):
         namespaces = [".".join(p[:depth]) for p in parts_list]
         if len(set(namespaces)) == len(namespaces):
             return dict(zip(topics, namespaces, strict=True))
 
-    # The compound loop's last iteration was the full path, so reaching here
-    # proves the topics normalize to identical segment paths (e.g. '/a/b' vs
-    # 'a/b'): no unique namespaces exist.
+    # The last depth was the full path, so the topics normalize to identical
+    # segments (e.g. '/a/b' vs 'a/b').
     raise ContractValidationError(
         f"Cannot derive unique namespaces for topics {topics}: they normalize "
         f"to identical paths; rename or disambiguate the topics."
@@ -193,11 +142,8 @@ def _derive_namespaces(topics: list[str]) -> dict[str, str]:
 def _namespaces_by_topic(sources: Iterable[Source]) -> dict[str, str]:
     """Topic -> distinguishing namespace for sources feeding one frame key.
 
-    Namespaces only help when they distinguish: several sources on ONE topic
-    (different selectors) are already told apart by their names, so a single
-    unique topic derives no namespace. Deduping first also keeps a duplicate
-    topic from making every uniqueness tier in ``_derive_namespaces``
-    unsatisfiable.
+    Sources sharing one topic are told apart by their select names, so topics
+    are deduped first and a single topic gets no namespace.
     """
     unique_topics = list(dict.fromkeys(s.channel.topic for s in sources))
     if len(unique_topics) <= 1:
@@ -206,20 +152,10 @@ def _namespaces_by_topic(sources: Iterable[Source]) -> dict[str, str]:
 
 
 def _sources_with_namespaces(entry: FrameEntry) -> Iterable[tuple[Source, str | None]]:
-    """Yield ``(source, namespace)`` for an entry, in source order.
-
-    Single-source entries need no namespace. Multi-source entries (shared-key
-    concatenation / action splitting) get a per-topic distinguishing segment
-    so downstream feature names stay unique.
-    """
+    """Yield ``(source, namespace)`` for an entry, in source order."""
     ns_map = _namespaces_by_topic(entry.sources)
     for src in entry.sources:
         yield src, (ns_map.get(src.channel.topic) or None)
-
-
-# =============================================================================
-# Operator Pipeline Resolution
-# =============================================================================
 
 
 def _resolve_spec_dtype(
@@ -231,37 +167,11 @@ def _resolve_spec_dtype(
     decode_required: bool = True,
     context: str = "",
 ) -> str:
-    """Resolve the declared stream dtype using THE precedence rule.
+    """Resolve a stream's dtype: explicit > video (images) > float64 (custom decoder) > native codec.
 
-    Every spec section applies the same order:
-
-        explicit > video (image streams) > custom-decoder float64 > native codec
-
-    ``decode_required=True`` covers observations, extended sections, and teleop
-    inputs, which are all decoded at ingest. A channel with no custom decoder
-    and no registered codec raises here, at load, instead of silently dropping
-    every message at ingest. An explicit ``dtype:`` never exempts the check. An
-    undecodable channel stays undecodable regardless of the dtype it claims.
-
-    ``decode_required=False`` covers action-shaped sections, which publish. A
-    type with only a custom encoder is legitimate. Its recorded column defaults
-    to float64.
-
-    Args:
-        explicit: The channel's declared ``dtype:``, or None.
-        decoder: A custom ``decoder:`` reference, or None.
-        msg_type: The ROS message type string, used to query the codec registry.
-        is_image: True for ``observation.images.*`` keys.
-        decode_required: True when the stream is decoded at ingest.
-        context: Human-readable location for error messages.
-
-    Returns:
-        The resolved dtype string.
-
-    Raises:
-        ContractValidationError: When a decode-required channel is undecodable,
-            or when an explicit dtype conflicts with the image/non-image role.
-
+    With ``decode_required`` (streams decoded at ingest), an undecodable type
+    is an error even when ``dtype`` is explicit. Without it (publishing
+    streams), a type with only a custom encoder resolves to float64.
     """
     decodable = bool(decoder) or has_decoder(msg_type)
     where = f" in {context}" if context else ""
@@ -288,10 +198,10 @@ def _resolve_spec_dtype(
     if is_image:
         return "video"
     if decoder:
-        return "float64"  # custom decoders default to float64
+        return "float64"
     if decodable:
         return get_decoder_dtype(msg_type)
-    return "float64"  # encode-only type (custom encoder); reachable only when decode_required=False
+    return "float64"  # encode-only type; reachable only when decode_required=False
 
 
 def _build_operators(
@@ -305,12 +215,7 @@ def _build_operators(
 
 
 def _image_hw_from_operators(operators: tuple[Operator, ...]) -> tuple[int, int] | None:
-    """Final output (h, w) declared by the pipeline, if any.
-
-    Reads the ``Operator.output_hw`` declaration -- no operator is matched by
-    name, so any plugin can fulfill the image-geometry role. Pipelines run
-    front-to-back, so the last declaration is the stream's final geometry.
-    """
+    """The last ``Operator.output_hw`` in the pipeline, if any."""
     for operator in reversed(operators):
         if operator.output_hw is not None:
             return operator.output_hw
@@ -330,10 +235,9 @@ def _require_numeric_apply(dtype: str | None, operators: tuple[Operator, ...], k
 def _require_select_for_decoder(src: Source, context: str) -> None:
     """A registry decoder that gathers values by field names needs ``select:``.
 
-    Enforced at load: without it the decoder raises per-message at runtime,
-    where ingest treats the failure like a corrupt message and the stream
-    silently zero-fills. A custom ``decoder:`` defines its own contract and
-    is exempt.
+    Checked at load because at runtime ingest treats the decode failure as a
+    corrupt message and the stream silently zero-fills. Custom decoders are
+    exempt.
     """
     if src.select or src.channel.decoder:
         return
@@ -354,12 +258,10 @@ def _build_observation_spec(
     context: str,
     is_image: bool = False,
 ) -> ObservationStreamSpec:
-    """Build one observation-shaped spec from channel to dtype/operators to spec.
+    """Build an observation-shaped spec (observations, extended sections, teleop input).
 
-    Used by observations, extended sections, and teleop input. All are decoded
-    at ingest, so dtype resolution always requires decodability. An image must
-    declare its output geometry through its operators; depth images are
-    rejected at decode time, where the message's encoding is authoritative.
+    All are decoded at ingest, so the type must be decodable. An image must
+    declare its output geometry through its operators.
     """
     operators = _build_operators(src.apply, is_image=is_image)
     image_resize = _image_hw_from_operators(operators) if is_image else None
@@ -395,11 +297,9 @@ def _build_action_spec(
     *,
     context: str,
 ) -> ActionStreamSpec:
-    """Build one action-shaped spec from channel to dtype/operators to spec.
+    """Build an action-shaped spec (actions, reward-as-action, teleop feedback).
 
-    Used by actions, reward-as-action, and teleop feedback. All are
-    encode-capable because they publish, so a type with only a custom encoder
-    is acceptable and its recorded column defaults to float64.
+    All publish, so a type with only a custom encoder is allowed (float64).
     """
     ch = src.channel
     resolved_dtype = _resolve_spec_dtype(ch.dtype, ch.decoder, ch.type, decode_required=False, context=context)
@@ -427,10 +327,7 @@ def _build_action_spec(
 def _require_publishable(ch: Channel, select: tuple[str, ...] | None, context: str) -> None:
     """A publishing channel needs an encoder, plus ``select:`` when it scatters by field names.
 
-    Both are load-time facts: a missing encoder or a select-less
-    scatter-by-name encoder would otherwise fail on every publish at runtime.
-    A custom ``encoder:`` defines its own contract and is exempt from the
-    select requirement.
+    Custom encoders are exempt from the select requirement.
     """
     if not ch.encoder and not has_encoder(ch.type):
         raise ContractValidationError(
@@ -444,18 +341,8 @@ def _require_publishable(ch: Channel, select: tuple[str, ...] | None, context: s
         )
 
 
-# =============================================================================
-# Observation Spec Iteration
-# =============================================================================
-
-
 def iter_observation_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
-    """
-    Yield observation stream specs from a contract.
-
-    Resolves dtypes and derives namespaces for multi-source entries
-    (shared-key concatenation).
-    """
+    """Yield observation stream specs from a contract."""
     for entry in contract.observations:
         is_image = entry.key.startswith(IMAGE_KEY_PREFIX)
 
@@ -493,20 +380,11 @@ def iter_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
 
 def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
     """
-    Yield action stream specs derived from the contract's reward section.
+    Yield the rewards section as action specs, all under the key "action".
 
-    Used when is_classifier=True so that a reward classifier's policy output
-    publishes to reward topics instead of action topics.
-
-    Raises
-    ------
-    ContractValidationError
-        If the contract's ``rewards`` section is empty. A normal (non-classifier)
-        robot may legitimately have no ``rewards`` entries, so this can only be
-        checked here, where ``is_classifier=True`` makes ``rewards`` the sole
-        source of action output. An empty section would otherwise silently
-        resolve to zero action specs instead of failing.
-
+    Used when is_classifier=True, so a reward classifier's output publishes to
+    reward topics. Raises if ``rewards`` is empty; that is only an error here,
+    not at load.
     """
     if not contract.rewards:
         raise ContractValidationError(
@@ -515,8 +393,7 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
             "this contract's 'rewards' section is empty."
         )
 
-    # All reward sources publish under the single forced key "action", so
-    # namespaces are derived across every source of every reward entry.
+    # Every reward source shares the key "action", so namespaces span all of them.
     pairs = [(entry, src) for entry in contract.rewards for src in entry.sources]
     ns_map = _namespaces_by_topic(src for _, src in pairs)
 
@@ -527,20 +404,13 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
         # Reward channels cannot declare a custom encoder, so this requires a registered one.
         _require_publishable(ch, src.select, context)
 
-        # Reward channels cannot declare safety/encoder (rejected at load), so
-        # reading them through source agrees with the old forced values
-        # ("none"/None). Note: a declared `kind` on a reward channel is now
-        # honored (the flat design silently dropped it).
-        # A select-less reward synthesizes a "data" name so the forced shared
-        # "action" key always has static dims (unlike iter_action_specs,
-        # where a select-less single-source key may stay dynamic).
+        # A select-less reward gets the name "data", so every source under
+        # the shared "action" key has a feature name.
         ns = ns_map.get(ch.topic) or None
         names = tuple(src.select or ()) or ("data",)
 
-        # The synthesized name bypasses FrameLayout's shared-key "every spec
-        # needs a select" check, so duplicates must be rejected here: two
-        # select-less reward entries on one topic would otherwise emit
-        # identical feature names and collide silently downstream.
+        # "data" bypasses FrameLayout's shared-key select check, so two
+        # select-less rewards on one topic must be caught here.
         for name in names:
             namespaced = (ns, name)
             if namespaced in seen_names:
@@ -563,12 +433,7 @@ def iter_reward_as_action_specs(contract: Contract) -> Iterable[ActionStreamSpec
 
 
 def _iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
-    """Yield specs from extended categories (rewards, signals, info, complementary_data).
-
-    Extended streams are decoded at ingest like observations, so their
-    channels face the same decodability requirement. An undecodable type is a
-    load-time error, not a stream that silently drops every message.
-    """
+    """Yield specs from the extended sections, decoded like observations."""
     for section in EXTENDED_SECTIONS:
         for entry in getattr(contract, section):
             for src, namespace in _sources_with_namespaces(entry):
@@ -583,16 +448,11 @@ def _iter_extended_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
 
 
 def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
-    """Yield all stream specs (observations, actions, extended, teleop).
+    """Yield all stream specs (observations, actions, extended, teleop): what the recorder records.
 
-    Teleop input/feedback are record-only diagnostic columns, like the
-    extended sections: the live decode(teleop) -> encode(action) step in
-    hil_manager_node already makes the real action topic carry a
-    human-driven command during teleop, so the action's own spec (from
-    iter_action_specs) already records the executed action correctly. These
-    teleop specs additionally record the leader-side signal itself (e.g. the
-    leader arm's raw reading) under its own key, for diagnostics -- not to
-    derive the action.
+    Teleop specs are diagnostic columns. During teleop the executed action is
+    already recorded through the action's own spec, because hil_manager_node
+    republishes teleop input onto the action topic.
     """
     yield from iter_observation_specs(contract)
     yield from iter_action_specs(contract)
@@ -604,29 +464,19 @@ def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStr
 def iter_policy_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStreamSpec]:
     """Yield the streams that feed a policy: observations, then actions.
 
-    Unlike :func:`iter_specs` (what the porter records), this excludes the
-    extended sections (rewards/signals/info/complementary_data). Those are
-    record-only and RL columns that must not leak into a framework's
-    concatenated state/action vectors. Framework writers and runners derive
-    their layouts from this so they agree with each other by construction.
+    Excludes the extended and teleop sections, which must not leak into a
+    framework's state/action vectors. Framework writers and runners both
+    derive their layouts from this, so they agree.
     """
     yield from iter_observation_specs(contract)
     yield from iter_action_specs(contract)
 
 
-# =============================================================================
-# Teleop Spec Iteration
-# =============================================================================
-
-
 def _teleop_namespaces(resolved: list[tuple[Source, str]]) -> dict[int, str | None]:
-    """Index -> namespace for teleop sources, namespacing only shared owning keys.
+    """Index -> namespace for teleop sources.
 
-    Teleop entries are single-source, so per-entry namespacing never applies;
-    but several entries may legally share one synthesized key (two targets
-    inside one multi-source action entry). Those groups get the same
-    per-topic distinguishing namespace the shared-key sections get, so
-    flattened feature names stay unique downstream.
+    Several teleop sources can share one synthesized key (two targets in one
+    multi-source action entry); those get per-topic namespaces.
     """
     by_key: dict[str, list[int]] = {}
     for i, (_, key) in enumerate(resolved):
@@ -643,14 +493,10 @@ def _teleop_namespaces(resolved: list[tuple[Source, str]]) -> dict[int, str | No
 
 
 def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
-    """Yield teleop input streams as diagnostic observation columns, decoded exactly like an observation.
+    """Yield teleop inputs as diagnostic observation columns, keyed by the action each drives.
 
-    This is independent of live control: ``hil_manager_node`` drives
-    the actual action topic named by each entry's ``target`` via its own
-    decode(teleop) -> encode(action) step (so the action topic itself already
-    carries a human-driven command during teleop). These specs exist so the
-    porter can additionally record the leader-side signal for diagnostics,
-    keyed by the action it drives so the column name is self-describing.
+    ``hil_manager_node`` also uses these specs to decode teleop input before
+    re-encoding it onto the target action topic.
     """
     if not contract.teleop or not contract.teleop.input:
         return
@@ -671,9 +517,8 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             contract,
             context=f"teleop input (target '{tis.target}')",
         )
-        # The decoded teleop value is re-encoded onto its (numeric) target
-        # action topic by hil_manager_node; a non-numeric input would load
-        # fine and then fail on every message at teleop rate.
+        # hil_manager_node re-encodes the decoded value onto the numeric action
+        # topic; a non-numeric input would fail on every message.
         if spec.dtype not in SUPPORTED_NUMERIC_DTYPES:
             raise ContractValidationError(
                 f"Teleop input (target '{tis.target}') resolves to dtype '{spec.dtype}', "
@@ -684,12 +529,7 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
 
 
 def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]:
-    """Yield teleop feedback streams (the outgoing message to the human device), encoded like an action.
-
-    Feedback channels cannot declare ``safety`` (rejected at load), so
-    ``safety_behavior`` is always ``'none'`` by construction. Keyed by the
-    observation it forwards, so the column name is self-describing.
-    """
+    """Yield teleop feedback (messages to the human device) as action specs, keyed by the observation forwarded."""
     if not contract.teleop or not contract.teleop.feedback:
         return
 
@@ -701,8 +541,6 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
     namespaces = _teleop_namespaces(resolved)
     for i, tfs in enumerate(contract.teleop.feedback):
         src, key = resolved[i]
-        # Feedback publishes (to the human device), so it faces the same
-        # load-time encoder requirement as actions, not a first-publish error.
         _require_publishable(src.channel, src.select, f"teleop feedback (origin '{tfs.origin}')")
         yield _build_action_spec(
             f"{TELEOP_FEEDBACK_KEY}.{key}",

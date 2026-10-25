@@ -12,23 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contract exception types.
-
-Dependency-free leaf of the waist: operators, codecs, and schema all raise
-ContractValidationError, and putting it here (rather than in schema) keeps
-the module import graph acyclic —
-errors <- plugins <- operators <- frames.codecs <- schema <- specs / frames.layout.
-
-Convention: ContractValidationError is for user-fixable problems — an invalid
-contract, or an operator/codec plugin it depends on failing to load — raised
-at contract load / spec resolution so mistakes fail fast. Plain ValueError
-remains the type for internal invariants and for the runtime decode/encode
-backstops that load-time validation normally makes unreachable.
-"""
+"""Contract exception types, in a module with no imports so every layer can raise them."""
 
 
 class ContractValidationError(ValueError):
-    """Raised when a contract, or an operator/codec plugin it references, fails validation.
+    """A user-fixable problem: an invalid contract, or a plugin it needs failing to load.
 
-    Subclasses ValueError so callers catching the generic type still see it.
+    Internal invariants and runtime decode/encode checks raise plain ValueError.
     """

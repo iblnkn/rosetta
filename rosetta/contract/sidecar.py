@@ -14,15 +14,13 @@
 
 """The contract sidecar: its canonical on-disk names and best-effort resolution.
 
-A dataset (or a checkpoint's dataset) carries its contract as a sidecar file
-next to the data. This module names that placement and resolves it -- from a
-local directory or an HF Hub repo -- without requiring callers to know which
-they have, and without hard-depending on ``huggingface_hub``. Failures are
-reported through an injectable ``warn`` callback (default: stdlib
-``logging.warning``) so ROS callers can route them to their own logger.
+A dataset carries its contract as a sidecar file next to the data. These
+helpers find it in a local directory or an HF Hub repo (``huggingface_hub``
+is optional). Failures go to the ``warn`` callback so ROS callers can route
+them to their own logger.
 
-Set ``HF_HUB_OFFLINE=1`` to keep Hub probes off the network entirely; probes
-then fail fast and already-cached files still resolve.
+``HF_HUB_OFFLINE=1`` keeps Hub probes off the network; cached files still
+resolve.
 """
 
 from __future__ import annotations
@@ -52,12 +50,9 @@ def resolve_repo_file(
 ) -> Path | None:
     """Return a local path to ``filename`` under ``path_or_repo_id``, or ``None``.
 
-    ``path_or_repo_id`` is tried as a local directory first; if it isn't one,
-    ``filename`` is fetched from the Hub via ``huggingface_hub.hf_hub_download``
-    (with a short etag timeout -- this is a probe, not a required download).
-    Never raises: a local miss returns ``None`` quietly, while every real
-    failure -- Hub error, network problem, ``huggingface_hub`` not installed --
-    returns ``None`` after reporting through ``warn``.
+    ``path_or_repo_id`` is tried as a local directory first, then as a Hub
+    repo. Never raises: a local miss returns ``None`` quietly; any other
+    failure returns ``None`` after calling ``warn``.
     """
     local_dir = Path(path_or_repo_id)
     if local_dir.is_dir():
@@ -86,9 +81,8 @@ def resolve_repo_file(
         warn(f"Hub HTTP error fetching {filename} from {path_or_repo_id!r}: {e}")
         return None
     except Exception as e:
-        # hf_hub_download also raises plain OSError/ValueError for a bad repo
-        # id or missing entry depending on version; this is a best-effort
-        # probe, not a required path, so any failure just means "not found".
+        # hf_hub_download also raises OSError/ValueError for a bad repo id or
+        # missing file, depending on version.
         warn(f"Could not fetch {filename} from {path_or_repo_id!r}: {e}")
         return None
 
@@ -100,9 +94,7 @@ def find_contract_for_pretrained(
 ) -> Path | None:
     """Chase a pretrained checkpoint -> train_config.json -> dataset -> its contract sidecar.
 
-    Best-effort and pure (no ROS): any missing link -- no checkpoint given, no
-    train_config.json, no usable dataset reference, no sidecar on the dataset --
-    resolves to ``None`` after a warning naming the broken link. Never raises.
+    Never raises: any missing link returns ``None`` after a warning naming it.
     """
     if not pretrained:
         return None
@@ -127,12 +119,10 @@ def find_contract_for_pretrained(
 def scan_inline_codec_paths(contract_path: Path | str) -> list[tuple[str, str]]:
     """Raw-YAML scan for inline codec declarations, importing nothing.
 
-    Walks the parsed YAML document and returns every ``("decoder"|"encoder",
-    path)`` pair with a non-empty string value. Deliberately structure-blind:
-    it exists to run BEFORE ``load_contract`` -- whose parse imports and
-    executes those paths -- so it cannot rely on the schema. Over-matching an
-    unexpected nested key is fine; under-matching is not. YAML parse errors
-    propagate: ``load_contract`` would fail identically one step later.
+    Returns every ``("decoder"|"encoder", path)`` pair with a non-empty string
+    value, anywhere in the document. Meant to run before ``load_contract``,
+    which imports those paths, so it ignores the schema: over-matching is
+    fine, under-matching is not.
     """
     found: list[tuple[str, str]] = []
 
