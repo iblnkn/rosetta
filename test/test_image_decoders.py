@@ -155,7 +155,7 @@ def test_compressed_rgb_order_skips_swap():
     cv2 = pytest.importorskip("cv2")
     # compressed_image_transport records the source matrix order after
     # "compressed"; imdecode round-trips that order, so a declared rgb8
-    # stream must NOT be swapped. This used to channel-swap silently.
+    # stream must NOT be swapped.
     rgb = _rgb_pixels(6, 8)
     ok, buf = cv2.imencode(".png", rgb)  # publisher compressed an RGB matrix as-is
     assert ok

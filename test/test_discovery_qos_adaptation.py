@@ -14,11 +14,10 @@
 
 """adapt_publisher_qos: subscription QoS for record_all-discovered topics.
 
-Regression: the subscription QoS used to be copied from the FIRST publisher
-only. A RELIABLE subscription never matches a BEST_EFFORT publisher, so on a
-topic with mixed publishers the incompatible publisher's messages were
-silently absent from every bag. Mirror ros2 bag record: request RELIABLE /
-TRANSIENT_LOCAL only when every publisher offers it.
+Like ros2 bag record, request RELIABLE / TRANSIENT_LOCAL only when every
+publisher offers it. A RELIABLE subscription never matches a BEST_EFFORT
+publisher, so copying one publisher's QoS on a mixed topic silently drops the
+other publisher's messages from the bag.
 """
 
 from types import SimpleNamespace

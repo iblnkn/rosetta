@@ -360,8 +360,7 @@ def test_concurrent_claims_admit_exactly_one_winner(base_node):
     # MultiThreadedExecutor + ReentrantCallbackGroup, two goal requests could
     # both pass the busy check before either _execute ran, driving two loops
     # against one runner/bridge. _try_claim_work's check-and-set under the gate
-    # must admit exactly one of a concurrent burst. (This pins the invariant
-    # BusyGuard's dedicated unit test used to guard before it was folded in.)
+    # must admit exactly one of a concurrent burst.
     base_node._accepting_work = True
     start = threading.Barrier(32)
     wins: list[int] = []

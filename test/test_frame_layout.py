@@ -95,8 +95,7 @@ def test_same_topic_two_specs_readme_example():
 
 @pytest.mark.parametrize("dtype", ["int32", "int64", "bool"])
 def test_shared_nonfloat_keys_concatenate(dtype):
-    # Regression: the old aggregate_frame kept only the first stream for
-    # bool/int keys.
+    # bool/int keys concatenate every stream, like float keys.
     specs = [
         obs_spec("signal", ["a", "b"], topic="/s1", dtype=dtype),
         obs_spec("signal", ["c"], topic="/s2", dtype=dtype),
@@ -124,7 +123,7 @@ def test_interleaved_keys_are_key_major():
 
 
 def test_missing_stream_zero_fills_at_spec_dim():
-    # Regression: bool/int zero-fill used to be np.zeros(1) regardless of names.
+    # bool/int zero-fill must match the spec's width, not default to one value.
     specs = [
         obs_spec("signal", ["a", "b"], topic="/s1", dtype="int32"),
         obs_spec("signal", ["c"], topic="/s2", dtype="int32"),
@@ -208,7 +207,7 @@ def test_split_round_trips_assemble():
 
 
 def test_split_validates_total_length():
-    # Regression: short/long vectors used to slice silently.
+    # Short or long vectors must raise, not slice silently.
     specs = [
         act_spec("action", ["j1", "j2"], topic="/arm_cmd"),
         act_spec("action", ["grip"], topic="/grip_cmd"),
@@ -245,11 +244,9 @@ def test_split_rejects_unknown_keys():
 
 
 def test_split_emits_float64_preserving_nonfinite():
-    # Regression: split() used to cast to the key's dtype BEFORE
-    # encode_value's finiteness gate — for an int32 action key that
-    # laundered a policy's NaN into INT_MIN, finite garbage that sailed
-    # through the gate onto hardware. split always emits float64; encoders
-    # do the wire-type cast after the gate.
+    # split must emit float64 and leave the wire-type cast to encoders, after
+    # encode_value's finiteness gate. Casting an int32 key here would turn a
+    # policy's NaN into INT_MIN, finite garbage that passes the gate.
     layout = FrameLayout([act_spec("action", ["j1", "j2"], dtype="int32")])
     (part,) = layout.split({"action": np.array([np.nan, 1.5])})
     assert part.dtype == np.float64
@@ -343,8 +340,8 @@ def test_np_dtype_rejects_non_numeric_keys():
 
 
 def test_action_spec_default_dtype_builds():
-    # Actions carry a resolved dtype (default float64) so custom-decoder
-    # actions no longer need a registered decoder to build a layout.
+    # Actions carry a resolved dtype (default float64), so custom-decoder
+    # actions build a layout without a registered decoder.
     layout = FrameLayout([act_spec("action", ["j1"])])
     assert layout["action"].dtype == "float64"
 
@@ -353,7 +350,7 @@ def test_mixed_role_shared_key_rejected():
     """A key fed by both observation-shaped and action-shaped specs has no
     single role — routing (state vs action column) would depend on which
     slice a consumer inspects. Reachable from YAML: sections are parsed
-    independently, so observations.foo + actions.foo used to merge here."""
+    independently, so observations.foo + actions.foo meet here."""
     with pytest.raises(ContractValidationError, match="observation-shaped.*action-shaped"):
         FrameLayout([obs_spec("foo", ["a"]), act_spec("foo", ["b"])])
 

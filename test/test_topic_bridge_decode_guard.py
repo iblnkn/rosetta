@@ -14,9 +14,10 @@
 
 """Decode-failure guard in the live subscription callback.
 
-Regression: a malformed message used to raise out of _on_observation, through
-the executor, and kill the whole inference node mid-episode. Now it is dropped
-with a once-per-stream warning, and the stream behaves like a missing stream.
+A malformed message must be dropped with a once-per-stream warning, and the
+stream then behaves like a missing stream. An exception escaping
+_on_observation would propagate through the executor and kill the inference
+node mid-episode.
 """
 
 from types import SimpleNamespace
@@ -162,11 +163,12 @@ def test_reset_state_rearms_warning(bridge_parts):
 
 
 # ---------------------------------------------------------------------------
-# Shared-key stream identity (regression: guards keyed by spec.key)
+# Shared-key stream identity
 #
-# Two specs may share one contract key; keying the warn/missing sets by key
-# made spec B's success clear spec A's flag, flapping warn/recover (and
-# missing/recovered — per tick) logs at message rate.
+# Two specs may share one contract key, so the warn/missing sets must be keyed
+# per stream, not per key. Keyed by key, spec B's success clears spec A's flag
+# and the warn/recover (and per-tick missing/recovered) logs flap at message
+# rate.
 # ---------------------------------------------------------------------------
 
 

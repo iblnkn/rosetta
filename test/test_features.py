@@ -14,10 +14,10 @@
 
 """Tests for image/string feature building and image zero-fill shape agreement.
 
-Regression guard for the image zero-fill bug: a missing image frame must
-zero-fill with the same shape as a real decoded frame and the declared feature.
-Numeric feature/zero-fill agreement lives in test_frame_layout.py — numeric
-shapes are a whole-key concern (concatenation), owned by FrameLayout.
+A missing image frame must zero-fill with the same shape as a real decoded
+frame and the declared feature. Numeric feature/zero-fill agreement lives in
+test_frame_layout.py, since numeric shapes are a whole-key concern
+(concatenation) owned by FrameLayout.
 """
 
 import numpy as np

@@ -144,11 +144,10 @@ def test_roundtrip_rad2deg(tmp_path):
 # ---------------------------------------------------------------------------
 # Parallel-array field coverage (JointState / JointTrajectory / MultiDOFCommand)
 #
-# Regression guards: unselected fields used to be fabricated as full zero
-# arrays (JointState/JointTrajectory: a controller reads commanded zero
-# velocity/effort), and MultiDOFCommand emitted RAGGED values/values_dot
-# misaligned to dof_names whenever the two DOF selections differed —
-# silent cross-joint command corruption, even against rosetta's own decoder.
+# Unselected fields must stay empty, not zero-filled (a controller would read
+# zeros as commanded velocity/effort). MultiDOFCommand values/values_dot must
+# stay aligned to dof_names when the two DOF selections differ; ragged arrays
+# silently corrupt commands across joints.
 # ---------------------------------------------------------------------------
 
 
@@ -282,8 +281,8 @@ def test_selector_encoders_require_select(tmp_path, msg_type):
 
 def test_scalar_encoder_rejects_multiwide_spec(tmp_path):
     # The vector width matches the spec (so the choke point passes); only the
-    # encoder knows the wire type carries a single value. This used to
-    # silently publish arr[0] and drop the rest.
+    # encoder knows the wire type carries a single value, so it must refuse
+    # rather than publish arr[0] and drop the rest.
     spec = _action_spec(tmp_path, "std_msgs/msg/Float64", ["a", "b", "c"])
     with pytest.raises(ValueError, match="encodes a single value"):
         encode_value([1.0, 2.0, 3.0], spec)
@@ -302,8 +301,8 @@ def test_multidof_unknown_field_selector_raises(tmp_path):
         get_message("control_msgs/msg/MultiDOFCommand")
     except Exception:
         pytest.skip("control_msgs unavailable")
-    # Regression: "velocity.j1" used to be silently published as a DOF
-    # literally named "velocity.j1".
+    # "velocity.j1" must raise, not publish a DOF literally named
+    # "velocity.j1".
     spec = _action_spec(tmp_path, "control_msgs/msg/MultiDOFCommand", ["velocity.j1"])
     with pytest.raises(ValueError, match="Unknown MultiDOFCommand field 'velocity'"):
         encode_value([0.5], spec)
@@ -354,11 +353,10 @@ def test_encode_rejects_width_mismatch(tmp_path):
 
 
 def test_split_output_reaches_gate_with_nan_intact(tmp_path):
-    # Regression (gate-before-cast ordering): FrameLayout.split used to cast
-    # the action frame to the key's dtype BEFORE this gate — on an int32
-    # action key that turned NaN into INT_MIN, finite garbage the gate waved
-    # through onto the wire. split now emits float64, so the policy's NaN
-    # arrives here intact and the frame is refused.
+    # The finiteness gate must see values before any dtype cast. split emits
+    # float64, so a policy's NaN on an int32 action key reaches the gate
+    # intact; casting first would turn it into INT_MIN, finite garbage the
+    # gate would pass onto the wire.
     from rosetta.frames.layout import FrameLayout
 
     spec = _action_spec(tmp_path, "std_msgs/msg/Int32MultiArray", ["a", "b"])

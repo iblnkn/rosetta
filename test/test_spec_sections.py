@@ -90,10 +90,10 @@ def test_reward_leaks_into_iter_specs_but_not_obs_action():
 
 
 def test_reward_as_action_requires_registered_encoder_even_with_decoder():
-    """Regression: the encoder check was gated on `decoder is None`, so a
-    reward with a custom decoder and an unregistered type passed contract
-    load and crashed at first publish (rewards always publish through the
-    built-in encoder registry; custom encoders are not supported there)."""
+    """A custom decoder must not exempt a reward from the encoder check:
+    rewards always publish through the built-in encoder registry (custom
+    encoders are not supported there), so an unregistered type must fail at
+    load, not at first publish."""
     rew = _entry(
         "next.reward",
         "/reward",
@@ -116,9 +116,9 @@ def test_reward_as_action_registered_type_passes():
 
 
 def test_reward_as_action_rejects_empty_rewards_section():
-    """Regression: is_classifier=True with no 'rewards' entries used to
-    resolve to zero action specs with no error, silently discarding every
-    policy output instead of failing at spec-resolution time."""
+    """is_classifier=True with no 'rewards' entries must fail at spec
+    resolution; zero action specs would silently discard every policy
+    output."""
     c = _contract()  # no rewards
     with pytest.raises(ContractValidationError, match="rewards"):
         list(iter_reward_as_action_specs(c))

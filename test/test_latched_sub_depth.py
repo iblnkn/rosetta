@@ -14,14 +14,13 @@
 
 """Per-episode TRANSIENT_LOCAL subscription QoS depth.
 
-Regression: /tf_static is TRANSIENT_LOCAL, and multiple independent nodes
-commonly publish it (robot_state_publisher plus a sensor-calibration
-static_transform_publisher). Each live publisher redelivers its own latched
-sample when the per-episode subscription is created; a subscription depth
-taken straight from the contract's configured QoS depth (conventionally 1,
-a wire/DDS matching hint) lets one redelivered sample evict another in the
-RMW queue before the executor drains it — verified against rmw_zenoh and
-cyclonedds. The depth must be widened to at least the live publisher count.
+The depth must be at least the live publisher count. /tf_static is
+TRANSIENT_LOCAL and commonly has several publishers (robot_state_publisher plus
+a calibration static_transform_publisher), each redelivering its latched sample
+when the per-episode subscription is created. With the contract's configured
+depth (conventionally 1, a DDS matching hint), one redelivered sample evicts
+another in the RMW queue before the executor drains it (verified against
+rmw_zenoh and cyclonedds).
 """
 
 from rosetta.robots.ros2.bag_topics import MAX_LATCHED_SUB_DEPTH

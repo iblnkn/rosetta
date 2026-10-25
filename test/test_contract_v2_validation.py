@@ -750,8 +750,8 @@ def test_timeline_not_case_folded(tmp_path):
     ],
 )
 def test_bare_channel_unknown_type_rejected_at_load(extra, tmp_path):
-    """Bare channels (no align) used to skip type validation entirely,
-    deferring a typo'd type to subscription time in on_configure."""
+    """Bare channels (no align) get type validation too, so a typo'd type fails
+    at load, not at subscription time in on_configure."""
     pytest.importorskip("rosidl_runtime_py")
     _expect_error(tmp_path, BASE + extra, "NoSuchThing")
 

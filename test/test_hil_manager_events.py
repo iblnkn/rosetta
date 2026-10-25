@@ -14,15 +14,13 @@
 
 """HIL manager teleop-event edge detection and episode exclusion.
 
-Regressions pinned:
-- level-triggered event handling: every Joy message reports every button's
-  level, so the unpressed `failure` button's release branch cleared the
-  reward override that a `success` press had just set (the override never
-  stuck, and the classifier resumed overwriting the reward), and the
-  unpressed `is_intervention` button forced the mux back to policy on every
-  message, making the set_intervention service unusable while a joystick
-  publishes;
-- ManageEpisode goal accept raced (`_policy_goal_handle` set far downstream).
+- Events must be edge-triggered. Every Joy message reports every button's
+  level, so acting on levels lets an unpressed `failure` button clear the
+  reward override a `success` press just set, and an unpressed
+  `is_intervention` button force the mux back to policy on every message
+  (making set_intervention unusable while a joystick publishes).
+- ManageEpisode goal accept must claim the node atomically, so concurrent
+  goals cannot both be accepted.
 """
 
 import threading
@@ -71,7 +69,7 @@ def node(rclpy_ctx):
 
 
 def test_success_override_survives_unpressed_failure_button(node):
-    # The regression: success pressed, failure unpressed in the SAME message.
+    # Success pressed and failure unpressed in the SAME message.
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     assert node._human_reward_override is True
     assert node._current_reward == node.get_parameter("human_reward_positive").value
@@ -257,10 +255,8 @@ def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
 
 
 def test_deactivate_is_not_reported_as_a_human_stop(node):
-    """The regression: the loop used to derive its reason from
-    is_cancel_requested, so anything that was not an action cancel -- a
-    deactivate included -- came back as `human_stop`. An episode the node took
-    away is not an episode a human ended."""
+    """A deactivate must report node_deactivated, not `human_stop`: an episode
+    the node took away is not an episode a human ended."""
     stop_event = _claimed(node)
     node._stop_and_secure(wait_timeout=0.1)
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == TERMINATION_NODE_DEACTIVATED

@@ -15,13 +15,11 @@
 """Shared rclpy context for the whole test session.
 
 rclpy.init() is global-context and process-wide — calling it a second time
-before a prior call's rclpy.shutdown() raises. Previously five test modules
-each initialized their own context independently (three pytest fixtures at
-module scope, one pytest fixture at function scope under a different name,
-and test_bridge_launch.py's unittest.TestCase.setUpClass), which collided
-across the shared pytest process. autouse=True so it applies session-wide
-without every test file — pytest-native or unittest.TestCase — needing to
-request it explicitly; unittest-style tests can't take fixture parameters.
+before a prior call's rclpy.shutdown() raises, so test modules must not
+initialize their own contexts in the shared pytest process. autouse=True so
+it applies session-wide without every test file (pytest-native or
+unittest.TestCase) needing to request it explicitly; unittest-style tests
+can't take fixture parameters.
 """
 
 import pytest

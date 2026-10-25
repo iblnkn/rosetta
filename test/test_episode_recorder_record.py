@@ -280,12 +280,12 @@ def test_deactivate_mid_recording_reports_node_deactivated(tmp_path):
 
 
 def test_bag_write_failure_aborts_with_error_reason(tmp_path):
-    """The live bug: a failed write used to report a clean, successful recording.
+    """A failed bag write must abort the goal with an error reason.
 
     The write exception is caught inside the subscription callback, so it never
-    reaches _record's try/except. Before the reason was recorded, the callback
-    just set the stop event, the loop exited normally, and the goal SUCCEEDED
-    while handing back a truncated bag.
+    reaches _record's try/except. The callback must record the reason when it
+    sets the stop event; otherwise the loop exits normally and the goal
+    SUCCEEDS with a truncated bag.
     """
     fake = FakeRecorder(tmp_path)
     fake._signal_stop(TERMINATION_ERROR, "Write failed on /camera/image: no space left on device")

@@ -277,8 +277,8 @@ def test_joint_state_unknown_field_raises(tmp_path):
 
 
 def test_multidof_unknown_field_raises(tmp_path):
-    # Regression: "velocity.j1" used to be treated as a DOF literally named
-    # "velocity.j1" (and silently published as one on encode).
+    # "velocity.j1" must raise, not be read as a DOF literally named
+    # "velocity.j1".
     _require_msg_pkg("control_msgs/msg/MultiDOFCommand")
     spec = _obs_spec(tmp_path, msg_type="control_msgs/msg/MultiDOFCommand", select="[velocity.j1]")
     msg = types.SimpleNamespace(dof_names=["j1"], values=[1.0], values_dot=[])

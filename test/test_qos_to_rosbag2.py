@@ -14,10 +14,10 @@
 
 """qos_to_rosbag2: rclpy QoSProfile -> rosbag2_py QoS for bag topic metadata.
 
-Regression: "infinite"/unset durations discovered from real publishers come
-back as RMW_DURATION_INFINITE (int64 nanoseconds max), which overflows
-rosbag2_py Duration's int32-seconds/uint32-nanoseconds constructor. The
-converter must clamp. rosbag2_py QoS exposes no getters (setter-only pybind
+Infinite or unset durations discovered from real publishers come back as
+RMW_DURATION_INFINITE (int64 nanoseconds max), which overflows rosbag2_py
+Duration's int32-seconds/uint32-nanoseconds constructor, so the converter must
+clamp. rosbag2_py QoS exposes no getters (setter-only pybind
 API), so these tests pin construction behavior: clamped values build,
 unclamped infinite values provably do not.
 """

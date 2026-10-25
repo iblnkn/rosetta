@@ -105,8 +105,8 @@ def test_no_feedback_carries_a_status_field():
 
 
 def test_no_result_carries_a_success_flag():
-    """`success` used to mean mechanics, health, and task outcome at once, and
-    disagreed with GoalStatus on the most common path. GoalStatus is the
-    mechanics now; termination_reason is the detail; outcome is the verdict."""
+    """No result carries a `success` flag, which would conflate mechanics,
+    health, and task outcome. GoalStatus is the mechanics, termination_reason
+    the detail, and outcome the verdict."""
     for result_type in PRODUCED:
         assert not hasattr(result_type(), "success")

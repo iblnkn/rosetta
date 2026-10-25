@@ -30,9 +30,9 @@ The contract, in one line each:
 The load-bearing case is the first one. ``~/cancel_recording`` and friends exist
 because Foxglove can call services but not actions; they forward to the action
 server's own ``_action/cancel_goal`` so that a dashboard button and a `ros2
-action` cancel are the same event down to the terminal state. Faking it with a
-bare stop signal used to end the goal ABORTED, so the same human gesture
-produced two different terminal states depending on which button was pressed.
+action` cancel are the same event down to the terminal state. A bare stop
+signal would end the goal ABORTED, so the same human gesture would produce two
+different terminal states depending on which button was pressed.
 
 Deliberately NOT EpisodeRecorderNode: that needs a contract file, a bag
 directory, and a live topic graph, and a failure in any of those would be

@@ -14,11 +14,10 @@
 
 """NodeHost contract: start/stop lifecycle, rollback, and spin-death poisoning.
 
-The rollback test is a regression guard: a failing make_node() left a live
-rclpy Context behind with rclpy.init() already called; a retry on the same
-NodeHost instance then overwrote that reference, leaking it and its DDS
-participant for the life of the process. start() must roll back via stop()
-before re-raising.
+If make_node() fails, start() must roll back via stop() before re-raising.
+Otherwise the initialized rclpy Context stays live, and a retry on the same
+NodeHost overwrites the reference, leaking it and its DDS participant for the
+life of the process.
 """
 
 import pytest

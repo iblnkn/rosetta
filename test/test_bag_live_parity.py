@@ -21,11 +21,10 @@ FrameLayout. The oracle here IS the live machinery (StreamBuffer.push/sample +
 FrameLayout.assemble) driven with those semantics directly; the porter's output
 must match frame-for-frame.
 
-Pinned regressions:
-- frame 0 must not be zero-filled (old porter emitted the first tick before
-  pushing the first message);
-- a message received exactly at tick t belongs to frame t (old porter used an
-  inclusive comparison and excluded it);
+Pinned behaviors:
+- frame 0 must not be zero-filled (messages are pushed before the first tick
+  is emitted);
+- a message received exactly at tick t belongs to frame t;
 - warmup: ticks before every routed observation stream has data are skipped;
   late action streams do NOT gate warmup;
 - a routed observation topic with zero messages -> RuntimeError;

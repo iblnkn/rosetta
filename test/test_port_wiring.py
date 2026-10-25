@@ -14,11 +14,9 @@
 
 """port()'s wiring: what the contract declares must reach iter_bag_frames.
 
-Regression: port() used to build its episode iterators without task_topics,
-so the contract's ``tasks:`` section (per-frame task labels) silently never
-fired in an actual port — only the iter_bag_frames level was tested, and the
-one code path that passed task_topics correctly (BagFrameSource.episodes,
-since deleted) had no callers.
+port() must pass task_topics to its episode iterators; otherwise the
+contract's ``tasks:`` section (per-frame task labels) silently never fires in a
+real port, even though iter_bag_frames handles it correctly on its own.
 """
 
 from pathlib import Path

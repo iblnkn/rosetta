@@ -102,8 +102,7 @@ def test_undecodable_observation_rejected_at_load():
 
 
 def test_explicit_dtype_does_not_exempt_decodability():
-    """Regression: the old error advice said "specify dtype explicitly", but an
-    undecodable channel is undecodable regardless of its declared dtype."""
+    """An undecodable channel is undecodable regardless of its declared dtype."""
     c = _contract(
         observations=[_entry("observation.state", _source("/x", "my_msgs/msg/NoDecoder", ["a"], dtype="float64"))]
     )
@@ -112,8 +111,8 @@ def test_explicit_dtype_does_not_exempt_decodability():
 
 
 def test_undecodable_custom_image_type_rejected_at_load():
-    """Regression: is_image used to bypass the decodability check, deferring a
-    custom image type without a decoder to a first-frame decode error."""
+    """Image keys get the decodability check too, so a custom image type
+    without a decoder fails at load, not at the first frame."""
     c = _contract(
         observations=[
             _entry("observation.images.cam", _source("/cam", "my_msgs/msg/FancyImage", apply=[("resize", [4, 4])]))
@@ -125,9 +124,9 @@ def test_undecodable_custom_image_type_rejected_at_load():
 
 @pytest.mark.parametrize("bad_dtype", ["float32", "bool", "image"])
 def test_explicit_non_video_dtype_on_image_rejected(bad_dtype):
-    """Regression: an explicit numeric dtype on an image key used to load and
-    then declare a (1,) numeric feature while assemble produced (h, w, 3)
-    uint8 — dataset corruption instead of a load error."""
+    """An explicit numeric dtype on an image key must fail at load. Otherwise
+    the feature is declared (1,) numeric while assemble produces (h, w, 3)
+    uint8, corrupting the dataset."""
     c = _contract(
         observations=[
             _entry(
@@ -162,9 +161,9 @@ def test_native_codec_dtype_tier():
 
 
 def test_explicit_video_dtype_on_non_image_key_rejected():
-    """'video' is reserved for observation.images.*; on a numeric key it used
-    to load and then die at FrameLayout construction with a generic
-    unsupported-dtype message that never named the actual mistake."""
+    """'video' is reserved for observation.images.*; on a numeric key it must
+    fail at load with an error naming that rule, not later with a generic
+    unsupported-dtype message from FrameLayout."""
     c = _contract(
         observations=[
             _entry("observation.state", _source("/v", "sensor_msgs/msg/JointState", ["position.j1"], dtype="video"))
@@ -180,8 +179,8 @@ def test_explicit_video_dtype_on_non_image_key_rejected():
 
 
 def test_undecodable_extended_channel_rejected_at_load():
-    """Regression: extended sections used to skip the decodability check, so an
-    undecodable signal loaded fine and silently dropped every message at ingest."""
+    """Extended sections get the decodability check too; an undecodable signal
+    would otherwise load and silently drop every message at ingest."""
     c = _contract(signals=[_entry("battery", _source("/battery", "my_msgs/msg/NoDecoder", ["v"], dtype="float64"))])
     with pytest.raises(ContractValidationError, match="No decoder registered"):
         list(iter_specs(c))
@@ -211,8 +210,8 @@ def test_action_with_custom_encoder_only_type_allowed():
 
 def test_non_numeric_action_dtype_rejected():
     """Published streams are numeric vectors. A String-typed action channel
-    (native dtype 'string') used to build a FrameLayout fine and then crash
-    at the first publish_frame, inside split's float coercion."""
+    (native dtype 'string') must fail at load, not at the first publish_frame
+    inside split's float coercion."""
     c = _contract(actions=[_entry("action", _source("/note", "std_msgs/msg/String", encoder="my_pkg.enc:encode"))])
     with pytest.raises(ContractValidationError, match="numeric vectors"):
         list(iter_action_specs(c))
@@ -225,9 +224,9 @@ def _teleop_feedback(feedback_source):
 
 
 def test_teleop_feedback_requires_encoder():
-    """Regression: feedback skipped the encoder check its sibling publish paths
-    (actions, reward-as-action) enforce, deferring failure to first publish in
-    hil_manager_node."""
+    """Teleop feedback gets the same encoder check as the other publish paths
+    (actions, reward-as-action), so failure comes at load, not at first
+    publish in hil_manager_node."""
     c = _teleop_feedback(_source("/leader/fb", "my_msgs/msg/NoEncoder", ["a"]))
     with pytest.raises(ContractValidationError, match="No encoder registered"):
         list(iter_teleop_feedback_specs(c))

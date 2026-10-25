@@ -73,7 +73,7 @@ def test_guard_released_when_episode_raises(node, monkeypatch):
 
     resp = _call(node)
     assert resp.accepted is True
-    # The leak regression: the thread's finally must release the guard.
+    # The thread's finally must release the guard, or the node stays busy.
     assert wait_until(lambda: not node.busy, timeout=5.0)
 
 

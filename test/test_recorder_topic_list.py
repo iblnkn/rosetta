@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Recorder topic-list dedup.
+"""Recorder topic list: dedup and contract_topics.
 
-Regression: a topic referenced in two contract sections (e.g. observation +
-reward on one topic) produced two live subscriptions — the second overwrote
-the _subs dict entry while the first stayed alive on the graph, so every
-message was written to the bag twice — and create_topic registered the topic
-twice with the bag writer.
+A topic referenced in several contract sections (e.g. observation and reward on
+one topic) must yield one entry; otherwise the recorder subscribes twice and
+writes every message to the bag twice. Conflicting types or QoS for one topic
+raise. contract_topics adds /clock when use_sim_time is set.
 """
 
 import pytest

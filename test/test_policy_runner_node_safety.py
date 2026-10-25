@@ -14,14 +14,12 @@
 
 """Client node deactivate ordering and goal-accept exclusion.
 
-Regressions pinned:
-- on_deactivate used to send the safety action BEFORE stopping the runner, so
-  the still-running policy loop published at least one more action over it —
-  the robot's last command on the wire was a stale policy action, not the
-  safety action.
-- _on_goal used to check `self._active_goal is not None`, which _execute set
-  only later: under the MultiThreadedExecutor two goals could both be
-  accepted, running two policy loops against one runner/bridge.
+- on_deactivate must stop the runner before sending the safety action, so the
+  safety action is the robot's last command on the wire, not a stale policy
+  action.
+- _on_goal must claim the node at accept time. Under the MultiThreadedExecutor
+  a check that _execute satisfies only later lets two goals both be accepted,
+  running two policy loops against one runner/bridge.
 """
 
 import threading

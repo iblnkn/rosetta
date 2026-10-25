@@ -14,9 +14,9 @@
 
 """Shared-key TopicBridge tests against a real rclpy graph.
 
-Regression guards for the topic-keyed-buffer bugs: two specs reading the same
-topic (the README kind example) must both land in the frame, and action frames
-must slice per spec — not per topic — with length validation.
+Two specs reading the same topic (the README kind example) must both land in
+the frame, and action frames must slice per spec, not per topic, with length
+validation.
 """
 
 import time

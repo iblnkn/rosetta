@@ -277,10 +277,9 @@ def test_discover_codecs_failure_is_latched(monkeypatch):
 
 
 def test_discovery_registers_builtin_codecs():
-    """Regression: the built-ins used to register only via side-effect imports
-    of robots.ros2.{decoders,encoders}, so registry checks depended on ambient
-    import state (the parity test failed when run alone). Discovery itself now
-    loads them; the accessors are the API spec resolution uses."""
+    """Discovery itself must load the built-in codecs, so registry checks do
+    not depend on whether robots.ros2.{decoders,encoders} happened to be
+    imported. The accessors are the API spec resolution uses."""
     from rosetta.frames.codecs import has_decoder, has_encoder
 
     assert has_decoder("sensor_msgs/msg/JointState")
