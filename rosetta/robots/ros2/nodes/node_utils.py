@@ -136,30 +136,18 @@ def finish_goal(goal_handle, result) -> None:
 
 
 def request_cancel_all(cancel_client, *, warn: Callable[[str], None] | None = None) -> bool:
-    """Ask an action server to cancel every goal it is currently running.
+    """Ask an action server to cancel every goal it is running.
 
-    ``CancelGoal.Request()`` is the action spec's cancel-all wildcard: an
-    all-zero goal id with a zero stamp means "cancel all goals"
-    (``rcl_action_process_cancel_request``). Nodes use this to give clients that
-    can call services but not actions -- Foxglove, most of all -- a real cancel
-    rather than a lookalike. It is the same request an action client sends, so
-    the goal genuinely enters CANCELING and ends CANCELED.
+    ``CancelGoal.Request()`` is the action spec's cancel-all wildcard (an
+    all-zero goal id and stamp), so the goal enters CANCELING and ends
+    CANCELED exactly as for an action client's cancel.
 
-    Fire-and-forget on purpose. The response is never awaited: doing so from
-    inside a service callback would need the executor to service three more
-    wakeups on the same node before the handler could return, which starves a
-    thread-limited executor and hard-deadlocks a single-threaded one. The
-    response carries nothing the caller needs anyway -- whether work was running
-    is already known from the node's own ``busy`` flag.
-
-    Args:
-        cancel_client: Client for ``<action_name>/_action/cancel_goal``.
-        warn: Optional callable invoked with a message when the server's cancel
-            service is not reachable.
+    Fire-and-forget: awaiting the response from inside a service callback
+    starves a thread-limited executor and deadlocks a single-threaded one.
 
     Returns:
         True when the request was dispatched, False when the cancel service was
-        not available.
+        not available (``warn`` is called with a message).
 
     """
     if not cancel_client.service_is_ready():

@@ -22,11 +22,8 @@ is delegated to a :class:`~rosetta.policies.PolicyRunner` resolved by
 name from the ``framework`` parameter (e.g. ``lerobot``). The node
 imports no specific policy framework.
 
-Lifecycle transitions (fail-loud configure, stop/wait/safety ordering on
-deactivate AND shutdown, one teardown path) come from
-:class:`RosettaLifecycleNode`; this class only fills in the ``_setup()`` /
-``_teardown()`` / ``_unblock_stop()`` / ``_send_safety_action()`` hooks and the
-action callbacks.
+Lifecycle transitions come from :class:`RosettaLifecycleNode`; this class
+fills in its hooks and the action callbacks.
 
 The action is served under the relative name ``run_policy``. The launch-file
 namespace sets the fully qualified name. The default launch gives
@@ -263,9 +260,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         The event is the cooperative signal every control loop polls;
         ``request_stop()`` unblocks a run stuck in I/O so it observes the event
         promptly. See :meth:`PolicyRunner.request_stop`. Safe to call with no
-        goal active, and -- unlike the old ``_signal_stop`` override -- never
-        called while holding the base's work gate, so a framework call that
-        blocks cannot stall every other claim.
+        goal active.
         """
         runner = self._runner
         if runner is not None:
@@ -333,16 +328,12 @@ class PolicyRunnerNode(RosettaLifecycleNode):
                 the ``default_prompt`` parameter.
             goal_handle: Action goal handle, or None for a service start.
             max_duration: Stop the run after this many seconds. 0 or negative
-                falls back to the ``default_max_duration_s`` parameter, which is
-                what the service-start path always uses -- the lightweight
-                service start takes node defaults; the goal can override them.
+                falls back to the ``default_max_duration_s`` parameter.
 
         Returns:
             The populated RunPolicy.Result.
 
         """
-        # Resolved here rather than at each entry point, so the action goal,
-        # the service call, and any future caller all fall back the same way.
         task = task or self.get_parameter("default_prompt").value
 
         result = RunPolicy.Result()
