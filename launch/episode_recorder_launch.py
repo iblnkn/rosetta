@@ -49,7 +49,9 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 
-from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config
+from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config, yaml_params
+
+DEFAULT_PARAMS = os.path.join(get_package_share_directory("rosetta"), "params", "episode_recorder.yaml")
 
 
 def launch_setup(context, *args, **kwargs):
@@ -79,7 +81,13 @@ def launch_setup(context, *args, **kwargs):
         namespace="",
         output="screen",
         emulate_tty=True,
-        parameters=[params_file, overrides],
+        # Dicts, not a path, so the params apply under an including namespace;
+        # params_file layers over the package defaults (see policy_runner_launch.py).
+        parameters=[
+            yaml_params(DEFAULT_PARAMS, "episode_recorder"),
+            yaml_params(params_file, "episode_recorder"),
+            overrides,
+        ],
         arguments=["--ros-args", "--log-level", log_level],
     )
 
@@ -88,9 +96,7 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     """Generate the launch description for the episode recorder node."""
-    share = get_package_share_directory("rosetta")
-    default_contract = os.path.join(share, "contracts", "so_101.yaml")
-    default_params = os.path.join(share, "params", "episode_recorder.yaml")
+    default_contract = os.path.join(get_package_share_directory("rosetta"), "contracts", "so_101.yaml")
 
     # Declare launch arguments
     # Only deployment-specific settings are exposed as launch args
@@ -99,8 +105,8 @@ def generate_launch_description():
         # Parameters file path - source of truth for tuning params
         DeclareLaunchArgument(
             "params_file",
-            default_value=default_params,
-            description="Path to ROS2 parameters YAML file (contains tuning params)",
+            default_value=DEFAULT_PARAMS,
+            description="Parameters YAML layered over the package defaults (keys under episode_recorder)",
         ),
         # Deployment-specific paths
         DeclareLaunchArgument(

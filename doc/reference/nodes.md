@@ -1,9 +1,11 @@
 # Nodes
 
 Three executables in the `rosetta` package. The recorder and policy runner
-launch files read a params file from `params/` and expose deployment values as
-launch arguments. An empty launch argument keeps the params-file value, except
-`contract_path`, which is passed as given. The human-in-the-loop manager is a
+launch files load the package's params file from `params/`, then the file
+given as `params_file`, which only needs the keys it changes. They expose
+deployment values as launch arguments. An empty launch argument keeps the
+params-file value, except `contract_path`, which is passed as given. Both
+launch files work when included under a namespace. The human-in-the-loop manager is a
 separate app built on these nodes, in
 [`rosetta_hil`](https://github.com/iblnkn/rosetta_hil).
 
@@ -150,9 +152,8 @@ adapter's. `params/policy_runner.yaml` sets the third.
 | `obs_similarity_atol` | `1.0` | `-1.0` | Negative disables. Ignored by stock LeRobot 0.6.0. |
 
 Launch arguments: `params_file`, `contract_path`,
-`pretrained_name_or_path`, `policy_type`, `server_address`,
+`pretrained_name_or_path`, `policy_type`, `policy_device`, `server_address`,
 `launch_local_server`, `use_sim_time`, `log_level`, `configure`, `activate`.
-`policy_device` is not a launch argument. Set it in the params file.
 
 With `use_sim_time`, observations and actions pace on the sim clock at the
 contract `fps`.

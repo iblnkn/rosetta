@@ -53,7 +53,9 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 
-from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config
+from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config, yaml_params
+
+DEFAULT_PARAMS = os.path.join(get_package_share_directory("rosetta"), "params", "policy_runner.yaml")
 
 
 def launch_setup(context, *args, **kwargs):
@@ -63,6 +65,7 @@ def launch_setup(context, *args, **kwargs):
     contract_path = LaunchConfiguration("contract_path").perform(context)
     pretrained_name_or_path = LaunchConfiguration("pretrained_name_or_path").perform(context)
     policy_type = LaunchConfiguration("policy_type").perform(context)
+    policy_device = LaunchConfiguration("policy_device").perform(context)
     server_address = LaunchConfiguration("server_address").perform(context)
     launch_local_server = LaunchConfiguration("launch_local_server").perform(context)
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
@@ -75,6 +78,8 @@ def launch_setup(context, *args, **kwargs):
         overrides["pretrained_name_or_path"] = pretrained_name_or_path
     if policy_type:
         overrides["policy_type"] = policy_type
+    if policy_device:
+        overrides["policy_device"] = policy_device
     if server_address:
         overrides["server_address"] = server_address
     if launch_local_server:
@@ -89,7 +94,11 @@ def launch_setup(context, *args, **kwargs):
         namespace="",
         output="screen",
         emulate_tty=True,
-        parameters=[params_file, overrides],
+        # Loaded as dicts, not a file path: a params file's top-level node key
+        # matches only the root-namespace node, so a path would be inert when
+        # this file is included under a namespace. params_file layers over the
+        # package defaults, so it only needs the keys it changes.
+        parameters=[yaml_params(DEFAULT_PARAMS, "policy_runner"), yaml_params(params_file, "policy_runner"), overrides],
         arguments=["--ros-args", "--log-level", log_level],
     )
 
@@ -98,9 +107,7 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     """Generate the launch description for the rosetta client node."""
-    share = get_package_share_directory("rosetta")
-    default_contract = os.path.join(share, "contracts", "so_101.yaml")
-    default_params = os.path.join(share, "params", "policy_runner.yaml")
+    default_contract = os.path.join(get_package_share_directory("rosetta"), "contracts", "so_101.yaml")
 
     # Declare launch arguments
     # Only deployment-specific settings are exposed as launch args
@@ -109,8 +116,8 @@ def generate_launch_description():
         # Parameters file path - source of truth for tuning params
         DeclareLaunchArgument(
             "params_file",
-            default_value=default_params,
-            description="Path to ROS2 parameters YAML file (contains tuning params)",
+            default_value=DEFAULT_PARAMS,
+            description="Parameters YAML layered over the package defaults (keys under policy_runner)",
         ),
         # Deployment-specific paths
         DeclareLaunchArgument(
@@ -127,6 +134,11 @@ def generate_launch_description():
             "policy_type",
             default_value="",  # Empty = use value from params file
             description="Policy architecture, must match the checkpoint (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "policy_device",
+            default_value="",  # Empty = use value from params file
+            description="Inference device, e.g. cuda, cuda:1, cpu (empty = use params file value)",
         ),
         # Server configuration
         DeclareLaunchArgument(
