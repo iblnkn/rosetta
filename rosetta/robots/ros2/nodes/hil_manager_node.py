@@ -636,7 +636,6 @@ class HilManagerNode(RosettaLifecycleNode):
         other button, the clear_reward_override service, or the next
         episode's state reset.
         """
-        self.get_logger().debug(f"Joy received: buttons={list(msg.buttons)}")
         for event_name, selector in events_spec.select.items():
             try:
                 pressed = bool(resolve_indexed(msg, selector))

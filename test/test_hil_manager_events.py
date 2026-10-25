@@ -77,6 +77,13 @@ def test_success_override_survives_unpressed_failure_button(node):
     assert node._current_reward == node.get_parameter("human_reward_positive").value
 
 
+def test_events_channel_need_not_be_joy(node):
+    """The events channel type comes from the contract; a message without `buttons` must still dispatch."""
+    spec = SimpleNamespace(select={"success": "data"})
+    node._on_teleop_events(SimpleNamespace(data=True), spec)
+    assert node._human_reward_override is True
+
+
 def test_override_latches_after_release(node):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # release
