@@ -9,8 +9,6 @@ actions, rewards) is plain ROS 2 topics defined by the contract YAML.
 |-----------|------|--------|---------|
 | `RecordEpisode` | action | `episode_recorder` | Record a demonstration to a rosbag |
 | `RunPolicy` | action | `policy_runner` | Run policy (or classifier) inference |
-| `ManageEpisode` | action | `hil_manager` | Orchestrate a human-in-the-loop episode |
-| `StartHILEpisode` | service | `hil_manager` | Start a HIL episode (returns once started) |
 | `StartRecording` | service | `episode_recorder` | Lightweight start of recording |
 | `StartPolicy` | service | `policy_runner` | Lightweight start of policy inference |
 
@@ -26,8 +24,9 @@ Every action result reports **how** it ended, not whether it "succeeded":
   the server stopped it (an error, or a lifecycle deactivate).
 - `termination_reason` names the exact cause, with the legal values declared as
   constants in each `.action`.
-- `ManageEpisode` additionally carries `outcome` (whether the *robot did the
-  task*), which is independent of how the episode ended.
+- Apps built on Rosetta declare their own interfaces. The human-in-the-loop
+  manager's `ManageEpisode` and `StartHILEpisode` are in
+  [`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta_hil_interfaces).
 
 Field-by-field definitions with example calls:
 **[Actions and services reference](https://iblnkn.github.io/rosetta/reference/nodes.html)**.

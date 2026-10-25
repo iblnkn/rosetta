@@ -12,11 +12,9 @@ find_package(action_msgs REQUIRED)
 
 # Generate interfaces
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/ManageEpisode.action"
   "action/RecordEpisode.action"
   "action/RunPolicy.action"
   "srv/StartRecording.srv"
-  "srv/StartHILEpisode.srv"
   "srv/StartPolicy.srv"
   DEPENDENCIES action_msgs
 )

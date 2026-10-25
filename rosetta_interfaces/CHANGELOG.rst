@@ -4,6 +4,10 @@ Changelog for package rosetta_interfaces
 
 Forthcoming
 -----------
+* **Breaking: ``ManageEpisode`` and ``StartHILEpisode`` moved to
+  ``rosetta_hil_interfaces``**, unchanged, alongside the human-in-the-loop
+  manager that serves them. This package now holds only the core recorder and
+  policy-runner interfaces.
 * **Breaking: ``bool success`` removed from every action result.** It meant
   three different things at once -- did the goal run to term, did anything
   break, and did the robot do the task -- and disagreed with the goal's
