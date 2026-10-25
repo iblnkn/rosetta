@@ -51,7 +51,7 @@ from rclpy.action import ActionClient, ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_TIMEOUT,
     finish_goal,

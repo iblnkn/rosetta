@@ -47,7 +47,7 @@ from sensor_msgs.msg import JointState
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,

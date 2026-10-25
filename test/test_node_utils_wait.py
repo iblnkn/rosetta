@@ -21,7 +21,7 @@ turn those waits into no-ops or hangs, so its contract is pinned directly.
 
 import time
 
-from rosetta.robots.ros2.nodes.node_utils import wait_until
+from rosetta.robots.ros2.node_utils import wait_until
 
 
 def test_true_predicate_returns_immediately():

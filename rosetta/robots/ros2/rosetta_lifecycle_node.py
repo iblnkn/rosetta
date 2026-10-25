@@ -25,10 +25,6 @@ never override the lifecycle callbacks themselves.
 whose specs are known at construction time (the framework adapter packages).
 Nodes that resolve their resources from ROS parameters at configure time
 subclass :class:`RosettaLifecycleNode` directly.
-
-``wait_until`` is imported from ``nodes.node_utils``. The nodes package
-depends on this module's class, not the reverse, so the cross-directory
-import is cycle-free.
 """
 
 from __future__ import annotations
@@ -41,7 +37,7 @@ from rclpy.action import CancelResponse, GoalResponse
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_NODE_DEACTIVATED,
     request_cancel_all,
@@ -129,7 +125,7 @@ class RosettaLifecycleNode(Node):
         thing to notice.
 
         :param reason: one of the ``TERMINATION_*`` values in
-            ``nodes.node_utils``.
+            ``node_utils``.
         :param detail: optional human-readable specifics for the result's
             ``message`` (for example which topic's bag write failed).
         """

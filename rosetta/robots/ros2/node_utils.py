@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helpers used only by the lifecycle nodes in rosetta.robots.ros2.nodes.
+"""Toolkit for building lifecycle nodes on rosetta, alongside :class:`RosettaLifecycleNode`.
 
-Node-side concerns: the termination vocabulary and rcl-legal action termination
-(finish_goal), cancelling a node's own action goals (request_cancel_all),
-polling waits (wait_until), and the shared node entry point
-(spin_lifecycle_node). QoS-dict parsing and
-lifecycle-state helpers shared with the wider ros2 layer stay in
-rosetta.robots.ros2.rclpy_utils. Work-slot mutual exclusion lives on
-RosettaLifecycleNode itself (the ``busy`` property + work gate).
+The shared termination vocabulary and rcl-legal action termination
+(``finish_goal``), cancelling a node's own action goals
+(``request_cancel_all``), polling waits (``wait_until``), parameter
+descriptors, and the node entry point (``spin_lifecycle_node``).
 """
 
 from __future__ import annotations

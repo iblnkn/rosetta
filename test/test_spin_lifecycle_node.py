@@ -20,7 +20,7 @@ destroying the node, or external resources (an open bag writer, a policy
 server subprocess, the safety send) leak on Ctrl-C.
 """
 
-from rosetta.robots.ros2.nodes import node_utils
+from rosetta.robots.ros2 import node_utils
 
 
 class _FakeExecutor:

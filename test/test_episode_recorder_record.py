@@ -37,14 +37,14 @@ import yaml
 from std_srvs.srv import Trigger
 
 from rosetta.robots.ros2.bag_metadata import BAG_CUSTOM_DATA_KEY, BAG_GOAL_ID_KEY, BAG_METADATA_KEY
-from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
 )
+from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 
 

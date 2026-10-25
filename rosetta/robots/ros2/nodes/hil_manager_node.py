@@ -57,7 +57,7 @@ from rosetta.contract.specs import (
 )
 from rosetta.frames.codecs import decode_value, encode_value
 from rosetta.robots.ros2.field_access import resolve_indexed
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,

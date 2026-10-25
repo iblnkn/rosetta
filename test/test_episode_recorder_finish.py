@@ -42,7 +42,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_COMPLETED,
     TERMINATION_ERROR,

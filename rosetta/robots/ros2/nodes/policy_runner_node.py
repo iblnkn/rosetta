@@ -57,7 +57,7 @@ from rosetta.contract.specs import (
     iter_reward_as_action_specs,
 )
 from rosetta.policies import PolicyRunner, RunnerResult, load_policy_runner
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_COMPLETED,
     TERMINATION_ERROR,
     TERMINATION_TIMEOUT,

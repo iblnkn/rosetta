@@ -58,7 +58,7 @@ from rosetta.robots.ros2.bag_topics import (
     latched_sub_depth,
     qos_to_rosbag2,
 )
-from rosetta.robots.ros2.nodes.node_utils import (
+from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
