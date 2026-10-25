@@ -721,7 +721,11 @@ class HilManagerNode(RosettaLifecycleNode):
         return self.handle_cancel_service(response, self._cancel_client, what="episode")
 
     def _on_set_intervention(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
-        """Service: switch mux between policy (False) and teleop (True)."""
+        """Service: switch mux between policy (False) and teleop (True).
+
+        Works between episodes too, so a person can drive the robot to a start
+        pose; every episode starts with the policy in control.
+        """
         self._episode.set_control(Control.TELEOP if request.data else Control.POLICY)
         response.success = True
         response.message = f"Control source: {'teleop' if request.data else 'policy'}"
