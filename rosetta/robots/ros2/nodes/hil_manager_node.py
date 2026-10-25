@@ -61,21 +61,22 @@ from rosetta.robots.ros2.field_access import resolve_indexed
 from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
-    TERMINATION_TIMEOUT,
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
+)
+from rosetta.robots.ros2.nodes.hil_episode import (
+    OUTCOME_UNLABELED,
+    Control,
+    EdgeDetector,
+    EpisodeState,
+    resolve_outcome,
+    termination_reason,
 )
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 from rosetta_interfaces.srv import StartHILEpisode
-
-# HIL's own vocabulary, declared by ManageEpisode on top of the shared reasons.
-TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
-OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
-OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
-OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
 
 
 class HilManagerNode(RosettaLifecycleNode):
@@ -210,21 +211,8 @@ class HilManagerNode(RosettaLifecycleNode):
         # Action server
         self._action_server: ActionServer | None = None
 
-        # Mux state (guarded by _mux_lock)
-        self._mux_lock = threading.Lock()
-        self._control_source = "policy"  # "policy" or "teleop"
-        self._current_reward = 0.0
-        self._human_reward_override = False
-        # Task verdict for the current episode: did the robot do the task?
-        # Latched by the success/failure/end_success/end_failure buttons and the
-        # reward-override services, reset per episode in _run_episode. Written
-        # everywhere _human_reward_override is, because labelling the reward and
-        # labelling the episode are the same human act.
-        self._episode_outcome = OUTCOME_UNLABELED
-        # Last observed pressed state per teleop event, for edge detection
-        # (guarded by _mux_lock). Deliberately NOT reset per episode: a button
-        # held across an episode boundary is not a new press.
-        self._prev_event_pressed: dict[str, bool] = {}
+        self._episode = EpisodeState()
+        self._edges = EdgeDetector()
 
         # Subscriptions and publishers for muxing
         self._mux_subs: list = []
@@ -524,9 +512,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _on_policy_output(self, msg, original_topic: str) -> None:
         """Forward policy output to command topic when in policy mode."""
-        with self._mux_lock:
-            if self._control_source != "policy":
-                return
+        if self._episode.control != Control.POLICY:
+            return
 
         # Publisher exists by construction: sub and publisher come from the
         # same contract entry.
@@ -543,9 +530,8 @@ class HilManagerNode(RosettaLifecycleNode):
         whenever they do. Going through the same decode/encode machinery as
         every other spec is correct regardless of whether they happen to match.
         """
-        with self._mux_lock:
-            if self._control_source != "teleop":
-                return
+        if self._episode.control != Control.TELEOP:
+            return
 
         try:
             decoded = decode_value(msg, teleop_spec)
@@ -571,10 +557,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _on_reward_classifier_output(self, msg, original_topic: str) -> None:
         """Forward reward classifier output when no human override is active."""
-        with self._mux_lock:
-            if self._human_reward_override:
-                return
-            self._current_reward = float(msg.data)
+        if not self._episode.accept_classifier_reward(float(msg.data)):
+            return
 
         _, pub = self._reward_publishers[original_topic]
         pub.publish(msg)
@@ -623,19 +607,13 @@ class HilManagerNode(RosettaLifecycleNode):
         other button, the clear_reward_override service, or the next
         episode's state reset.
         """
+        levels = {}
         for event_name, selector in events_spec.select.items():
             try:
-                pressed = bool(resolve_indexed(msg, selector))
+                levels[event_name] = bool(resolve_indexed(msg, selector))
             except (AttributeError, IndexError, ValueError) as e:
                 self.get_logger().warning(f"Selector '{selector}' failed: {e}")
-                continue
-
-            with self._mux_lock:
-                prev = self._prev_event_pressed.get(event_name, False)
-                self._prev_event_pressed[event_name] = pressed
-            if pressed == prev:
-                continue
-
+        for event_name, pressed in self._edges.update(levels):
             if pressed:
                 self._on_event_press(event_name)
             else:
@@ -644,8 +622,7 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_event_press(self, event_name: str) -> None:
         """Act on a press edge of one teleop event button."""
         if event_name == "is_intervention":
-            with self._mux_lock:
-                self._control_source = "teleop"
+            self._episode.set_control(Control.TELEOP)
             self.get_logger().info("Mux: policy -> teleop (human intervention)")
 
         elif event_name == "start_episode":
@@ -668,8 +645,7 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_event_release(self, event_name: str) -> None:
         """Act on a release edge of one teleop event button."""
         if event_name == "is_intervention":
-            with self._mux_lock:
-                self._control_source = "policy"
+            self._episode.set_control(Control.POLICY)
             self.get_logger().info("Mux: teleop -> policy (intervention released)")
         # success/failure releases latch (see _on_teleop_events docstring);
         # end_success/end_failure are one-shot flags consumed by the
@@ -690,10 +666,7 @@ class HilManagerNode(RosettaLifecycleNode):
         """
         param = "human_reward_positive" if success else "human_reward_negative"
         reward_val = self.get_parameter(param).value
-        with self._mux_lock:
-            self._current_reward = reward_val
-            self._human_reward_override = True
-            self._episode_outcome = OUTCOME_SUCCESS if success else OUTCOME_FAILURE
+        self._episode.label(success, reward_val)
         return reward_val
 
     def _publish_human_reward(self, reward_val: float) -> None:
@@ -822,8 +795,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _on_set_intervention(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
         """Service: switch mux between policy (False) and teleop (True)."""
-        with self._mux_lock:
-            self._control_source = "teleop" if request.data else "policy"
+        self._episode.set_control(Control.TELEOP if request.data else Control.POLICY)
         response.success = True
         response.message = f"Control source: {'teleop' if request.data else 'policy'}"
         self.get_logger().info(response.message)
@@ -844,9 +816,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _on_clear_reward_override(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Service: release the human reward override, retracting the episode's label."""
-        with self._mux_lock:
-            self._human_reward_override = False
-            self._episode_outcome = OUTCOME_UNLABELED
+        self._episode.clear_label()
         response.success = True
         response.message = "Reward override cleared"
         self.get_logger().info(response.message)
@@ -884,11 +854,7 @@ class HilManagerNode(RosettaLifecycleNode):
             f"Starting episode: prompt={prompt!r}, max_duration={max_duration}s, reward_threshold={reward_threshold}"
         )
 
-        with self._mux_lock:
-            self._control_source = "policy"
-            self._current_reward = 0.0
-            self._human_reward_override = False
-            self._episode_outcome = OUTCOME_UNLABELED
+        self._episode.reset()
 
         enable_reward = self.get_parameter("enable_reward_classifier").value
         enable_recording = self.get_parameter("enable_recording").value
@@ -947,9 +913,9 @@ class HilManagerNode(RosettaLifecycleNode):
                     self.get_logger().warning("Failed to start reward classifier, continuing without it")
                 self._reward_goal_handle = reward_gh
 
-            termination_reason = self._feedback_loop(goal_handle, max_duration, reward_threshold, stop_event)
+            reason = self._feedback_loop(goal_handle, max_duration, reward_threshold, stop_event)
 
-            self.get_logger().info(f"Episode ending: {termination_reason}")
+            self.get_logger().info(f"Episode ending: {reason}")
             # wait_result: the child's active-goal slot must be free before
             # the next episode sends a new goal. Skipped entirely when
             # manage_policy_lifecycle=false -- _policy_goal_handle is None in
@@ -962,16 +928,10 @@ class HilManagerNode(RosettaLifecycleNode):
 
             recorder_result = self._stop_recorder()
 
-            with self._mux_lock:
-                final_reward = self._current_reward
-                outcome = self._episode_outcome
-            # An episode that hit the reward threshold did the task, whether or
-            # not a human also said so -- crossing the threshold the caller
-            # specified IS the success criterion.
-            if outcome == OUTCOME_UNLABELED and termination_reason == TERMINATION_REWARD_THRESHOLD:
-                outcome = OUTCOME_SUCCESS
+            _, final_reward, outcome = self._episode.snapshot()
+            outcome = resolve_outcome(outcome, reason)
 
-            fields["termination_reason"] = termination_reason
+            fields["termination_reason"] = reason
             fields["outcome"] = outcome
             fields["final_reward"] = final_reward
             # message stays empty: termination_reason and outcome already say
@@ -1026,23 +986,15 @@ class HilManagerNode(RosettaLifecycleNode):
 
         while not stop_event.wait(interval):
             elapsed = time.monotonic() - start
-            with self._mux_lock:
-                reward = self._current_reward
-                source = self._control_source
-                outcome = self._episode_outcome
-
-            # No is_cancel_requested poll: every cancel now sets the stop event
-            # via the base's on_cancel, and names itself while doing so.
-            if max_duration > 0.0 and elapsed >= max_duration:
-                return TERMINATION_TIMEOUT
-
-            if reward_threshold > 0.0 and reward >= reward_threshold:
-                return TERMINATION_REWARD_THRESHOLD
+            source, reward, outcome = self._episode.snapshot()
+            reason = termination_reason(elapsed, max_duration, reward, reward_threshold)
+            if reason is not None:
+                return reason
 
             # Publish HIL intervention state (0=policy, 1=human)
             if self._intervention_pub is not None:
                 intervention_msg = Int8()
-                intervention_msg.data = 0 if source == "policy" else 1
+                intervention_msg.data = 0 if source == Control.POLICY else 1
                 self._intervention_pub.publish(intervention_msg)
 
             # Publish feedback (only available via action interface)

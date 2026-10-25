@@ -37,13 +37,13 @@ from rosetta.robots.ros2.node_utils import (
     TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
 )
-from rosetta.robots.ros2.nodes.hil_manager_node import (
+from rosetta.robots.ros2.nodes.hil_episode import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
     OUTCOME_UNLABELED,
     TERMINATION_REWARD_THRESHOLD,
-    HilManagerNode,
 )
+from rosetta.robots.ros2.nodes.hil_manager_node import HilManagerNode
 
 # events_spec.select maps event name -> Joy selector. Button layout:
 # 0=is_intervention, 1=end_success, 2=end_failure, 3=success, 4=failure, 5=start_episode.
@@ -73,25 +73,25 @@ def node(rclpy_ctx):
 def test_success_override_survives_unpressed_failure_button(node):
     # Success pressed and failure unpressed in the SAME message.
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
-    assert node._human_reward_override is True
-    assert node._current_reward == node.get_parameter("human_reward_positive").value
+    assert node._episode.labeled is True
+    assert node._episode.reward == node.get_parameter("human_reward_positive").value
 
 
 def test_events_channel_need_not_be_joy(node):
     """The events channel type comes from the contract; a message without `buttons` must still dispatch."""
     spec = SimpleNamespace(select={"success": "data"})
     node._on_teleop_events(SimpleNamespace(data=True), spec)
-    assert node._human_reward_override is True
+    assert node._episode.labeled is True
 
 
 def test_override_latches_after_release(node):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # release
-    assert node._human_reward_override is True  # latched
+    assert node._episode.labeled is True  # latched
     # Classifier output is still blocked while the override holds.
     msg = SimpleNamespace(data=0.25)
     node._on_reward_classifier_output(msg, "/reward")
-    assert node._current_reward == node.get_parameter("human_reward_positive").value
+    assert node._episode.reward == node.get_parameter("human_reward_positive").value
 
 
 def test_held_button_fires_once(node):
@@ -105,45 +105,44 @@ def test_held_button_fires_once(node):
 def test_failure_press_overrides_with_negative_reward(node):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     node._on_teleop_events(_joy(failure=1), EVENTS_SPEC)
-    assert node._current_reward == node.get_parameter("human_reward_negative").value
-    assert node._human_reward_override is True
+    assert node._episode.reward == node.get_parameter("human_reward_negative").value
+    assert node._episode.labeled is True
 
 
 def test_intervention_edges_toggle_mux(node):
-    assert node._control_source == "policy"
+    assert node._episode.control == "policy"
     node._on_teleop_events(_joy(intervention=1), EVENTS_SPEC)
-    assert node._control_source == "teleop"
+    assert node._episode.control == "teleop"
     node._on_teleop_events(_joy(intervention=1), EVENTS_SPEC)  # held: no change
-    assert node._control_source == "teleop"
+    assert node._episode.control == "teleop"
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # release edge
-    assert node._control_source == "policy"
+    assert node._episode.control == "policy"
 
 
 def test_service_intervention_not_fought_by_unpressed_joystick(node):
     # set_intervention(True) with the joystick button unpressed: subsequent
     # Joy messages (no edge) must not force the mux back to policy.
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # establish unpressed state
-    with node._mux_lock:
-        node._control_source = "teleop"  # as set by the service
+    node._episode.set_control("teleop")  # as set by the service
     node._on_teleop_events(_joy(), EVENTS_SPEC)
     node._on_teleop_events(_joy(), EVENTS_SPEC)
-    assert node._control_source == "teleop"
+    assert node._episode.control == "teleop"
 
 
 def test_end_success_stops_episode_with_positive_reward(node):
     node._stop_event = threading.Event()  # the running episode's claim-time event
     node._on_teleop_events(_joy(end_success=1), EVENTS_SPEC)
     assert node._stop_event.is_set()
-    assert node._human_reward_override is True
-    assert node._current_reward == node.get_parameter("human_reward_positive").value
+    assert node._episode.labeled is True
+    assert node._episode.reward == node.get_parameter("human_reward_positive").value
 
 
 def test_end_failure_stops_episode_with_negative_reward(node):
     node._stop_event = threading.Event()  # the running episode's claim-time event
     node._on_teleop_events(_joy(end_failure=1), EVENTS_SPEC)
     assert node._stop_event.is_set()
-    assert node._human_reward_override is True
-    assert node._current_reward == node.get_parameter("human_reward_negative").value
+    assert node._episode.labeled is True
+    assert node._episode.reward == node.get_parameter("human_reward_negative").value
 
 
 def test_end_failure_reward_distinct_from_neutral_baseline(node):
@@ -282,7 +281,7 @@ def test_feedback_loop_reports_its_own_timeout(node):
 
 
 def test_episode_starts_unlabeled(node):
-    assert node._episode_outcome == OUTCOME_UNLABELED
+    assert node._episode.outcome == OUTCOME_UNLABELED
 
 
 @pytest.mark.parametrize(
@@ -297,29 +296,29 @@ def test_episode_starts_unlabeled(node):
 def test_buttons_label_the_episode(node, joy_kwargs, expected):
     node._stop_event = threading.Event()  # the running episode's claim-time event
     node._on_teleop_events(_joy(**joy_kwargs), EVENTS_SPEC)
-    assert node._episode_outcome == expected
+    assert node._episode.outcome == expected
 
 
 def test_reward_override_service_labels_like_the_button(node):
     node._on_set_reward_override(SimpleNamespace(data=False), SimpleNamespace())
-    assert node._episode_outcome == OUTCOME_FAILURE
+    assert node._episode.outcome == OUTCOME_FAILURE
     node._on_set_reward_override(SimpleNamespace(data=True), SimpleNamespace())
-    assert node._episode_outcome == OUTCOME_SUCCESS
+    assert node._episode.outcome == OUTCOME_SUCCESS
 
 
 def test_clearing_the_override_retracts_the_label(node):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
-    assert node._episode_outcome == OUTCOME_SUCCESS
+    assert node._episode.outcome == OUTCOME_SUCCESS
     node._on_clear_reward_override(None, SimpleNamespace())
     # Not "failure" -- retracting a claim is not making the opposite one.
-    assert node._episode_outcome == OUTCOME_UNLABELED
+    assert node._episode.outcome == OUTCOME_UNLABELED
 
 
 def test_end_episode_service_labels_and_stops(node):
     _claimed(node)
     resp = node._on_end_episode(SimpleNamespace(data=False), SimpleNamespace())
     assert resp.success is True
-    assert node._episode_outcome == OUTCOME_FAILURE
+    assert node._episode.outcome == OUTCOME_FAILURE
     # A labelled, deliberate end -- not a cancel.
     assert node.stop_reason == TERMINATION_STOPPED
 

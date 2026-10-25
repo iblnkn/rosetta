@@ -26,7 +26,7 @@ verdict is meaningful, and no result carries a ``success`` flag.
 import pytest
 
 from rosetta.robots.ros2 import node_utils
-from rosetta.robots.ros2.nodes import hil_manager_node as hil
+from rosetta.robots.ros2.nodes import hil_episode as hil
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 
 # What each action's server can produce, as the node code decides it.
