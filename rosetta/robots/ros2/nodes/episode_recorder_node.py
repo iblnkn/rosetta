@@ -50,12 +50,7 @@ from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import parse_contract
 from rosetta.contract.specs import iter_specs
-from rosetta.robots.ros2.bag_metadata import (
-    BAG_CONTRACT_KEY,
-    BAG_GOAL_ID_KEY,
-    BAG_PROMPT_KEY,
-    update_custom_data,
-)
+from rosetta.robots.ros2.bag_metadata import write_provenance
 from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
@@ -73,9 +68,6 @@ from rosetta_interfaces.srv import StartRecording
 
 # ---------- Constants ----------
 
-# Metadata file retry settings (internal implementation detail)
-METADATA_RETRY_COUNT = 10
-METADATA_RETRY_DELAY_SEC = 0.1
 # Safety ceiling on the widened QoS depth for per-episode latched
 # subscriptions, regardless of how many publishers are discovered
 # (see _latched_sub_depth).
@@ -800,8 +792,13 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             self._close_writer()
             if writer_opened:
                 try:
-                    self._write_metadata(bag_dir, prompt, self._contract_text, self._goal_id_str(goal_handle))
-                except RuntimeError as e:
+                    write_provenance(
+                        bag_dir,
+                        prompt=prompt,
+                        contract_text=self._contract_text,
+                        goal_id=self._goal_id_str(goal_handle),
+                    )
+                except Exception as e:
                     # A partial bag with provenance is still a real error, but
                     # never mask an earlier one.
                     self.get_logger().error(f"Metadata error: {e}")
@@ -955,54 +952,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         if goal_handle is None:
             return ""
         return str(uuid.UUID(bytes=bytes(goal_handle.goal_id.uuid)))
-
-    def _write_metadata(self, bag_dir: Path, prompt: str, contract_text: str = "", goal_id: str = "") -> None:
-        """Write prompt, contract, and goal provenance into metadata.yaml custom_data.
-
-        Args:
-            bag_dir: The closed bag's directory holding metadata.yaml.
-            prompt: Task prompt to store, or empty to skip.
-            contract_text: Full contract YAML to store, or empty to skip.
-            goal_id: UUID of the goal that produced the bag, or empty to skip
-                (a service-started recording has no goal).
-
-        Raises:
-            RuntimeError: metadata.yaml could not be written after retries.
-                This fails fast so the prompt or contract is never silently
-                lost.
-
-        """
-        entries: dict[str, str] = {}
-        if prompt:
-            entries[BAG_PROMPT_KEY] = prompt
-        if contract_text:
-            entries[BAG_CONTRACT_KEY] = contract_text
-        if goal_id:
-            entries[BAG_GOAL_ID_KEY] = goal_id
-        if not entries:
-            return
-
-        # Retry loop: rosbag2 writes metadata.yaml asynchronously at bag
-        # close, so the file may not exist yet on the first attempts. The
-        # read-modify-write itself lives in bag_metadata (the porter reads
-        # the same shape back).
-        meta_path = bag_dir / "metadata.yaml"
-        last_error: Exception | None = None
-
-        for attempt in range(METADATA_RETRY_COUNT):
-            try:
-                update_custom_data(meta_path, entries)
-                self.get_logger().debug(f"Wrote metadata on attempt {attempt + 1}")
-                return
-            except Exception as e:
-                last_error = e
-                self.get_logger().debug(f"Metadata write attempt {attempt + 1} failed: {e}")
-                time.sleep(METADATA_RETRY_DELAY_SEC)
-
-        # Fail fast so the prompt and contract are never silently lost.
-        raise RuntimeError(
-            f"Failed to write metadata to {meta_path} after {METADATA_RETRY_COUNT} attempts. Last error: {last_error}"
-        )
 
 
 def main(args=None):

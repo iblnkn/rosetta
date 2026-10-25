@@ -67,9 +67,8 @@ def read_custom_field(meta: dict[str, Any], key: str) -> str:
 def update_custom_data(meta_path: Path, entries: dict[str, str]) -> None:
     """Read-modify-write ``entries`` into an existing metadata.yaml's custom_data.
 
-    Raises on a missing or unreadable file. rosbag2 writes metadata.yaml
-    asynchronously at bag close, so the file may not exist on early attempts.
-    The retry policy for that race belongs to the caller.
+    Raises on a missing or unreadable file. rosbag2 writes metadata.yaml when
+    the writer closes, so call this only on a closed bag.
     """
     with meta_path.open("r") as f:
         meta = yaml.safe_load(f) or {}
@@ -80,3 +79,17 @@ def update_custom_data(meta_path: Path, entries: dict[str, str]) -> None:
     custom.update(entries)
     with meta_path.open("w") as f:
         yaml.safe_dump(meta, f, sort_keys=False)
+
+
+def write_provenance(bag_dir: Path, *, prompt: str = "", contract_text: str = "", goal_id: str = "") -> None:
+    """Store a closed bag's prompt, contract text, and goal id in its custom_data.
+
+    Empty values are skipped, and with nothing to store the file is not touched.
+    """
+    entries = {
+        key: value
+        for key, value in ((BAG_PROMPT_KEY, prompt), (BAG_CONTRACT_KEY, contract_text), (BAG_GOAL_ID_KEY, goal_id))
+        if value
+    }
+    if entries:
+        update_custom_data(Path(bag_dir) / "metadata.yaml", entries)

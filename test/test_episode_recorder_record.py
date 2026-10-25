@@ -33,8 +33,10 @@ a timeout still reports as an error rather than a clean finish.
 import threading
 from types import SimpleNamespace
 
+import yaml
 from std_srvs.srv import Trigger
 
+from rosetta.robots.ros2.bag_metadata import BAG_CUSTOM_DATA_KEY, BAG_GOAL_ID_KEY, BAG_METADATA_KEY
 from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_CANCELLED,
@@ -109,7 +111,7 @@ class FakeRecorder:
     # broken conversion would silently ship bags with no provenance.
     _goal_id_str = staticmethod(EpisodeRecorderNode._goal_id_str)
 
-    def __init__(self, tmp_path, *, feedback_rate=50.0, max_duration=0.0, open_error=None, metadata_error=None):
+    def __init__(self, tmp_path, *, feedback_rate=50.0, max_duration=0.0, open_error=None, metadata_error=False):
         self._busy = True  # claim held, as _try_claim_work leaves it at accept time
         self._work_gate = threading.Lock()
         self._active_goal = None
@@ -133,8 +135,6 @@ class FakeRecorder:
         self._open_error = open_error
         self._metadata_error = metadata_error
         self.close_calls = 0
-        self.metadata_calls = 0
-        self.metadata_goal_id = None
 
     def get_logger(self):
         return _FakeLogger()
@@ -152,13 +152,15 @@ class FakeRecorder:
         self._messages_written = 7  # stand-in for messages written during the episode
 
     def _close_writer(self):
+        # The real writer writes metadata.yaml on close; metadata_error
+        # simulates a bag whose metadata.yaml is missing.
         self.close_calls += 1
+        if self._bag_dir.exists() and not self._metadata_error:
+            (self._bag_dir / "metadata.yaml").write_text(yaml.safe_dump({BAG_METADATA_KEY: {}}))
 
-    def _write_metadata(self, bag_dir, prompt, contract_text, goal_id=""):
-        self.metadata_calls += 1
-        self.metadata_goal_id = goal_id
-        if self._metadata_error is not None:
-            raise self._metadata_error
+    def custom_data(self) -> dict:
+        meta = yaml.safe_load((self._bag_dir / "metadata.yaml").read_text())
+        return meta[BAG_METADATA_KEY].get(BAG_CUSTOM_DATA_KEY, {})
 
     def _log_topic_summary(self, bag_dir, discovered_topics, elapsed):
         pass
@@ -187,9 +189,8 @@ def test_clean_stop_succeeds_and_reconciles(tmp_path):
     # message carries only what no other field does. A clean end has nothing to
     # add, so it stays empty rather than restating messages_written.
     assert result.message == ""
-    assert fake.metadata_calls == 1
     # Provenance: the bag names the goal that produced it, in canonical hex.
-    assert fake.metadata_goal_id == "00010203-0405-0607-0809-0a0b0c0d0e0f"
+    assert fake.custom_data()[BAG_GOAL_ID_KEY] == "00010203-0405-0607-0809-0a0b0c0d0e0f"
     assert fake._last_bag_dir == fake._bag_dir
     _assert_reconciled(fake)
 
@@ -202,7 +203,7 @@ def test_service_start_has_no_goal_transitions(tmp_path):
     assert result.termination_reason == TERMINATION_STOPPED
     assert result.messages_written == 7
     # No goal, so no goal id to record -- empty, never a fabricated one.
-    assert fake.metadata_goal_id == ""
+    assert BAG_GOAL_ID_KEY not in fake.custom_data()
     _assert_reconciled(fake)
 
 
@@ -232,13 +233,13 @@ def test_open_writer_failure_aborts_without_metadata(tmp_path):
     assert handle.calls == ["abort"]
     assert result.termination_reason == TERMINATION_ERROR
     assert "disk full" in result.message
-    assert fake.metadata_calls == 0  # writer never opened: nothing to annotate
+    assert not fake._bag_dir.exists()  # writer never opened: nothing to annotate
     assert fake._last_bag_dir is None  # no bag dir on disk
     _assert_reconciled(fake)
 
 
 def test_metadata_failure_fails_result_but_keeps_counts_and_bag(tmp_path):
-    fake = FakeRecorder(tmp_path, metadata_error=RuntimeError("metadata.yaml never appeared"))
+    fake = FakeRecorder(tmp_path, metadata_error=True)
     handle = FakeGoalHandle()
     result = _record(fake, "p", handle)
     assert handle.calls == ["abort"]
