@@ -203,6 +203,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
         self._episode = EpisodeState()
         self._edges = EdgeDetector()
+        self._bad_selectors: set[str] = set()  # warned about once each
 
         self._mux_subs: list = []
         self._command_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
@@ -438,6 +439,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def teardown(self) -> None:
         """Destroy everything setup() created. Tolerates partial state."""
+        self._bad_selectors.clear()  # a reconfigure may load a fixed contract
         for sub in self._mux_subs:
             self.destroy_subscription(sub)
         self._mux_subs = []
@@ -549,7 +551,10 @@ class HilManagerNode(RosettaLifecycleNode):
             try:
                 levels[event_name] = bool(resolve_indexed(msg, selector))
             except (AttributeError, IndexError, ValueError) as e:
-                self.get_logger().warning(f"Selector '{selector}' failed: {e}")
+                # A bad selector is a contract error and fails on every message; say so once.
+                if selector not in self._bad_selectors:
+                    self._bad_selectors.add(selector)
+                    self.get_logger().warning(f"Selector '{selector}' failed: {e} (not repeated)")
         for event_name, pressed in self._edges.update(levels):
             if pressed:
                 self._on_event_press(event_name)

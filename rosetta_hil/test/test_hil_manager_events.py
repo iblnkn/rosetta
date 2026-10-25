@@ -92,6 +92,19 @@ def test_events_channel_need_not_be_joy(node, episode):
     assert node._episode.labeled is True
 
 
+@pytest.mark.parametrize(
+    ("select", "warnings"),
+    [({"success": "buttons.99"}, 1), ({"success": "buttons.98", "failure": "buttons.99"}, 2)],
+)
+def test_a_bad_selector_is_warned_about_once(node, monkeypatch, select, warnings):
+    logged = []
+    logger = SimpleNamespace(warning=logged.append, info=lambda *_: None)
+    monkeypatch.setattr(node, "get_logger", lambda: logger)
+    for _ in range(3):
+        node._on_teleop_events(_joy(), SimpleNamespace(select=select))
+    assert len(logged) == warnings
+
+
 def test_override_latches_after_release(node, episode):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # release
