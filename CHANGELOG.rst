@@ -4,6 +4,12 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Added ``~/status`` and ``~/result`` topics** to the recorder and the policy
+  runner: the action feedback and result fields, published for every run
+  however it was started, so clients that start work through a service (such
+  as Foxglove) can follow it and see how it ended. ``~/result`` is
+  transient-local. New toolkit helpers ``copy_fields``, ``STATUS_QOS`` and
+  ``RESULT_QOS`` in ``node_utils``.
 * **Fixed: teleop columns are named like the source they drive.** A teleop
   input or feedback aimed at one source of a multi-source entry now takes that
   source's namespace (e.g. ``arm.``), so leader-side names match the robot's

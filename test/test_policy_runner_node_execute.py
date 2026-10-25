@@ -37,13 +37,24 @@ from rosetta.robots.ros2.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,
     TERMINATION_TIMEOUT,
+    wait_until,
 )
 from rosetta.robots.ros2.nodes.policy_runner_node import PolicyRunnerNode
+
+
+class _FakePublisher:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, msg):
+        self.published.append(msg)
 
 
 @pytest.fixture
 def node(rclpy_ctx):
     n = PolicyRunnerNode()
+    # The topics setup() would create, without loading a contract.
+    n._status_pub, n._result_pub = _FakePublisher(), _FakePublisher()
     yield n
     n.destroy_node()
 
@@ -209,3 +220,36 @@ def test_execute_releases_busy_even_when_finish_goal_raises(node):
         node._execute(handle)
 
     assert not node.busy
+
+
+def test_service_start_publishes_its_result(node):
+    """A service-started run has no goal; ~/result is how a client learns how it ended."""
+    node._runner = _FakeRunner()
+    _claim(node)
+    result = node._run("pick up cube")
+    (published,) = node._result_pub.published
+    assert (published.termination_reason, published.message) == (result.termination_reason, result.message)
+
+
+def test_action_run_publishes_the_result_it_returns(node):
+    node._runner = _FakeRunner(run=lambda _task: RunnerResult(success=False, message="boom"))
+    _claim(node)
+    result = node._execute(_FakeHandle())
+    (published,) = node._result_pub.published
+    assert (published.termination_reason, published.message) == (result.termination_reason, "boom")
+
+
+def test_status_is_published_without_a_goal(node):
+    """The status thread runs for service starts too, publishing no action feedback."""
+    from rclpy.parameter import Parameter
+
+    node.set_parameters([Parameter("feedback_rate_hz", value=200.0)])
+
+    def run(_task):
+        assert wait_until(lambda: node._status_pub.published, timeout=2.0, poll=0.005)
+        return RunnerResult(success=True, message="done")
+
+    node._runner = _FakeRunner(run=run)
+    _claim(node)
+    node._run("pick up cube")
+    assert node._status_pub.published

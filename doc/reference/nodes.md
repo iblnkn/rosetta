@@ -165,6 +165,8 @@ contract `fps`.
 | `run_policy` | action `rosetta_interfaces/action/RunPolicy` |
 | `~/start_policy` | service `rosetta_interfaces/srv/StartPolicy` |
 | `~/cancel_policy` | service `std_srvs/srv/Trigger` |
+| `~/status` | topic `rosetta_interfaces/msg/RunPolicyStatus`. The feedback fields, at `feedback_rate_hz` while a run is in progress, however it started. |
+| `~/result` | topic `rosetta_interfaces/msg/RunPolicyResult`. The result fields, once per run. Transient-local, so a late subscriber gets the last one. |
 
 Under `rosetta_hil`'s `hil_launch.py` the runner sits in namespace
 `robot_policy`, so the action is `/robot_policy/run_policy`.

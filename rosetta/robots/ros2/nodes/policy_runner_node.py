@@ -58,9 +58,12 @@ from rosetta.contract.specs import (
 )
 from rosetta.policies import PolicyRunner, RunnerResult, load_policy_runner
 from rosetta.robots.ros2.node_utils import (
+    RESULT_QOS,
+    STATUS_QOS,
     TERMINATION_COMPLETED,
     TERMINATION_ERROR,
     TERMINATION_TIMEOUT,
+    copy_fields,
     finish_goal,
     positive_rate_descriptor,
     spin_lifecycle_node,
@@ -68,6 +71,7 @@ from rosetta.robots.ros2.node_utils import (
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 from rosetta_interfaces.action import RunPolicy
+from rosetta_interfaces.msg import RunPolicyResult, RunPolicyStatus
 from rosetta_interfaces.srv import StartPolicy
 
 
@@ -144,6 +148,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._cancel_client = None
         self._start_service = None
         self._cancel_service = None
+        self._status_pub = None
+        self._result_pub = None
         self._cbg = ReentrantCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
@@ -232,6 +238,9 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             self._on_cancel_service,
             callback_group=self._cbg,
         )
+        # Feedback and result for every run, including service starts.
+        self._status_pub = self.create_publisher(RunPolicyStatus, "~/status", STATUS_QOS)
+        self._result_pub = self.create_publisher(RunPolicyResult, "~/result", RESULT_QOS)
 
         self.get_logger().info(f"Configured: contract={contract_path}, framework={framework}")
 
@@ -247,6 +256,11 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             service = getattr(self, attr)
             if service is not None:
                 self.destroy_service(service)
+                setattr(self, attr, None)
+        for attr in ("_status_pub", "_result_pub"):
+            publisher = getattr(self, attr)
+            if publisher is not None:
+                self.destroy_publisher(publisher)
                 setattr(self, attr, None)
         self._teardown_runner()
         if self._bridge is not None:
@@ -319,9 +333,9 @@ class PolicyRunnerNode(RosettaLifecycleNode):
     def _run(self, task: str, goal_handle=None, max_duration: float = 0.0) -> RunPolicy.Result:
         """The one run loop, shared by both start paths.
 
-        ``goal_handle=None`` marks a service start. That path skips feedback
-        publishing and the terminal goal transition; the run itself, the stop
-        handling, and the reason mapping are identical by construction.
+        ``goal_handle=None`` marks a service start. That path skips action
+        feedback (``~/status`` covers it) and the terminal goal transition; the
+        run itself, the stop handling, and the reason mapping are identical.
 
         Args:
             task: Task prompt the policy is conditioned on. Empty falls back to
@@ -342,14 +356,12 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
         with self.goal_work(goal_handle) as stop_event:
             feedback_stop = threading.Event()
-            feedback_thread = None
-            if goal_handle is not None:
-                feedback_thread = threading.Thread(
-                    target=self._feedback_loop,
-                    args=(goal_handle, feedback_stop),
-                    daemon=True,
-                )
-                feedback_thread.start()
+            feedback_thread = threading.Thread(
+                target=self._feedback_loop,
+                args=(goal_handle, feedback_stop),
+                daemon=True,
+            )
+            feedback_thread.start()
 
             # The run itself is one blocking call into the framework, so the
             # deadline is a timer rather than a loop check. Signalling names
@@ -383,26 +395,26 @@ class PolicyRunnerNode(RosettaLifecycleNode):
                 if deadline is not None:
                     deadline.cancel()
                 feedback_stop.set()
-                if feedback_thread is not None:
-                    feedback_thread.join(timeout=1.0)
+                feedback_thread.join(timeout=1.0)
 
+            self._result_pub.publish(copy_fields(result, RunPolicyResult()))
             if goal_handle is not None:
                 finish_goal(goal_handle, result)
             self.get_logger().info(f"Finished ({result.termination_reason}): {result.message}")
             return result
 
     def _feedback_loop(self, goal_handle, stop_event: threading.Event) -> None:
-        """Publish runner feedback at the configured rate."""
+        """Publish ``~/status`` at the configured rate, and action feedback when there is a goal."""
         interval = 1.0 / self.get_parameter("feedback_rate_hz").value
         while not stop_event.wait(interval):
-            if goal_handle.is_cancel_requested:
+            if goal_handle is not None and goal_handle.is_cancel_requested:
                 break
             try:
                 snap = self._runner.feedback()
-                feedback = RunPolicy.Feedback()
-                feedback.queue_depth = snap.queue_depth
-                feedback.published_actions = snap.published_actions
-                goal_handle.publish_feedback(feedback)
+                status = RunPolicyStatus(queue_depth=snap.queue_depth, published_actions=snap.published_actions)
+                self._status_pub.publish(status)
+                if goal_handle is not None:
+                    goal_handle.publish_feedback(copy_fields(status, RunPolicy.Feedback()))
             except Exception:
                 # A silent death of this daemon thread would end feedback
                 # while the goal runs on. Log loudly, then stop publishing.
