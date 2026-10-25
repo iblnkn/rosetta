@@ -80,26 +80,19 @@ from rosetta_interfaces.srv import StartHILEpisode
 
 
 class HilManagerNode(RosettaLifecycleNode):
-    """
-    ROS2 Lifecycle node that orchestrates HIL episodes.
+    """Lifecycle node that runs one HIL episode at a time behind ManageEpisode."""
 
-    Coordinates robot policy, reward classifier, episode recorder, and teleop
-    muxing through a single ManageEpisode action interface.
-    """
-
-    # Longer than the base default: episode teardown cancels up to three
-    # child goals. 10 s covers children that answer promptly; a child that
-    # eats its full cancel+result timeouts (~45 s worst case across all
-    # three) is already logged per-child and deliberately NOT waited for —
-    # deactivate warns and proceeds to the safety action, the episode thread
-    # keeps winding the children down, and cleanup stays refused until
-    # _busy releases.
+    # Longer than the base default because episode teardown cancels up to
+    # three child goals. 10 s covers children that answer promptly. A child
+    # that uses its full cancel and result timeouts (about 45 s across all
+    # three) is logged and not waited for: deactivate warns and runs the
+    # safety action, the episode thread keeps winding the children down, and
+    # cleanup is refused until _busy releases.
     STOP_WORK_TIMEOUT_SEC = 10.0
 
     def __init__(self, **kwargs):
         super().__init__("hil_manager", **kwargs)
 
-        # -------------------- Parameters --------------------
         self.declare_parameter(
             "contract_path",
             "",
@@ -197,24 +190,19 @@ class HilManagerNode(RosettaLifecycleNode):
             ),
         )
 
-        # -------------------- State --------------------
-        # One-episode-at-a-time comes from the base work gate (busy guard +
-        # per-claim stop event), claimed in on_goal / _on_start_episode /
-        # _start_episode_from_button.
+        # One episode at a time is enforced by the base work gate, claimed in
+        # on_goal, _on_start_episode and _start_episode_from_button.
         self._contract = None
 
-        # Action clients
         self._policy_client: ActionClient | None = None
         self._reward_client: ActionClient | None = None
         self._recorder_client: ActionClient | None = None
 
-        # Action server
         self._action_server: ActionServer | None = None
 
         self._episode = EpisodeState()
         self._edges = EdgeDetector()
 
-        # Subscriptions and publishers for muxing
         self._mux_subs: list = []
         self._command_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
         self._reward_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
@@ -228,7 +216,7 @@ class HilManagerNode(RosettaLifecycleNode):
         self._reward_override_service = None
         self._clear_reward_service = None
 
-        # Active episode goal handles for child actions
+        # Child goal handles for the running episode.
         self._policy_goal_handle = None
         self._reward_goal_handle = None
         self._recorder_goal_handle = None
@@ -244,10 +232,6 @@ class HilManagerNode(RosettaLifecycleNode):
         self._events_cbg = MutuallyExclusiveCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
-
-    # ====================================================================
-    # Lifecycle callbacks
-    # ====================================================================
 
     def setup(self) -> None:
         """Load contract, create action clients, subscriptions, publishers, and action server.
@@ -265,7 +249,6 @@ class HilManagerNode(RosettaLifecycleNode):
         policy_remap_prefix = self.get_parameter("policy_remap_prefix").value
         reward_remap_prefix = self.get_parameter("reward_remap_prefix").value
 
-        # --- Action clients ---
         policy_action = self.get_parameter("policy_action_name").value
         self._policy_client = ActionClient(self, RunPolicy, policy_action, callback_group=self._action_cbg)
 
@@ -276,7 +259,7 @@ class HilManagerNode(RosettaLifecycleNode):
             reward_action = self.get_parameter("reward_classifier_action_name").value
             self._reward_client = ActionClient(self, RunPolicy, reward_action, callback_group=self._action_cbg)
 
-        # --- Mux: subscribe to remapped policy output, publish to real command topic ---
+        # Policy mux: remapped policy output -> real command topic.
         for entry in self._contract.actions:
             for src in entry.sources:
                 original_topic = src.channel.topic
@@ -284,11 +267,9 @@ class HilManagerNode(RosettaLifecycleNode):
                 msg_cls = get_message(src.channel.type)
                 qos = qos_profile_from_dict(src.channel.qos)
 
-                # Publisher to the real command topic
                 pub = self.create_publisher(msg_cls, original_topic, qos)
                 self._command_publishers[original_topic] = (msg_cls, pub)
 
-                # Subscribe to the remapped policy output
                 sub = self.create_subscription(
                     msg_cls,
                     remapped_topic,
@@ -299,12 +280,7 @@ class HilManagerNode(RosettaLifecycleNode):
                 self._mux_subs.append(sub)
                 self.get_logger().info(f"Action mux: {remapped_topic} -> {original_topic}")
 
-        # --- Mux: subscribe to teleop input, decode+encode+publish onto each
-        # entry's target action topic. Teleop input's select/apply may differ
-        # from the action's (a different leader topic, field layout, or
-        # units), so a raw republish would be wrong whenever they do; going
-        # through the same decode(teleop) -> encode(action) machinery as
-        # everything else in the contract is correct regardless. ---
+        # Teleop mux: teleop input -> its target action topic (see _on_teleop_input).
         if self._contract.teleop and self._contract.teleop.input:
             action_specs_by_topic = {s.source.channel.topic: s for s in iter_action_specs(self._contract)}
             teleop_input_pairs = zip(self._contract.teleop.input, iter_teleop_input_specs(self._contract), strict=True)
@@ -324,10 +300,8 @@ class HilManagerNode(RosettaLifecycleNode):
                 self._mux_subs.append(sub)
                 self.get_logger().info(f"Teleop input: {teleop_spec.source.channel.topic} -> {tis.target}")
 
-        # --- Teleop feedback: subscribe to each entry's origin observation
-        # topic, decode+encode+publish to the human device. Runs regardless
-        # of mux state (policy or teleop) -- it's informational for whoever
-        # is holding the device, not a control input. ---
+        # Teleop feedback: origin observation -> human device. Runs whatever
+        # the mux state, since it informs whoever holds the device.
         if self._contract.teleop and self._contract.teleop.feedback:
             observation_specs_by_topic = {s.source.channel.topic: s for s in iter_observation_specs(self._contract)}
             for tfs, feedback_spec in zip(
@@ -353,14 +327,15 @@ class HilManagerNode(RosettaLifecycleNode):
                 self._mux_subs.append(sub)
                 self.get_logger().info(f"Teleop feedback: {tfs.origin} -> {feedback_spec.source.channel.topic}")
 
-        # --- Reward publishers (always created for human reward buttons) ---
+        # Reward publishers, created even without a classifier so human
+        # reward overrides have somewhere to go.
         reward_channels = [src.channel for entry in self._contract.rewards for src in entry.sources]
         for ch in reward_channels:
             pub = self.create_publisher(get_message(ch.type), ch.topic, qos_profile_from_dict(ch.qos))
             self._reward_publishers[ch.topic] = (get_message(ch.type), pub)
             self.get_logger().info(f"Reward publisher: {ch.topic}")
 
-        # --- Mux: subscribe to remapped reward classifier output ---
+        # Reward mux: remapped classifier output -> real reward topic.
         if enable_reward:
             for ch in reward_channels:
                 remapped_topic = reward_remap_prefix + ch.topic
@@ -374,7 +349,6 @@ class HilManagerNode(RosettaLifecycleNode):
                 self._mux_subs.append(sub)
                 self.get_logger().info(f"Reward mux: {remapped_topic} -> {ch.topic}")
 
-        # --- Subscribe to teleop events ---
         if self._contract.teleop and self._contract.teleop.events:
             events_spec = self._contract.teleop.events
             msg_cls = get_message(events_spec.channel.type)
@@ -389,25 +363,21 @@ class HilManagerNode(RosettaLifecycleNode):
             self._mux_subs.append(sub)
             self.get_logger().info(f"Teleop events: {events_spec.channel.topic}")
 
-        # --- HIL intervention publisher ---
-        # A physical leader arm that wants to torque-track the command topic
-        # (so101_ros2_node's hil_teacher mode) subscribes to this directly
-        # instead of hil_manager calling out to an arm-specific service --
-        # keeps this node hardware-agnostic.
+        # A leader arm that torque-tracks the command topic (so101_ros2_node's
+        # hil_teacher mode) subscribes to this, so this node needs no
+        # arm-specific service call.
         self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
 
-        # --- Service wrapper (for callers that don't support actions) ---
-        # Node-private (~/) names, matching the episode recorder's convention.
+        # Services for callers that cannot use actions. Node-private (~/)
+        # names, matching the episode recorder.
         self._episode_service = self.create_service(
             StartHILEpisode,
             "~/start_episode",
             self._on_start_episode,
             callback_group=self._action_cbg,
         )
-        # Two ways to end an episode, mirroring the two the teleop device has.
-        # ~/end_episode is the labelled normal end (the end_success/end_failure
+        # ~/end_episode is the labelled end (the end_success/end_failure
         # buttons); ~/cancel_episode abandons the take (an action cancel).
-        # They were once one ambiguous ~/stop_episode that could not say which.
         self._end_service = self.create_service(
             SetBool,
             "~/end_episode",
@@ -439,7 +409,6 @@ class HilManagerNode(RosettaLifecycleNode):
             callback_group=self._action_cbg,
         )
 
-        # --- Action server ---
         self._action_server = ActionServer(
             self,
             ManageEpisode,
@@ -506,10 +475,6 @@ class HilManagerNode(RosettaLifecycleNode):
 
         self._contract = None
 
-    # ====================================================================
-    # Mux callbacks
-    # ====================================================================
-
     def _on_policy_output(self, msg, original_topic: str) -> None:
         """Forward policy output to command topic when in policy mode."""
         if self._episode.control != Control.POLICY:
@@ -521,14 +486,11 @@ class HilManagerNode(RosettaLifecycleNode):
         pub.publish(msg)
 
     def _on_teleop_input(self, msg, teleop_spec, action_spec, target_topic: str) -> None:
-        """Decode a teleop input message and republish it as the executed action.
+        """Republish a teleop input message as the target action while teleop has control.
 
-        decode(teleop_spec) -> encode(action_spec) mirrors the build/serve
-        pipeline used everywhere else in the contract: teleop input's
-        select/apply may differ from the target action's (a different leader
-        topic, field layout, or units), so a raw republish would be wrong
-        whenever they do. Going through the same decode/encode machinery as
-        every other spec is correct regardless of whether they happen to match.
+        Decodes with the teleop spec and encodes with the action spec rather
+        than republishing raw, because their select/apply can differ (topic,
+        field layout, units).
         """
         if self._episode.control != Control.TELEOP:
             return
@@ -564,48 +526,20 @@ class HilManagerNode(RosettaLifecycleNode):
         pub.publish(msg)
 
     def _on_teleop_events(self, msg, events_spec) -> None:
-        """
-        Handle teleop event buttons (intervention, stop, reward override).
+        """Dispatch press and release edges of the teleop event buttons.
 
-        Six independent signals, matched to what the contract's `select` maps
-        them to (they need not be on distinct physical buttons, but usually
-        should be so each can fire independently):
-          is_intervention    - hold for teleop control (edge-triggered mux)
-          start_episode      - start a new episode, using default_prompt as the
-                                task description (a button carries no text
-                                input). No-op if one is already running.
-          success / failure  - label the reward override, episode keeps
-                                running (latched: stays in effect until the
-                                other button, the clear_reward_override
-                                service, or the next episode's state reset --
-                                one press marks every subsequent frame until
-                                you say otherwise, not just while held)
-          end_success        - end the episode now, outcome = success
-          end_failure        - end the episode now, outcome = failure
-                                (a distinct sentinel from the neutral 0.0 an
-                                unlabeled end leaves behind -- see
-                                human_reward_negative -- so a real failure is
-                                filterable from "nobody labeled this one")
+        Events, as named in the contract's ``select``:
+          is_intervention    teleop has control while held
+          start_episode      start an episode with default_prompt; ignored if
+                             one is running
+          success / failure  label the episode without ending it; the label
+                             holds until the other button,
+                             ~/clear_reward_override, or the next episode
+          end_success        end the episode, outcome success
+          end_failure        end the episode, outcome failure
 
-        Every manual stop goes through end_success/end_failure -- there is no
-        "just end, no label" option. An episode ended for an unrelated reason
-        (robot fault, cutting a test short) still gets a reward value; ignore
-        it at train time rather than trying to represent "no claim made".
-
-        Nothing here ever touches the recorded bag file -- episodes are never
-        deleted by a button. A bad take is filtered later from the recorded
-        reward stream, not discarded at record time.
-
-        All handling is EDGE-triggered on press/release transitions. Every
-        Joy message reports every button's level, so level-triggered handling
-        made unpressed buttons act continuously: an unpressed `failure` button
-        cleared the override that `success` had just set (the override never
-        stuck), and an unpressed `is_intervention` forced the mux back to
-        policy on every message, fighting the set_intervention service.
-
-        A success/failure RELEASE is a no-op: the override latches until the
-        other button, the clear_reward_override service, or the next
-        episode's state reset.
+        Edge-triggered because each message reports every button's level, and
+        acting on levels would let unpressed buttons undo pressed ones.
         """
         levels = {}
         for event_name, selector in events_spec.select.items():
@@ -635,9 +569,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
         elif event_name in ("end_success", "end_failure"):
             reward_val = self._label_episode(event_name == "end_success")
-            # A deliberate, labelled end -- not a cancel. The episode reached
-            # the end the human intended, so the goal SUCCEEDS and the verdict
-            # rides in `outcome`.
+            # A labelled end, not a cancel: the goal succeeds and the verdict
+            # goes in `outcome`.
             self.signal_stop(TERMINATION_STOPPED)
             self._publish_human_reward(reward_val)
             self.get_logger().info(f"Episode ending, reward={reward_val} ({event_name})")
@@ -647,9 +580,7 @@ class HilManagerNode(RosettaLifecycleNode):
         if event_name == "is_intervention":
             self._episode.set_control(Control.POLICY)
             self.get_logger().info("Mux: teleop -> policy (intervention released)")
-        # success/failure releases latch (see _on_teleop_events docstring);
-        # end_success/end_failure are one-shot flags consumed by the
-        # feedback loop; their release is a no-op.
+        # Other events act on press only.
 
     def _label_episode(self, success: bool) -> float:
         """Latch the human's verdict on this episode and return its reward value.
@@ -677,20 +608,17 @@ class HilManagerNode(RosettaLifecycleNode):
             pub.publish(msg)
 
     def _start_episode_from_button(self) -> None:
-        """Start a new episode from the start_episode teleop event.
+        """Start an episode from the start_episode button.
 
-        Mirrors _on_start_episode (the StartHILEpisode service path):
-        same work-gate claim, same background thread via _run_episode_detached.
-        There's no caller to report accept/reject back to, so a failed claim
-        just logs and no-ops -- a button press is fire-and-forget.
+        Same claim and thread as the ~/start_episode service. With no caller
+        to answer, a failed claim only logs.
         """
         reason = self.try_claim_work()
         if reason is not None:
             self.get_logger().warning(f"Episode button ignored: {reason}")
             return
 
-        # Empty prompt: a button carries no text input, and _run_episode
-        # resolves it from default_prompt like every other empty-prompt path.
+        # Empty prompt: _run_episode falls back to default_prompt.
         threading.Thread(
             target=self._run_episode_detached,
             args=("", 0.0, 0.0),
@@ -698,10 +626,7 @@ class HilManagerNode(RosettaLifecycleNode):
         ).start()
         self.get_logger().info("Episode started via button")
 
-    # ====================================================================
-    # Action server callbacks
-    # ====================================================================
-    # Goal/cancel callbacks come from the base: claim-or-reject, goal-id-routed cancel.
+    # on_goal and on_cancel come from the base.
 
     def _execute(self, goal_handle) -> ManageEpisode.Result:
         """Execute a full HIL episode via the action interface."""
@@ -720,23 +645,19 @@ class HilManagerNode(RosettaLifecycleNode):
             result.bag_path = fields["bag_path"]
             result.messages_written = fields["messages_written"]
 
-            # finish_goal re-checks is_cancel_requested at terminal time, so a
-            # cancel that raced in after the feedback loop exited still ends
-            # CANCELED rather than SUCCEEDED (succeed() from CANCELING is
-            # rcl-legal but would report the wrong terminal state).
+            # finish_goal re-checks is_cancel_requested, so a cancel that
+            # arrives after the feedback loop exits still ends CANCELED, not
+            # SUCCEEDED (rcl allows succeed() from CANCELING).
             finish_goal(goal_handle, result)
             return result
 
     def _on_start_episode(
         self, request: StartHILEpisode.Request, response: StartHILEpisode.Response
     ) -> StartHILEpisode.Response:
-        """Service: start a HIL episode and return immediately.
+        """Service: start an episode on a background thread and return immediately.
 
-        The episode runs on a background thread — the old synchronous form
-        held an executor thread for the whole episode (unbounded with
-        max_duration_s=0), one concurrent call away from starving the
-        executor. Monitor via ManageEpisode feedback, end via end_episode or
-        cancel_episode; results land in the node log.
+        End it with ~/end_episode or ~/cancel_episode. The result goes to the
+        node log.
         """
         # The base claims the slot before returning, so a concurrent start
         # (service or action goal) is rejected; the episode thread releases it.
@@ -749,8 +670,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _run_episode_detached(self, prompt: str, max_duration: float, reward_threshold: float) -> None:
         """Thread target for the service/button path: run under the work guard, log the result."""
-        # goal_handle=None: no cancel routing; stop comes from the
-        # stop_episode service, an end_* button, or deactivate.
+        # No goal handle: stop comes from ~/end_episode, ~/cancel_episode, an
+        # end_* button, or deactivate.
         with self.goal_work(None) as stop_event:
             fields = self._run_episode(prompt, max_duration, reward_threshold, stop_event)
             self.get_logger().info(
@@ -762,11 +683,8 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_end_episode(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
         """Service: end the active episode with a verdict. True = success, False = failure.
 
-        The service equivalent of the end_success/end_failure buttons, for
-        clients that can call services but not actions. A labelled, deliberate
-        end: the goal SUCCEEDS with ``termination_reason="stopped"`` and the
-        verdict in ``outcome``. To abandon a take instead, use
-        ``~/cancel_episode``.
+        The end_success/end_failure buttons as a service. The goal succeeds
+        with ``termination_reason="stopped"`` and the verdict in ``outcome``.
         """
         if not self.busy:
             response.success = False
@@ -785,11 +703,9 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_cancel_episode(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Service: abandon the active episode.
 
-        Forwards to this server's own cancel service so the goal ends CANCELED,
-        exactly as a `ros2 action` cancel would. See
-        :meth:`RosettaLifecycleNode.cancel_current_work`. The episode's
-        ``outcome`` stays whatever was latched -- abandoning a take makes no
-        claim about whether the robot did the task.
+        Ends an action goal CANCELED, as a `ros2 action` cancel would (see
+        :meth:`RosettaLifecycleNode.cancel_current_work`). ``outcome`` keeps
+        whatever label was latched.
         """
         return self.handle_cancel_service(response, self._cancel_client, what="episode")
 
@@ -804,8 +720,7 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_set_reward_override(self, request: SetBool.Request, response: SetBool.Response) -> SetBool.Response:
         """Service: apply a human reward override. True = positive, False = negative.
 
-        Labels the episode without ending it -- the service equivalent of the
-        success/failure buttons.
+        Labels the episode without ending it, like the success/failure buttons.
         """
         reward_val = self._label_episode(request.data)
         self._publish_human_reward(reward_val)
@@ -831,21 +746,18 @@ class HilManagerNode(RosettaLifecycleNode):
         goal_handle=None,
     ) -> dict:
         """
-        Core HIL episode logic shared by the action and service interfaces.
+        Run one episode; shared by the action, service, and button paths.
 
-        ``stop_event`` is this episode's claim-time event, passed in by the
-        ``goal_work`` block that owns the claim. ``goal_handle`` is the
-        ManageEpisode server goal when driven via the action interface
-        (enables live feedback in the feedback loop); the service interface
-        passes None.
+        ``stop_event`` comes from the ``goal_work`` block that owns the claim.
+        ``goal_handle`` is the ManageEpisode goal on the action path (it
+        enables feedback) and None otherwise.
 
         Returns:
             The result field values, including ``termination_reason`` (how the
             episode ended) and ``outcome`` (whether the robot did the task).
 
         """
-        # Resolved here rather than at each entry point, so the action goal, the
-        # service call, and the start_episode button all fall back the same way.
+        # Resolved here so every entry point falls back the same way.
         prompt = prompt or self.get_parameter("default_prompt").value
         if max_duration <= 0.0:
             max_duration = self.get_parameter("default_max_duration_s").value
@@ -860,9 +772,7 @@ class HilManagerNode(RosettaLifecycleNode):
         enable_recording = self.get_parameter("enable_recording").value
         manage_policy = self.get_parameter("manage_policy_lifecycle").value
         fields = {
-            # Defaults to error: every early return below is a failure to start
-            # the episode, and defaulting this way means none of them can forget
-            # to say so.
+            # Every early return below is a failure to start, so default to error.
             "termination_reason": TERMINATION_ERROR,
             "outcome": OUTCOME_UNLABELED,
             "message": "",
@@ -891,9 +801,8 @@ class HilManagerNode(RosettaLifecycleNode):
                 policy_gh = self._send_child_goal(self._policy_client, RunPolicy.Goal(prompt=prompt), "Robot policy")
                 if policy_gh is None:
                     fields["message"] = "Failed to start robot policy"
-                    # wait_result: the recorder's goal slot must be free (and
-                    # its bag finalized) before a retry sends the next goal —
-                    # the failure path is exactly where a retry follows.
+                    # wait_result: a retry usually follows, and the recorder's
+                    # goal slot must be free (and its bag finalized) first.
                     self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
                     return fields
                 self._policy_goal_handle = policy_gh
@@ -916,11 +825,8 @@ class HilManagerNode(RosettaLifecycleNode):
             reason = self._feedback_loop(goal_handle, max_duration, reward_threshold, stop_event)
 
             self.get_logger().info(f"Episode ending: {reason}")
-            # wait_result: the child's active-goal slot must be free before
-            # the next episode sends a new goal. Skipped entirely when
-            # manage_policy_lifecycle=false -- _policy_goal_handle is None in
-            # that case anyway (never sent), but the explicit guard documents
-            # that this is intentional, not an oversight.
+            # wait_result: each child's goal slot must be free before the next
+            # episode sends a new goal.
             if manage_policy:
                 self._cancel_child(self._policy_goal_handle, "Robot policy", wait_result=True)
             if reward_gh is not None:
@@ -935,8 +841,7 @@ class HilManagerNode(RosettaLifecycleNode):
             fields["outcome"] = outcome
             fields["final_reward"] = final_reward
             # message stays empty: termination_reason and outcome already say
-            # what happened, and restating them here is one more string to keep
-            # in sync for no new information.
+            # what happened.
             if recorder_result is not None:
                 fields["bag_path"] = recorder_result.bag_path
                 fields["messages_written"] = recorder_result.messages_written
@@ -955,10 +860,6 @@ class HilManagerNode(RosettaLifecycleNode):
         self.get_logger().info(f"Episode finished: {fields['message']}")
         return fields
 
-    # ====================================================================
-    # Feedback loop
-    # ====================================================================
-
     def _feedback_loop(
         self,
         goal_handle,
@@ -969,12 +870,10 @@ class HilManagerNode(RosettaLifecycleNode):
         """
         Run the episode feedback loop until a termination condition is met.
 
-        ``stop_event`` is this episode's claim-time event — set by an action
-        cancel (routed here by the base, including the ones ~/cancel_episode
-        forwards), the end_episode service, an end_success/end_failure press,
-        or deactivate/shutdown. Waiting on it (rather than sleeping and polling)
-        makes a stop take effect immediately instead of up to one feedback
-        interval late.
+        ``stop_event`` is set by an action cancel (including one forwarded by
+        ~/cancel_episode), ~/end_episode, an end_* press, or deactivate.
+        Waiting on it instead of sleeping makes a stop take effect at once
+        rather than up to one interval late.
 
         Returns:
             Termination reason string.
@@ -1004,21 +903,14 @@ class HilManagerNode(RosettaLifecycleNode):
                 feedback.current_reward = reward
                 feedback.control_source = source
                 # The label so far. A reward-threshold end promotes an unlabeled
-                # episode to success, but that happens on the tick the loop
-                # returns, so it never shows up here.
+                # episode to success only after the loop returns, so that never
+                # shows here.
                 feedback.outcome = outcome
                 feedback.messages_written = self._recorder_messages_written
                 goal_handle.publish_feedback(feedback)
 
-        # The stop event fired. Whoever set it recorded why -- an action cancel,
-        # the end_episode service, an end_* button, or a deactivate. This used
-        # to guess from is_cancel_requested, which reported every deactivate as
-        # a human stop.
+        # Whoever set the stop event recorded why in stop_reason.
         return self.stop_reason or TERMINATION_STOPPED
-
-    # ====================================================================
-    # Child action helpers
-    # ====================================================================
 
     def _send_child_goal(self, client, goal, name: str, *, feedback_callback=None):
         """Send a goal to a child action server; return the handle or None."""
@@ -1034,12 +926,11 @@ class HilManagerNode(RosettaLifecycleNode):
         self._recorder_messages_written = fb.feedback.messages_written
 
     def _stop_recorder(self):
-        """Cancel the recorder and wait for its result (which includes bag_path).
+        """Cancel the recorder and wait for its result, which carries bag_path.
 
-        Every HIL-recorded bag therefore comes back with the recorder's
-        ``termination_reason`` set to ``"cancelled"``, whatever ended the
-        episode. That is accurate -- hil_manager did cancel it -- and the
-        meaningful reason lives on the ManageEpisode result instead.
+        So the recorder's ``termination_reason`` is always ``"cancelled"``,
+        whatever ended the episode. The real reason is on the ManageEpisode
+        result.
         """
         result = self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
         if result is not None:
@@ -1049,10 +940,9 @@ class HilManagerNode(RosettaLifecycleNode):
     def _cancel_all_children(self) -> None:
         """Best-effort cancel of all child action goals.
 
-        All three wait for the result: the children's goal slots must be
-        free before the next episode (a retry after this error path is the
-        common case), and the recorder result additionally marks its bag
-        finalized.
+        All three wait for the result: their goal slots must be free before
+        the retry that usually follows, and the recorder's result means its
+        bag is finalized.
         """
         self._cancel_child(self._policy_goal_handle, "Robot policy", wait_result=True)
         self._cancel_child(self._reward_goal_handle, "Reward classifier", wait_result=True)
