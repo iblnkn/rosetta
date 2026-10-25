@@ -123,7 +123,6 @@ class FakeRecorder:
         self._topic_msg_counts = {}
         self._writer_lock = threading.Lock()
         self._writer = None
-        self._discovered_topics = []
         self._topics = []
         self._contract_text = ""
         self._bag_lock = threading.Lock()
@@ -150,6 +149,7 @@ class FakeRecorder:
             raise self._open_error
         bag_dir.mkdir(parents=True)  # the real writer creates the directory
         self._messages_written = 7  # stand-in for messages written during the episode
+        return []
 
     def _close_writer(self):
         # The real writer writes metadata.yaml on close; metadata_error

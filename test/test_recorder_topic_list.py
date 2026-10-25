@@ -24,9 +24,9 @@ twice with the bag writer.
 import pytest
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
-from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
-
-_dedup = EpisodeRecorderNode._dedup_topics
+from rosetta.contract.schema import parse_contract
+from rosetta.robots.ros2.bag_topics import contract_topics
+from rosetta.robots.ros2.bag_topics import dedup_topics as _dedup
 
 
 def test_identical_duplicate_collapses_to_one():
@@ -68,3 +68,29 @@ def test_same_qos_dict_derived_profiles_dedup():
     a = ("/t", "sensor_msgs/msg/JointState", qos_a)
     b = ("/t", "sensor_msgs/msg/JointState", qos_b)
     assert len(_dedup([a, b])) == 1
+
+
+_CONTRACT = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+actions:
+  action:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+"""
+
+
+@pytest.mark.parametrize(
+    ("use_sim_time", "expected"),
+    [(False, ["/joint_states"]), (True, ["/joint_states", "/clock"])],
+)
+def test_contract_topics_dedups_and_adds_clock_under_sim_time(use_sim_time, expected):
+    topics = contract_topics(parse_contract(_CONTRACT, source="test"), use_sim_time=use_sim_time)
+    assert [t[0] for t in topics] == expected

@@ -36,42 +36,41 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import rosbag2_py
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.serialization import serialize_message
 from rosidl_runtime_py.utilities import get_message
 from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import parse_contract
-from rosetta.contract.specs import iter_specs
 from rosetta.robots.ros2.bag_metadata import write_provenance
+from rosetta.robots.ros2.bag_topics import (
+    Topic,
+    adapt_publisher_qos,
+    contract_topics,
+    image_transport_auto_skips,
+    latched_sub_depth,
+    qos_to_rosbag2,
+)
 from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
-    extract_qos_numeric_values,
     finish_goal,
     positive_rate_descriptor,
-    qos_to_rosbag2,
     spin_lifecycle_node,
 )
-from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.srv import StartRecording
 
 # ---------- Constants ----------
-
-# Safety ceiling on the widened QoS depth for per-episode latched
-# subscriptions, regardless of how many publishers are discovered
-# (see _latched_sub_depth).
-MAX_LATCHED_SUB_DEPTH = 64
 
 # Regex patterns for topics excluded from auto-recording by default.
 # Uses the same regex convention as ``ros2 bag record --exclude``.
@@ -79,89 +78,6 @@ _DEFAULT_BLACKLIST = (
     r"^/rosout$",
     r"^/parameter_events$",
 )
-
-# One stored stream per camera family, best-first: any compressed form beats
-# storing raw frames; raw ("") is the fallback when no re-encoding is
-# advertised.
-_IMAGE_STREAM_PREFERENCE = ("/compressed", "/zstd", "/theora", "/compressedDepth", "")
-
-
-def image_transport_auto_skips(
-    graph: dict[str, str],
-    recorded: set[str],
-    include: Callable[[str], bool] = lambda _t: False,
-    exclude: Callable[[str], bool] = lambda _t: False,
-) -> set[str]:
-    """Family members to skip so each camera stores exactly one stream.
-
-    image_transport publishers are lazy: every re-encoding (``compressed``/
-    ``zstd``/``theora``/``compressedDepth``) encodes only while subscribed, so
-    recording all of them makes the camera node encode each frame several ways
-    at once — enough load to halve its capture rate.
-
-    A family is a raw ``sensor_msgs/msg/Image`` topic plus whatever
-    re-encodings of it are advertised. Members that are contract-``recorded``
-    or match ``include`` are pinned: they record, and the rest of the family
-    is skipped. With nothing pinned, the best non-``exclude``d member by
-    :data:`_IMAGE_STREAM_PREFERENCE` wins — a fully excluded family records
-    nothing. Topics outside any family are not this policy's business.
-
-    Args:
-        graph: Topic name -> message type for every advertised topic.
-        recorded: Topics already recorded regardless of discovery (contract).
-        include: Predicate pinning topics the user explicitly whitelisted.
-        exclude: Predicate removing candidates (the user's blacklist).
-
-    Returns:
-        Set of topic names to exclude from auto-recording.
-
-    """
-    skips: set[str] = set()
-    for base, type_str in graph.items():
-        if type_str != "sensor_msgs/msg/Image":
-            continue
-        family = [base + s for s in _IMAGE_STREAM_PREFERENCE if base + s in graph]
-        keep = {t for t in family if t in recorded or include(t)}
-        if not keep:
-            keep = {next((t for t in family if not exclude(t)), None)} - {None}
-        skips.update(t for t in family if t not in keep)
-    return skips
-
-
-def adapt_publisher_qos(publishers_info, *, warn=None) -> QoSProfile:
-    """
-    Build a subscription QoS for a discovered topic, adapted across all its publishers.
-
-    Mirrors ``ros2 bag record``. Request RELIABLE only if every publisher
-    offers it, and TRANSIENT_LOCAL only if every publisher offers it.
-    Requesting either policy when one publisher does not offer it makes that
-    publisher's messages silently undeliverable. ``warn`` is a callable taking
-    a message string. It fires when publishers disagree, since the adapted
-    profile is then a compromise.
-
-    Args:
-        publishers_info: Publisher endpoint info from
-            ``get_publishers_info_by_topic``. Empty yields the default profile.
-        warn: Optional callable invoked once with a message when publishers
-            offer mixed QoS.
-
-    Returns:
-        A QoSProfile safe to subscribe with against every current publisher.
-
-    """
-    if not publishers_info:
-        return qos_profile_from_dict(None)
-    profiles = [p.qos_profile for p in publishers_info]
-    reliable = all(p.reliability == ReliabilityPolicy.RELIABLE for p in profiles)
-    latched = all(p.durability == DurabilityPolicy.TRANSIENT_LOCAL for p in profiles)
-    if warn is not None and len({(p.reliability, p.durability) for p in profiles}) > 1:
-        warn("publishers offer mixed QoS; subscribing adapted profile")
-    return QoSProfile(
-        history=HistoryPolicy.KEEP_LAST,
-        depth=max(10, *(p.depth for p in profiles)),
-        reliability=ReliabilityPolicy.RELIABLE if reliable else ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL if latched else DurabilityPolicy.VOLATILE,
-    )
 
 
 class EpisodeRecorderNode(RosettaLifecycleNode):
@@ -274,8 +190,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._contract_text: str = ""
         self._bag_base: Path | None = None
         self._storage_id: str | None = None
-        self._topics: list[tuple[str, str, QoSProfile]] = []  # (topic, type, qos)
-        self._discovered_topics: list[tuple[str, str, QoSProfile]] = []
+        self._topics: list[Topic] = []  # (topic, type, qos)
         self._exclude_regex: re.Pattern | None = None
         self._include_regex: re.Pattern | None = None
         self._subs: dict[str, Any] = {}  # persistent subs (non-latched contract topics)
@@ -337,7 +252,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._include_regex = re.compile("|".join(include_patterns)) if include_patterns else None
 
         # Build topic list from contract
-        self._topics = self._build_topic_list()
+        # use_sim_time is auto-declared on every rclpy node, so the read cannot fail.
+        self._topics = contract_topics(self._contract, use_sim_time=self.get_parameter("use_sim_time").value)
 
         # Persistent subscriptions for non-latched contract topics only
         # (callbacks no-op while no writer is open). Latched topics get
@@ -435,100 +351,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
     # -------------------- Topic and subscription management --------------------
 
-    def _build_topic_list(self) -> list[tuple[str, str, QoSProfile]]:
-        """
-        Extract topics from contract.
-
-        Includes:
-        - Observation and action topics (from iter_specs)
-        - Task topics
-        - Adjunct topics (recorded but not mapped to keys)
-
-        A topic referenced by several contract sections (e.g. one topic read as
-        both an observation and a reward) yields one entry. Duplicates once
-        created two live subscriptions that double-wrote every message and
-        registered the topic twice with the bag writer. Conflicting type or
-        qos declarations for one topic raise ValueError, which surfaces as a
-        failed on_configure.
-
-        Returns:
-            List of (topic, type_str, qos) tuples
-
-        """
-        topics: list[tuple[str, str, QoSProfile]] = []
-
-        for spec in iter_specs(self._contract):
-            qos = qos_profile_from_dict(spec.source.channel.qos)
-            topics.append((spec.source.channel.topic, spec.source.channel.type, qos))
-
-        # Task channels
-        for task in self._contract.tasks:
-            qos = qos_profile_from_dict(task.channel.qos)
-            topics.append((task.channel.topic, task.channel.type, qos))
-
-        # Adjunct channels (record-only, no key mapping)
-        for adj in self._contract.adjunct:
-            qos = qos_profile_from_dict(adj.qos)
-            topics.append((adj.topic, adj.type, qos))
-
-        # If the node runs with simulation time, record /clock so playback
-        # can drive sim time. use_sim_time is auto-declared on every rclpy
-        # node (TimeSource.attach_node), so the read cannot fail.
-        if bool(self.get_parameter("use_sim_time").value):
-            topics.append(("/clock", "rosgraph_msgs/msg/Clock", qos_profile_from_dict(None)))
-
-        return self._dedup_topics(topics)
-
-    @staticmethod
-    def _latched_sub_depth(configured_depth: int, publisher_count: int) -> int:
-        """QoS depth for a per-episode TRANSIENT_LOCAL subscription.
-
-        The contract's configured QoS depth is a wire/DDS matching hint
-        (conventionally 1). It is not the count of distinct publishers latched
-        on the topic. Several independent nodes can publish the same
-        TRANSIENT_LOCAL topic (e.g. robot_state_publisher plus a
-        sensor-calibration static_transform_publisher both on /tf_static),
-        each redelivering its own latched sample when the subscription is
-        created. A depth below the live publisher count lets one redelivered
-        sample evict another in the RMW queue before the executor drains it.
-        Verified against rmw_zenoh and cyclonedds.
-
-        Args:
-            configured_depth: Depth from the contract's QoS for the topic.
-            publisher_count: Live publisher count from ``count_publishers``.
-
-        Returns:
-            A depth at least ``publisher_count``, capped at
-            ``MAX_LATCHED_SUB_DEPTH``.
-
-        """
-        return min(max(configured_depth, publisher_count), MAX_LATCHED_SUB_DEPTH)
-
-    @staticmethod
-    def _dedup_topics(
-        topics: list[tuple[str, str, QoSProfile]],
-    ) -> list[tuple[str, str, QoSProfile]]:
-        """Collapse duplicate topic entries; reject conflicting declarations."""
-        deduped: dict[str, tuple[str, str, QoSProfile]] = {}
-        for entry in topics:
-            topic, type_str, qos = entry
-            prev = deduped.get(topic)
-            if prev is None:
-                deduped[topic] = entry
-                continue
-            if prev[1] != type_str:
-                raise ValueError(
-                    f"Topic '{topic}' appears in multiple contract sections "
-                    f"with different types ({prev[1]} vs {type_str})"
-                )
-            if extract_qos_numeric_values(prev[2]) != extract_qos_numeric_values(qos):
-                raise ValueError(
-                    f"Topic '{topic}' appears in multiple contract sections with conflicting qos; unify the entries"
-                )
-            # Identical duplicate: keep the first entry.
-        return list(deduped.values())
-
-    def _discover_topics(self) -> list[tuple[str, str, QoSProfile]]:
+    def _discover_topics(self) -> list[Topic]:
         """Discover non-contract topics on the ROS2 graph.
 
         Returns topics not already in self._topics and not matching the
@@ -541,7 +364,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         """
         known = {t[0] for t in self._topics}
-        discovered: list[tuple[str, str, QoSProfile]] = []
+        discovered: list[Topic] = []
 
         def included(t: str) -> bool:
             return bool(self._include_regex and self._include_regex.search(t))
@@ -741,6 +564,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         source = "action" if goal_handle is not None else "service"
         error: Exception | None = None
         writer_opened = False
+        discovered: list[Topic] = []
         # Set only when the loop ends on its own terms. A stop somebody else
         # asked for is recorded on the node instead (see the epilogue).
         loop_reason: str | None = None
@@ -758,7 +582,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 feedback_rate = float(self.get_parameter("feedback_rate_hz").value)
                 self.get_logger().info(f"Recording ({source}): {bag_dir}, max={max_duration}s")
 
-                self._open_writer(bag_dir)
+                discovered = self._open_writer(bag_dir)
                 writer_opened = True
 
                 feedback = RecordEpisode.Feedback() if goal_handle is not None else None
@@ -786,9 +610,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 error = e
 
             # Epilogue. One path for success, cancel, timeout, and error.
-            # Capture the discovered-topic list first, since _close_writer
-            # clears it.
-            discovered = list(self._discovered_topics)
             self._close_writer()
             if writer_opened:
                 try:
@@ -872,10 +693,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         sec, nsec = divmod(t_ns, 1_000_000_000)
         return self._bag_base / f"{sec:010d}_{nsec:09d}"
 
-    def _open_writer(self, bag_dir: Path) -> None:
-        """Discover topics, open the bag, register topics, then create per-episode subs."""
-        if self.get_parameter("record_all").value:
-            self._discovered_topics = self._discover_topics()
+    def _open_writer(self, bag_dir: Path) -> list[Topic]:
+        """Discover topics, open the bag, register topics, then create per-episode subs.
+
+        Returns the discovered (non-contract) topics being recorded.
+        """
+        discovered = self._discover_topics() if self.get_parameter("record_all").value else []
 
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
@@ -892,7 +715,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         # Register contract and discovered topics with the original declared
         # or discovered QoS. Never use the widened subscription QoS built
         # below. The offered profile recorded here is what playback re-offers.
-        all_topics = self._topics + self._discovered_topics
+        all_topics = self._topics + discovered
         try:
             for idx, (topic, type_str, qos) in enumerate(all_topics):
                 topic_info = rosbag2_py.TopicMetadata(
@@ -917,18 +740,19 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         #   publisher's latched sample to the fresh subscription, landing
         #   pre-episode data (e.g. /tf_static) in every bag. The subscription
         #   depth is widened so one publisher's redelivered sample can't
-        #   evict another's (see _latched_sub_depth).
-        for topic, type_str, qos in self._discovered_topics:
+        #   evict another's (see latched_sub_depth).
+        for topic, type_str, qos in discovered:
             self._episode_subs[topic] = self._create_sub(topic, type_str, qos)
         for topic, type_str, qos in self._topics:
             if qos.durability == DurabilityPolicy.TRANSIENT_LOCAL:
                 sub_qos = QoSProfile(
                     history=HistoryPolicy.KEEP_LAST,
-                    depth=self._latched_sub_depth(qos.depth, self.count_publishers(topic)),
+                    depth=latched_sub_depth(qos.depth, self.count_publishers(topic)),
                     reliability=qos.reliability,
                     durability=DurabilityPolicy.TRANSIENT_LOCAL,
                 )
                 self._episode_subs[topic] = self._create_sub(topic, type_str, sub_qos)
+        return discovered
 
     def _close_writer(self) -> None:
         """Close the writer and destroy per-episode subscriptions. Idempotent."""
@@ -940,7 +764,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         episode_subs, self._episode_subs = self._episode_subs, {}
         for sub in episode_subs.values():
             self.destroy_subscription(sub)
-        self._discovered_topics = []
 
     @staticmethod
     def _goal_id_str(goal_handle) -> str:

@@ -24,12 +24,8 @@ RMW queue before the executor drains it — verified against rmw_zenoh and
 cyclonedds. The depth must be widened to at least the live publisher count.
 """
 
-from rosetta.robots.ros2.nodes.episode_recorder_node import (
-    MAX_LATCHED_SUB_DEPTH,
-    EpisodeRecorderNode,
-)
-
-_depth = EpisodeRecorderNode._latched_sub_depth
+from rosetta.robots.ros2.bag_topics import MAX_LATCHED_SUB_DEPTH
+from rosetta.robots.ros2.bag_topics import latched_sub_depth as _depth
 
 
 def test_multiple_publishers_widen_beyond_configured_depth():

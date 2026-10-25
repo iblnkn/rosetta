@@ -20,8 +20,9 @@ module pulls in rclpy; the pure-Python siblings exist so ROS-less paths can
 avoid that — timeline production and message timestamp extraction live in
 rosetta.robots.ros2.timelines, dotted message field access in
 rosetta.robots.ros2.field_access, and ingest and the codecs use those without
-rclpy. Node-only helpers (finish_goal, QoS introspection, wait_until,
-spin_lifecycle_node) live in rosetta.robots.ros2.nodes.node_utils.
+rclpy. Node-only helpers (finish_goal, wait_until, spin_lifecycle_node) live
+in rosetta.robots.ros2.nodes.node_utils; the recorder's topic and bag QoS
+policy lives in rosetta.robots.ros2.bag_topics.
 """
 
 from __future__ import annotations

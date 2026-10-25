@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
-from rosetta.robots.ros2.nodes.episode_recorder_node import adapt_publisher_qos
+from rosetta.robots.ros2.bag_topics import adapt_publisher_qos
 
 
 def _pub(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE, depth=10):

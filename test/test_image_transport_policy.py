@@ -16,7 +16,7 @@
 
 import pytest
 
-from rosetta.robots.ros2.nodes.episode_recorder_node import image_transport_auto_skips
+from rosetta.robots.ros2.bag_topics import image_transport_auto_skips
 
 IMG = "sensor_msgs/msg/Image"
 CIMG = "sensor_msgs/msg/CompressedImage"

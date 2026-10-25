@@ -15,9 +15,9 @@
 """Helpers used only by the lifecycle nodes in rosetta.robots.ros2.nodes.
 
 Node-side concerns: the termination vocabulary and rcl-legal action termination
-(finish_goal), cancelling a node's own action goals (request_cancel_all), QoS
-introspection/conversion for bag topic metadata, polling waits (wait_until),
-and the shared node entry point (spin_lifecycle_node). QoS-dict parsing and
+(finish_goal), cancelling a node's own action goals (request_cancel_all),
+polling waits (wait_until), and the shared node entry point
+(spin_lifecycle_node). QoS-dict parsing and
 lifecycle-state helpers shared with the wider ros2 layer stay in
 rosetta.robots.ros2.rclpy_utils. Work-slot mutual exclusion lives on
 RosettaLifecycleNode itself (the ``busy`` property + work gate).
@@ -33,20 +33,7 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleNode
-from rclpy.qos import QoSProfile
 from rclpy.signals import SignalHandlerOptions
-from rosbag2_py._storage import (
-    Duration as Rosbag2Duration,
-)
-from rosbag2_py._storage import (
-    QoS as Rosbag2QoS,
-)
-from rosbag2_py._storage import (
-    rmw_qos_durability_policy_t,
-    rmw_qos_history_policy_t,
-    rmw_qos_liveliness_policy_t,
-    rmw_qos_reliability_policy_t,
-)
 
 from rosetta_interfaces.action import ManageEpisode, RunPolicy
 
@@ -181,67 +168,6 @@ def request_cancel_all(cancel_client, *, warn: Callable[[str], None] | None = No
         return False
     cancel_client.call_async(CancelGoal.Request())
     return True
-
-
-# =============================================================================
-# QoS introspection / conversion (bag topic metadata)
-# =============================================================================
-
-
-def extract_qos_numeric_values(q: QoSProfile) -> dict[str, int]:
-    """Flatten a QoSProfile's policy enums to their raw RMW integer codes.
-
-    rclpy exposes each policy as an enum whose ``.value`` is the underlying
-    RMW numeric constant. rosbag2's QoS setters want those ints, so read
-    them out here once.
-
-    Args:
-        q: Source rclpy QoS profile.
-
-    Returns:
-        Mapping with keys ``depth``, ``history``, ``reliability``,
-        ``durability``, ``liveliness``. Every value is an int RMW policy code.
-
-    """
-    return {
-        "depth": q.depth,
-        "history": q.history.value,
-        "reliability": q.reliability.value,
-        "durability": q.durability.value,
-        "liveliness": q.liveliness.value,
-    }
-
-
-# rosbag2_py._storage.Duration takes int32 seconds / uint32 nanoseconds.
-# "Infinite"/unset durations discovered from real publishers come back as
-# RMW_DURATION_INFINITE (int64 nanoseconds max), which overflows those
-# bounds, so clamp to the max representable sentinel.
-_MAX_DURATION_SEC = 2147483647
-_MAX_DURATION_NSEC = 4294967295
-
-
-def _rosbag2_duration(rclpy_duration) -> Rosbag2Duration:
-    ns = int(getattr(rclpy_duration, "nanoseconds", 0) or 0)
-    return Rosbag2Duration(
-        min(ns // 1_000_000_000, _MAX_DURATION_SEC),
-        min(ns % 1_000_000_000, _MAX_DURATION_NSEC),
-    )
-
-
-def qos_to_rosbag2(q: QoSProfile) -> Rosbag2QoS:
-    """Convert an rclpy QoSProfile to a rosbag2_py QoS for TopicMetadata.
-
-    The QoS setter methods require rmw_qos_*_policy_t enums, not raw ints.
-    """
-    vals = extract_qos_numeric_values(q)
-    bag_qos = Rosbag2QoS(vals["depth"])
-    bag_qos = bag_qos.history(rmw_qos_history_policy_t(vals["history"]))
-    bag_qos = bag_qos.reliability(rmw_qos_reliability_policy_t(vals["reliability"]))
-    bag_qos = bag_qos.durability(rmw_qos_durability_policy_t(vals["durability"]))
-    bag_qos = bag_qos.liveliness(rmw_qos_liveliness_policy_t(vals["liveliness"]))
-    bag_qos = bag_qos.deadline(_rosbag2_duration(q.deadline))
-    bag_qos = bag_qos.lifespan(_rosbag2_duration(q.lifespan))
-    return bag_qos.liveliness_lease_duration(_rosbag2_duration(q.liveliness_lease_duration))
 
 
 # =============================================================================
