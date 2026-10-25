@@ -24,9 +24,11 @@ import pytest
 from ament_index_python.packages import get_package_share_directory
 
 import lerobot_robot_rosetta.rosetta as adapter
-import rosetta.robots.ros2.offline.bag_frames  # noqa: F401  register decoders
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, _TickGate
+from rosetta.frames.codecs import discover_codecs
+
+discover_codecs()  # register the built-in codecs
 
 CONTRACTS = Path(get_package_share_directory("rosetta")) / "contracts"
 
