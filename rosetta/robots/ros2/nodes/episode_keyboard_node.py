@@ -45,7 +45,6 @@ Usage:
 from __future__ import annotations
 
 import os
-import select
 import sys
 import termios
 import time
@@ -113,13 +112,14 @@ class RawTerminal:
                 pass
             self._old_settings = None
 
-    def read_byte(self) -> int | None:
-        """Non-blocking read of one byte. Returns byte value or None."""
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.0)
-        if not rlist:
-            return None
-        data = sys.stdin.buffer.read(1)
-        return data[0] if data else None
+    def read_bytes(self) -> bytes:
+        """Read all pending input bytes; returns b"" if none.
+
+        Non-blocking because VMIN=0/VTIME=0. Reads the raw fd with os.read —
+        never sys.stdin.buffer, whose internal buffering strands bytes and
+        makes arrow-key escape sequences lag one keypress behind.
+        """
+        return os.read(sys.stdin.fileno(), 64)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -212,10 +212,10 @@ class EpisodeKeyboardNode(Node):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _poll_keyboard(self) -> None:
-        ch = self._term.read_byte()
-        if ch is None:
-            return
+        for ch in self._term.read_bytes():
+            self._process_byte(ch)
 
+    def _process_byte(self, ch: int) -> None:
         # Task edit mode intercepts all keystrokes
         if self._editing_task:
             self._handle_task_input(ch)
