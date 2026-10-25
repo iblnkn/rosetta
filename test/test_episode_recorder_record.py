@@ -33,6 +33,8 @@ a timeout still reports as an error rather than a clean finish.
 import threading
 from types import SimpleNamespace
 
+from std_srvs.srv import Trigger
+
 from rosetta.robots.ros2.nodes.episode_recorder_node import EpisodeRecorderNode
 from rosetta.robots.ros2.nodes.node_utils import (
     TERMINATION_CANCELLED,
@@ -122,6 +124,9 @@ class FakeRecorder:
         self._discovered_topics = []
         self._topics = []
         self._contract_text = ""
+        self._bag_lock = threading.Lock()
+        self._active_bag = None
+        self._discard_active = False
         self._last_bag_dir = None
         self._params = {"default_max_duration_s": max_duration, "feedback_rate_hz": feedback_rate}
         self._bag_dir = tmp_path / "ep"
@@ -160,6 +165,10 @@ class FakeRecorder:
 
 
 _record = EpisodeRecorderNode._record
+
+
+def _delete_last_bag(fake):
+    return EpisodeRecorderNode._on_delete_last_bag_service(fake, None, Trigger.Response())
 
 
 def _assert_reconciled(fake):
@@ -361,3 +370,39 @@ def test_stop_state_untouched_at_busy_release(tmp_path):
     assert fake._busy is False
     assert fake._stop_event is claimed_event
     assert fake._stop_reason == TERMINATION_CANCELLED  # read, never rewritten
+
+
+def test_delete_during_recording_discards_it_when_it_ends(tmp_path):
+    fake = FakeRecorder(tmp_path)
+    fake._stop_event.clear()
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    fake._last_bag_dir = previous
+    responses = []
+
+    def delete_then_stop():
+        responses.append(_delete_last_bag(fake))
+        fake._signal_stop(TERMINATION_CANCELLED)
+
+    _record(fake, "p", FakeGoalHandle(on_feedback=delete_then_stop))
+    assert responses[0].success is True
+    assert not fake._bag_dir.exists()
+    # The discarded bag was the last one; a second delete must not reach the older bag.
+    assert fake._last_bag_dir is None
+    assert previous.exists()
+    _assert_reconciled(fake)
+
+
+def test_delete_when_idle_removes_the_last_bag(tmp_path):
+    fake = FakeRecorder(tmp_path)
+    _record(fake, "p")
+    response = _delete_last_bag(fake)
+    assert response.success is True
+    assert not fake._bag_dir.exists()
+    assert fake._last_bag_dir is None
+
+
+def test_delete_with_no_bag_fails(tmp_path):
+    response = _delete_last_bag(FakeRecorder(tmp_path))
+    assert response.success is False
+    assert response.message == "No bag to delete"

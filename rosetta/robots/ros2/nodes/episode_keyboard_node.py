@@ -148,8 +148,6 @@ class EpisodeKeyboardNode(Node):
         self._has_last_bag: bool = False  # True after a recording starts; cleared on delete
         self._service_pending: bool = False
         self._rec_start: float | None = None
-        self._delete_retries: int = 0
-        self._delete_retry_timer = None
 
         # Task prompt inline editor state
         self._editing_task: bool = False
@@ -358,7 +356,6 @@ class EpisodeKeyboardNode(Node):
             return self._msg("⚠  No episode to discard")
         self._msg("🗑  Discarding episode...")
         self._service_pending = True
-        self._delete_retries = 0
         if self._recording:
             # Still recording: cancel first, then delete
             if not self._cancel_client.service_is_ready():
@@ -396,33 +393,16 @@ class EpisodeKeyboardNode(Node):
         del_future.add_done_callback(self._on_discard_delete_done)
 
     def _on_discard_delete_done(self, future) -> None:
+        self._service_pending = False
         try:
             resp = future.result()
             if resp.success:
                 self._has_last_bag = False
-                self._service_pending = False
                 self._msg(f"🗑  Discarded: {resp.message}")
-                return
-            # Recorder stops the bag asynchronously after cancel — retry briefly
-            if "recording in progress" in resp.message.lower():
-                self._delete_retries += 1
-                if self._delete_retries <= 25:  # up to ~5 s
-                    self._delete_retry_timer = self.create_timer(0.2, self._retry_delete_once)
-                    return
-                self._msg("✗  Discard timed out waiting for recorder to stop")
             else:
                 self._msg(f"✗  Delete failed: {resp.message}")
         except Exception as e:
             self._msg(f"✗  Delete exception: {e}")
-        self._service_pending = False
-
-    def _retry_delete_once(self) -> None:
-        """One-shot timer callback: cancel the recurring timer then retry delete."""
-        if self._delete_retry_timer is not None:
-            self._delete_retry_timer.cancel()
-            self._delete_retry_timer.destroy()
-            self._delete_retry_timer = None
-        self._do_delete_last_bag()
 
     def _handle_quit(self) -> None:
         self._msg("\n👋 Shutting down keyboard controller...\n")

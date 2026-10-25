@@ -45,7 +45,8 @@ ros2 service call /episode_recorder/cancel_recording std_srvs/srv/Trigger
 An untimed recording ends `CANCELED`. That's the normal end, not an error.
 To bound the episode instead, set `max_duration_s` on the goal.
 
-To throw away the last bag:
+To throw away the last bag, call `delete_last_bag`. Called during a recording,
+it deletes that recording once it ends:
 
 ```bash
 ros2 service call /episode_recorder/delete_last_bag std_srvs/srv/Trigger

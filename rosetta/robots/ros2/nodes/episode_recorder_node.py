@@ -304,6 +304,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._messages_written = 0
         self._topic_msg_counts: dict[str, int] = {}
         self._cbg = ReentrantCallbackGroup()
+        # _bag_lock guards which bag ~/delete_last_bag targets: the recording
+        # in progress (deleted when it ends) or the last finished one.
+        self._bag_lock = threading.Lock()
+        self._active_bag: Path | None = None
+        self._discard_active = False
         self._last_bag_dir: Path | None = None
 
         self.get_logger().info("Node created (unconfigured)")
@@ -665,37 +670,34 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         return self._handle_start_service(response, self._record, (request.prompt or "",), what="recording")
 
     def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
-        """Delete the most recently completed bag directory.
+        """Delete the recording in progress when it ends, or else the last finished bag.
 
-        Refuses while a recording is in progress so a live writer's directory
-        is never removed. Returns success False with a reason when there is
-        nothing to delete or the removal fails.
+        A live writer's directory is never removed here: the record loop
+        deletes it itself once the writer is closed. Returns success False with
+        a reason when there is nothing to delete or the removal fails.
         """
-        if self.busy:
-            response.success = False
-            # episode_keyboard_node's discard flow retries on this substring.
-            response.message = "Cannot delete: recording in progress"
-            return response
-        if self._last_bag_dir is None:
+        with self._bag_lock:
+            if self._active_bag is not None:
+                self._discard_active = True
+                response.success = True
+                response.message = f"Will delete {self._active_bag.name} when the recording ends"
+                return response
+            bag_path, self._last_bag_dir = self._last_bag_dir, None
+
+        if bag_path is None:
             response.success = False
             response.message = "No bag to delete"
             return response
-
-        bag_path = self._last_bag_dir
         try:
-            if bag_path.exists():
-                shutil.rmtree(bag_path)
-                self._last_bag_dir = None
-                self.get_logger().info(f"Deleted bag: {bag_path}")
-                response.success = True
-                response.message = f"Deleted: {bag_path.name}"
-            else:
-                response.success = False
-                response.message = f"Bag path not found: {bag_path}"
-        except Exception as e:
+            shutil.rmtree(bag_path)
+        except OSError as e:
             self.get_logger().error(f"Failed to delete bag {bag_path}: {e}")
             response.success = False
             response.message = f"Delete failed: {e}"
+            return response
+        self.get_logger().info(f"Deleted bag: {bag_path}")
+        response.success = True
+        response.message = f"Deleted: {bag_path.name}"
         return response
 
     def _execute(self, goal_handle) -> RecordEpisode.Result:
@@ -739,6 +741,8 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._messages_written = 0
         self._topic_msg_counts = {}
         bag_dir = self._create_bag_dir()
+        with self._bag_lock:
+            self._active_bag, self._discard_active = bag_dir, False
         result = RecordEpisode.Result()
         result.bag_path = str(bag_dir)
 
@@ -802,9 +806,17 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                     # never mask an earlier one.
                     self.get_logger().error(f"Metadata error: {e}")
                     error = error or e
-            if bag_dir.exists():
-                # Failed partials stay deletable via ~/delete_last_bag.
-                self._last_bag_dir = bag_dir
+            with self._bag_lock:
+                discard, self._discard_active, self._active_bag = self._discard_active, False, None
+                if discard:
+                    # The discarded bag was the last one; never fall back to an older bag.
+                    self._last_bag_dir = None
+                elif bag_dir.exists():
+                    # Failed partials stay deletable via ~/delete_last_bag.
+                    self._last_bag_dir = bag_dir
+            if discard:
+                shutil.rmtree(bag_dir, ignore_errors=True)
+                self.get_logger().info(f"Deleted bag: {bag_dir}")
 
             result.messages_written = self._messages_written
 

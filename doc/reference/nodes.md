@@ -61,7 +61,7 @@ Launch arguments: `params_file`, `contract_path`, `bag_base_dir`,
 | `record_episode` | action `rosetta_interfaces/action/RecordEpisode` |
 | `~/start_recording` | service `rosetta_interfaces/srv/StartRecording` |
 | `~/cancel_recording` | service `std_srvs/srv/Trigger` |
-| `~/delete_last_bag` | service `std_srvs/srv/Trigger`. Refused while recording. Also deletes a failed partial bag. |
+| `~/delete_last_bag` | service `std_srvs/srv/Trigger`. Deletes the last bag, including a failed partial bag. During a recording, it deletes that recording once it ends. |
 
 With the default namespace these are `/record_episode` and
 `/episode_recorder/...`.
