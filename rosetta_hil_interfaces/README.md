@@ -6,6 +6,7 @@ ROS 2 action and service definitions for [`rosetta_hil`](https://github.com/ibln
 |-----------|------|--------|---------|
 | `ManageEpisode` | action | `hil_manager` | Run one human-in-the-loop episode |
 | `StartHILEpisode` | service | `hil_manager` | Start an episode without the action protocol (returns once started) |
+| `ManageEpisodeStatus`, `ManageEpisodeResult` | message | `hil_manager` | `~/status` and `~/result` topics, for clients that can't use the action |
 
 `ManageEpisode` reports how an episode ended in `termination_reason` (the
 shared reasons from `rosetta_interfaces`, plus `reward_threshold`) and whether
