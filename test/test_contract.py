@@ -152,10 +152,10 @@ def test_safety_explicit_optin_preserved(tmp_path):
     assert contract.actions[0].sources[0].channel.safety == "zeros"
 
 
-def test_v1_list_sections_rejected_with_pointed_error(tmp_path):
+def test_v1_list_sections_rejected(tmp_path):
     p = tmp_path / "v1.yaml"
     p.write_text(V1_CONTRACT)
-    with pytest.raises(ContractValidationError, match="v1"):
+    with pytest.raises(ContractValidationError, match="must be a mapping"):
         load_contract(p)
 
 

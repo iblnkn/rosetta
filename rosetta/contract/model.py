@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-The contract document model: enums, dataclasses, and the section descriptor table.
+The contract document model: enums and dataclasses.
 
 Pure data — no YAML, no numpy, no parsing. :mod:`.schema` parses and
 validates YAML into these types (and re-exports them, so external code
@@ -120,9 +120,7 @@ class Channel:
     carries a required ``encoding`` field; ``CompressedImage`` decodes to RGB
     unconditionally via cv2), so there is nothing to declare here.
 
-    Field *legality* is per-section and enforced at parse (see
-    :class:`ChannelRules`): every Channel carries ``safety``/``encoder``/... ,
-    but sections that cannot declare them reject the keys at load, so e.g. an
+    Which fields a section may declare is enforced at parse, so e.g. an
     observation's ``safety`` is always ``NONE`` by construction.
     """
 
@@ -251,64 +249,11 @@ TELEOP_INPUT_KEY = "teleop.input"
 TELEOP_FEEDBACK_KEY = "teleop.feedback"
 
 
-# =============================================================================
-# Section descriptor table (the one enumeration everything derives from)
-# =============================================================================
-
-# Per-section channel-field rules. `safety` is a command concern (actions
-# only — declaring it on teleop feedback is an error, not a silent override);
-# `encoder` exists only where Rosetta publishes.
-_OBS_CHANNEL_KEYS = frozenset({"topic", "type", "qos", "dtype", "decoder"})
-_ACTION_CHANNEL_KEYS = frozenset({"topic", "type", "qos", "dtype", "decoder", "encoder", "safety"})
-_FEEDBACK_CHANNEL_KEYS = _ACTION_CHANNEL_KEYS - {"safety"}
-_DATA_CHANNEL_KEYS = frozenset({"topic", "type", "qos", "dtype", "decoder"})
-_BARE_CHANNEL_KEYS = frozenset({"topic", "type", "qos"})
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelRules:
-    """Which channel keys a section admits and how its channels parse."""
-
-    allowed_keys: frozenset[str]
-    serveable: bool = False  # apply must run in the serve direction (publishes)
-    dtype_required: bool = False  # extended sections declare their dtype
-
-
-OBS_RULES = ChannelRules(_OBS_CHANNEL_KEYS)
-ACTION_RULES = ChannelRules(_ACTION_CHANNEL_KEYS, serveable=True)
-EXTENDED_RULES = ChannelRules(_DATA_CHANNEL_KEYS, dtype_required=True)
-TELEOP_INPUT_RULES = ChannelRules(_DATA_CHANNEL_KEYS)
-TELEOP_FEEDBACK_RULES = ChannelRules(_FEEDBACK_CHANNEL_KEYS, serveable=True)
-BARE_CHANNEL_RULES = ChannelRules(_BARE_CHANNEL_KEYS)  # tasks, adjunct, teleop events
-
-
-@dataclass(frozen=True, slots=True)
-class SectionSpec:
-    """One frame-clock section: its name (YAML key == Contract attribute) and parse rules."""
-
-    name: str
-    rules: ChannelRules
-    extended: bool = False  # record-only; never images; dtype mandatory
-
-
-#: The frame-clock sections of a contract, in resolution order. This table is
-#: the single enumeration everything else derives from: ``FRAME_SECTIONS``,
-#: ``EXTENDED_SECTIONS`` (specs.py's iter_extended_specs iterates it), the
-#: loader's per-section dispatch, and the allowed top-level keys.
-FRAME_SECTION_TABLE: tuple[SectionSpec, ...] = (
-    SectionSpec("observations", OBS_RULES),
-    SectionSpec("actions", ACTION_RULES),
-    SectionSpec("rewards", EXTENDED_RULES, extended=True),
-    SectionSpec("signals", EXTENDED_RULES, extended=True),
-    SectionSpec("info", EXTENDED_RULES, extended=True),
-    SectionSpec("complementary_data", EXTENDED_RULES, extended=True),
-)
-
-#: The frame-clock section names, in resolution order.
-FRAME_SECTIONS = tuple(s.name for s in FRAME_SECTION_TABLE)
+#: The frame-clock sections, in resolution order (YAML key == Contract attribute).
+FRAME_SECTIONS = ("observations", "actions", "rewards", "signals", "info", "complementary_data")
 
 #: Extended (record-only) frame sections: never images, dtype mandatory.
-EXTENDED_SECTIONS = tuple(s.name for s in FRAME_SECTION_TABLE if s.extended)
+EXTENDED_SECTIONS = FRAME_SECTIONS[2:]
 
 
 def topic_owners(entries: Iterable[FrameEntry]) -> dict[str, list[str]]:

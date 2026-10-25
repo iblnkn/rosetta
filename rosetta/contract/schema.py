@@ -38,7 +38,7 @@ consumer iterates it". That is enforced in three layers, all at load —
    declared interface what each channel provides (and that its type exists
    at all — bare tasks/adjunct/teleop-events channels included), when the
    interface is installed; in a non-ROS tooling env these checks defer to
-   runtime enforcement (see :func:`_load_interface_capability`).
+   runtime enforcement (see ``_ROS_INSTALLED``).
 3. *Resolution*: the registry-backed document rules (decodability, encoder
    registration, image geometry — see :mod:`.specs`) run eagerly by
    draining the spec projections once.
@@ -54,7 +54,6 @@ from collections.abc import Hashable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterable, TypeVar
 
 import yaml
@@ -73,25 +72,19 @@ from .errors import ContractValidationError
 # Re-exported document-model names: schema.py is the public import surface for
 # the contract layer (the types themselves live in .model, a dependency-free
 # leaf any layer can import without cycles).
-from .model import (  # noqa: F401 - re-exports
-    BARE_CHANNEL_RULES,
+from .model import (
     EXTENDED_SECTIONS,
-    FRAME_SECTION_TABLE,
     FRAME_SECTIONS,
     TELEOP_EVENT_NAMES,
     TELEOP_FEEDBACK_KEY,
-    TELEOP_FEEDBACK_RULES,
     TELEOP_INPUT_KEY,
-    TELEOP_INPUT_RULES,
     Align,
     Channel,
-    ChannelRules,
     Contract,
     FieldKind,
     FrameEntry,
     ResamplePolicy,
     SafetyBehavior,
-    SectionSpec,
     Source,
     Task,
     Teleop,
@@ -110,27 +103,25 @@ SUPPORTED_ROBOT_INTERFACES = frozenset({"ros2"})
 """Robot interfaces a contract may declare (``robot_interface``)."""
 
 
-def _load_interface_capability(robot_interface: str) -> Any | None:
-    """The declared interface's introspection surface, or None when it isn't installed.
+#: Interface-attested checks (message types, timelines, qos) need ROS. Without
+#: it (a tooling env) they defer to runtime enforcement; a present-but-broken
+#: install still fails loudly.
+_ROS_INSTALLED = importlib.util.find_spec("rclpy") is not None
 
-    Returns an object exposing ``provided_timelines(msg_type) -> frozenset[str]``
-    (raising ValueError for an unknown type) and ``qos_profile_from_dict(mapping)``
-    (raising ValueError for an invalid qos mapping). ros2 is the only interface
-    today; this function is the single seam to generalize when a second one exists.
-
-    The deferral gate is the marker package's *availability*, not a blanket
-    ImportError catch: absent rclpy = a non-ROS tooling env, interface-backed
-    checks defer to runtime enforcement; present-but-broken raises loudly
-    rather than silently disabling validation.
-    """
-    if importlib.util.find_spec("rclpy") is None:
-        return None
-    from ..robots.ros2 import rclpy_utils, timelines
-
-    return SimpleNamespace(
-        provided_timelines=timelines.provided_timelines,
-        qos_profile_from_dict=rclpy_utils.qos_profile_from_dict,
-    )
+# Channel keys each section admits. `safety` is a command concern (actions
+# only); `encoder` exists only where Rosetta publishes. "bare" covers tasks,
+# adjunct and teleop events.
+_DATA_CHANNEL_KEYS = frozenset({"topic", "type", "qos", "dtype", "decoder"})
+_CHANNEL_KEYS = {
+    "observations": _DATA_CHANNEL_KEYS,
+    "actions": _DATA_CHANNEL_KEYS | {"encoder", "safety"},
+    **dict.fromkeys(EXTENDED_SECTIONS, _DATA_CHANNEL_KEYS),
+    "teleop.input": _DATA_CHANNEL_KEYS,
+    "teleop.feedback": _DATA_CHANNEL_KEYS | {"encoder"},
+    "bare": frozenset({"topic", "type", "qos"}),
+}
+#: Sections whose ``apply`` runs in the serve direction (Rosetta publishes them).
+_SERVEABLE = frozenset({"actions", "teleop.feedback"})
 
 
 # =============================================================================
@@ -172,11 +163,14 @@ def _require_mapping(data: Any, ctx: str) -> dict[str, Any]:
     return data
 
 
-def _require_fields(data: dict, fields: list[str], context: str) -> None:
-    """Validate required fields are present."""
-    for field in fields:
+def _mapping(data: Any, ctx: str, *, allowed: Iterable[str], required: Iterable[str] = ()) -> dict[str, Any]:
+    """A YAML mapping with only ``allowed`` keys and every ``required`` one."""
+    data = _require_mapping(data, ctx)
+    _check_keys(data, frozenset(allowed), ctx)
+    for field in required:
         if field not in data:
-            raise ContractValidationError(f"Missing required field '{field}' in {context}")
+            raise ContractValidationError(f"Missing required field '{field}' in {ctx}")
+    return data
 
 
 def _parse_strict_int(value: Any, desc: str) -> int:
@@ -282,7 +276,7 @@ def _validate_codec_path(path: str | None, context: str) -> str | None:
     return path
 
 
-def _validate_interface(contract: Contract, capability: Any) -> None:
+def _validate_interface(contract: Contract) -> None:
     """Interface-attested document checks, for every channel the contract declares.
 
     Three facts only the robot interface can attest: a channel's ``type``
@@ -290,15 +284,14 @@ def _validate_interface(contract: Contract, capability: Any) -> None:
     tasks/adjunct/teleop-events ones that have no align), an aligned source's
     ``timeline`` is one the channel provides, and a channel's ``qos`` mapping
     speaks the interface's qos vocabulary. Runs only when the interface is
-    installed — :func:`_load_interface_capability` returns None in a non-ROS
-    tooling env, deferring these checks to runtime enforcement (extraction
-    raises on an unknown timeline; qos construction and subscription raise on
-    bad qos and unknown types).
+    installed (see ``_ROS_INSTALLED``).
     """
+    from ..robots.ros2.rclpy_utils import qos_profile_from_dict
+    from ..robots.ros2.timelines import provided_timelines
 
     def check(channel: Channel, align: Align | None, ctx: str) -> None:
         try:
-            provided = capability.provided_timelines(channel.type)
+            provided = provided_timelines(channel.type)
         except ValueError as e:
             raise ContractValidationError(f"{ctx}: {e}") from e
         if align is not None and align.timeline not in provided:
@@ -308,7 +301,7 @@ def _validate_interface(contract: Contract, capability: Any) -> None:
             )
         if channel.qos is not None:
             try:
-                capability.qos_profile_from_dict(channel.qos)
+                qos_profile_from_dict(channel.qos)
             except ValueError as e:
                 raise ContractValidationError(f"{ctx}.qos: {e}") from e
 
@@ -327,26 +320,6 @@ def _validate_interface(contract: Contract, capability: Any) -> None:
             check(contract.teleop.events.channel, None, "teleop.events.channel")
         for i, tfs in enumerate(contract.teleop.feedback):
             check(tfs.source.channel, tfs.source.align, f"teleop.feedback[{i}]")
-
-
-def _validate_by_resolution(contract: Contract) -> None:
-    """Eagerly run spec resolution's and FrameLayout's validation rules.
-
-    The registry-backed document rules (decodability, encoder registration,
-    select requirements, image single-source/geometry — see specs.py) live in
-    the spec projections; building a FrameLayout over the drained specs
-    additionally runs the layout rules (shared-key dtype/select coherence,
-    rendered feature-name uniqueness). Doing both here makes "load_contract
-    returned" mean "fully valid in this environment", instead of the same
-    errors firing lazily in whichever consumer iterates or assembles first.
-    ``iter_reward_as_action_specs`` is deliberately excluded: its rules only
-    apply when a classifier caller re-casts rewards as the action output.
-    """
-    # Function-local: specs and layout consume this module's types.
-    from ..frames.layout import FrameLayout
-    from .specs import iter_specs
-
-    FrameLayout(list(iter_specs(contract)))
 
 
 # =============================================================================
@@ -433,11 +406,9 @@ _SOURCE_KEYS = frozenset({"channel", "align", "select", "apply", "kind"})
 _ALIGN_KEYS = frozenset({"strategy", "timeline", "tolerance_ms"})
 
 
-def _parse_channel(data: Any, ctx: str, rules: ChannelRules) -> Channel:
-    """Parse one channel block under a section's rules."""
-    data = _require_mapping(data, ctx)
-    _check_keys(data, rules.allowed_keys, ctx)
-    _require_fields(data, ["topic", "type"], ctx)
+def _parse_channel(data: Any, ctx: str, section: str) -> Channel:
+    """Parse one channel block, admitting only the keys its section allows."""
+    data = _mapping(data, ctx, allowed=_CHANNEL_KEYS[section], required=("topic", "type"))
     # Strings only: a YAML scalar of another type (topic: 123) is a typo'd
     # contract, not something to coerce.
     topic = data["topic"]
@@ -447,9 +418,7 @@ def _parse_channel(data: Any, ctx: str, rules: ChannelRules) -> Channel:
     if not isinstance(type_, str) or not type_:
         raise ContractValidationError(f"'type' in {ctx} must be a non-empty string, got {type_!r}")
 
-    dtype = _validate_dtype(data.get("dtype"), ctx, required=rules.dtype_required)
-    if rules.dtype_required and dtype == "video":
-        raise ContractValidationError(f"Invalid dtype '{dtype}' in {ctx}: extended sections are never images.")
+    dtype = _validate_dtype(data.get("dtype"), ctx, required=section in EXTENDED_SECTIONS)
 
     safety = SafetyBehavior.NONE
     if "safety" in data:
@@ -477,9 +446,7 @@ def _parse_align(data: Any, ctx: str) -> Align:
         raise ContractValidationError(
             f"Missing required 'align' block in {ctx} — every frame-clock entry must choose a strategy and a timeline."
         )
-    data = _require_mapping(data, ctx)
-    _check_keys(data, _ALIGN_KEYS, ctx)
-    _require_fields(data, ["strategy", "timeline"], ctx)
+    data = _mapping(data, ctx, allowed=_ALIGN_KEYS, required=("strategy", "timeline"))
 
     strategy = _validate_enum(data["strategy"], ResamplePolicy, "strategy", ctx)
     # Timelines are open names produced by the robot interface, matched verbatim.
@@ -502,17 +469,15 @@ def _parse_align(data: Any, ctx: str) -> Align:
     return Align(strategy=strategy, timeline=timeline, tolerance_ms=tolerance_ms)
 
 
-def _parse_source(data: Any, ctx: str, rules: ChannelRules) -> Source:
+def _parse_source(data: Any, ctx: str, section: str) -> Source:
     """Parse one channel -> align -> select -> apply source."""
-    data = _require_mapping(data, ctx)
-    _check_keys(data, _SOURCE_KEYS, ctx)
-    _require_fields(data, ["channel", "align"], ctx)
+    data = _mapping(data, ctx, allowed=_SOURCE_KEYS, required=("channel", "align"))
 
-    channel = _parse_channel(data["channel"], f"{ctx}.channel", rules)
+    channel = _parse_channel(data["channel"], f"{ctx}.channel", section)
     align = _parse_align(data["align"], f"{ctx}.align")
 
     select = _parse_select_paths(data.get("select"), ctx)
-    apply = _parse_apply(data.get("apply"), ctx, require_serveable=rules.serveable)
+    apply = _parse_apply(data.get("apply"), ctx, require_serveable=section in _SERVEABLE)
     kind = _validate_kind(data.get("kind"), select, ctx)
 
     return Source(
@@ -524,65 +489,55 @@ def _parse_source(data: Any, ctx: str, rules: ChannelRules) -> Source:
     )
 
 
-def _parse_entry(key: str, value: Any, section: SectionSpec) -> FrameEntry:
+def _parse_entry(key: str, value: Any, section: str) -> FrameEntry:
     """Parse one frame-key entry: a single source, or an ordered list of sources."""
-    ctx = f"{section.name}.{key}"
+    ctx = f"{section}.{key}"
     if isinstance(value, list):
         if not value:
             raise ContractValidationError(f"{ctx} has an empty source list")
-        sources = tuple(_parse_source(item, f"{ctx}[{i}]", section.rules) for i, item in enumerate(value))
+        sources = tuple(_parse_source(item, f"{ctx}[{i}]", section) for i, item in enumerate(value))
     else:
-        sources = (_parse_source(value, ctx, section.rules),)
+        sources = (_parse_source(value, ctx, section),)
     return FrameEntry(key=key, sources=sources)
 
 
-def _parse_frame_section(data: Any, section: SectionSpec) -> tuple[FrameEntry, ...]:
+def _parse_frame_section(data: Any, section: str) -> tuple[FrameEntry, ...]:
     """Parse a frame-clock section: a mapping keyed by frame key."""
     if data is None:
         return ()
-    if isinstance(data, list):
-        raise ContractValidationError(
-            f"'{section.name}' must be a mapping keyed by frame key, got a list "
-            f"(the v1 list-of-entries contract format is no longer supported)"
-        )
-    data = _require_mapping(data, f"'{section.name}'")
+    data = _require_mapping(data, f"'{section}'")
     if not data:
-        raise ContractValidationError(f"'{section.name}' is present but empty — omit the section instead")
+        raise ContractValidationError(f"'{section}' is present but empty — omit the section instead")
 
     entries: list[FrameEntry] = []
     for raw_key, value in data.items():
-        key = _require_str(raw_key, f"frame key in '{section.name}'")
-        if section.name != "observations" and key.startswith(IMAGE_KEY_PREFIX):
+        key = _require_str(raw_key, f"frame key in '{section}'")
+        if section != "observations" and key.startswith(IMAGE_KEY_PREFIX):
             raise ContractValidationError(
-                f"{section.name}.{key}: keys under '{IMAGE_KEY_PREFIX}' are only "
+                f"{section}.{key}: keys under '{IMAGE_KEY_PREFIX}' are only "
                 f"allowed in 'observations' — image streams are observations."
             )
         entries.append(_parse_entry(key, value, section))
     return tuple(entries)
 
 
+def _parse_bare_entry(data: Any, ctx: str) -> Channel:
+    """Parse a ``{channel: ...}`` entry with no align (tasks, adjunct)."""
+    data = _mapping(data, ctx, allowed=("channel",), required=("channel",))
+    return _parse_channel(data["channel"], f"{ctx}.channel", "bare")
+
+
 def _parse_tasks(data: Any) -> tuple[Task, ...]:
     """Parse the tasks section: a mapping of task key -> {channel}."""
     if data is None:
         return ()
-    if isinstance(data, list):
-        raise ContractValidationError(
-            "'tasks' must be a mapping keyed by task key, got a list "
-            "(the v1 list-of-entries contract format is no longer supported)"
-        )
     data = _require_mapping(data, "'tasks'")
     if not data:
         raise ContractValidationError("'tasks' is present but empty — omit the section instead")
-
-    tasks: list[Task] = []
-    for key, value in data.items():
-        ctx = f"tasks.{key}"
-        entry = _require_mapping(value, ctx)
-        _check_keys(entry, {"channel"}, ctx)
-        _require_fields(entry, ["channel"], ctx)
-        channel = _parse_channel(entry["channel"], f"{ctx}.channel", BARE_CHANNEL_RULES)
-        tasks.append(Task(key=_require_str(key, "task key"), channel=channel))
-    return tuple(tasks)
+    return tuple(
+        Task(key=_require_str(key, "task key"), channel=_parse_bare_entry(value, f"tasks.{key}"))
+        for key, value in data.items()
+    )
 
 
 def _parse_adjunct(data: Any) -> tuple[Channel, ...]:
@@ -594,24 +549,14 @@ def _parse_adjunct(data: Any) -> tuple[Channel, ...]:
     if not data:
         raise ContractValidationError("'adjunct' is present but empty — omit the section instead")
 
-    channels: list[Channel] = []
-    for i, item in enumerate(data):
-        ctx = f"adjunct[{i}]"
-        entry = _require_mapping(item, ctx)
-        _check_keys(entry, {"channel"}, ctx)
-        _require_fields(entry, ["channel"], ctx)
-        channels.append(_parse_channel(entry["channel"], f"{ctx}.channel", BARE_CHANNEL_RULES))
-    return tuple(channels)
+    return tuple(_parse_bare_entry(item, f"adjunct[{i}]") for i, item in enumerate(data))
 
 
 def _parse_teleop_events(data: Any) -> TeleopEventMap:
     """Parse teleop events: a bare channel plus a dict-form select. No align."""
     ctx = "teleop.events"
-    data = _require_mapping(data, ctx)
-    _check_keys(data, {"channel", "select"}, ctx)
-    _require_fields(data, ["channel", "select"], ctx)
-
-    channel = _parse_channel(data["channel"], f"{ctx}.channel", BARE_CHANNEL_RULES)
+    data = _mapping(data, ctx, allowed=("channel", "select"), required=("channel", "select"))
+    channel = _parse_channel(data["channel"], f"{ctx}.channel", "bare")
     select = _parse_select_map(data["select"], ctx)
     unknown = sorted(set(select) - TELEOP_EVENT_NAMES)
     if unknown:
@@ -635,7 +580,6 @@ class _TeleopRole:
     ref_field: str  # "target" | "origin"
     ref_pool: str  # which section's topics the reference must name (error wording)
     dup_rule: str  # error tail for a repeated reference
-    rules: ChannelRules
     wrap: type[TeleopInputSource] | type[TeleopFeedbackSource]
 
 
@@ -659,14 +603,12 @@ def _parse_teleop_role_source(data: Any, ctx: str, role: _TeleopRole, owners: di
     The reference is validated against every channel topic the referenced
     section declares and must belong to exactly one of its entries.
     """
-    data = _require_mapping(data, ctx)
-    _check_keys(data, _SOURCE_KEYS | {role.ref_field}, ctx)
-    _require_fields(data, [role.ref_field, "channel", "align"], ctx)
+    data = _mapping(data, ctx, allowed=_SOURCE_KEYS | {role.ref_field}, required=(role.ref_field, "channel", "align"))
 
     ref = _require_str(data[role.ref_field], f"'{role.ref_field}' in {ctx}")
     _resolve_teleop_topic(ref, owners, role.ref_field, role.ref_pool, ctx)
 
-    source = _parse_source({k: v for k, v in data.items() if k != role.ref_field}, ctx, role.rules)
+    source = _parse_source({k: v for k, v in data.items() if k != role.ref_field}, ctx, role.section)
     return role.wrap(source, ref)
 
 
@@ -700,7 +642,6 @@ _TELEOP_ROLES = {
         ref_field="target",
         ref_pool="action",
         dup_rule="each action topic may be driven by at most one teleop input.",
-        rules=TELEOP_INPUT_RULES,
         wrap=TeleopInputSource,
     ),
     "feedback": _TeleopRole(
@@ -708,7 +649,6 @@ _TELEOP_ROLES = {
         ref_field="origin",
         ref_pool="observation",
         dup_rule="each observation topic may feed at most one teleop feedback.",
-        rules=TELEOP_FEEDBACK_RULES,
         wrap=TeleopFeedbackSource,
     ),
 }
@@ -875,7 +815,7 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
     # dtype/encoder lookups during spec building see every codec.
     discover_codecs()
 
-    sections = {s.name: _parse_frame_section(data.get(s.name), s) for s in FRAME_SECTION_TABLE}
+    sections = {name: _parse_frame_section(data.get(name), name) for name in FRAME_SECTIONS}
 
     # A frame key must belong to exactly one section: the same key in two
     # sections would silently merge into one recording column (FrameLayout
@@ -924,8 +864,14 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
     )
 
     # Full eager validation: "load succeeded" means "valid in this environment".
-    capability = _load_interface_capability(robot_interface)
-    if capability is not None:
-        _validate_interface(contract, capability)
-    _validate_by_resolution(contract)
+    if _ROS_INSTALLED:
+        _validate_interface(contract)
+    # Resolving every spec and laying out the frame runs the registry-backed
+    # rules (decodability, encoders, image geometry, shared-key coherence) now
+    # rather than in whichever consumer iterates first. Function-local: specs
+    # and layout consume this module's types.
+    from ..frames.layout import FrameLayout
+    from .specs import iter_specs
+
+    FrameLayout(list(iter_specs(contract)))
     return contract

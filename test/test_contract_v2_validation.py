@@ -761,7 +761,7 @@ def test_interface_checks_defer_without_interface(tmp_path, monkeypatch):
     those checks defer to runtime instead of failing the load."""
     import rosetta.contract.schema as schema_mod
 
-    monkeypatch.setattr(schema_mod, "_load_interface_capability", lambda name: None)
+    monkeypatch.setattr(schema_mod, "_ROS_INSTALLED", False)
     c = _load(tmp_path, BASE + "tasks:\n  task:\n    channel: {topic: /p, type: std_msgs/msg/NoSuchThing}\n")
     assert c.tasks[0].channel.type == "std_msgs/msg/NoSuchThing"
 
