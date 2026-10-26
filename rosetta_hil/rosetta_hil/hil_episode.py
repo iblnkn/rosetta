@@ -28,6 +28,24 @@ OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
 OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
 OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
 
+# The teleop event names this manager acts on. The contract's event names are
+# open, so other names belong to other consumers and are ignored here.
+HIL_EVENT_NAMES = frozenset(
+    {
+        "is_intervention",  # level: teleop has control while held
+        "start_episode",  # press: start an episode with default_prompt
+        "success",  # press: label the episode a success
+        "failure",  # press: label the episode a failure
+        "end_success",  # press: end the episode, outcome success
+        "end_failure",  # press: end the episode, outcome failure
+    }
+)
+
+
+def ignored_events(names) -> list[str]:
+    """The contract event names this manager doesn't act on, sorted."""
+    return sorted(set(names) - HIL_EVENT_NAMES)
+
 
 class Control(StrEnum):
     """Who drives the robot's command topics."""

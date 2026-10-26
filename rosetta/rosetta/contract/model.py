@@ -158,23 +158,13 @@ class Task:
     channel: Channel
 
 
-#: Every event name the HIL manager acts on; ``teleop.events.select`` keys are
-#: checked against it at load.
-TELEOP_EVENT_NAMES = frozenset(
-    {
-        "is_intervention",  # level: mux teleop/policy while held
-        "start_episode",  # press: start an episode (fire-and-forget)
-        "success",  # press: latch positive reward override
-        "failure",  # press: latch negative reward override
-        "end_success",  # press: end episode with positive reward
-        "end_failure",  # press: end episode with negative reward
-    }
-)
-
-
 @dataclass(frozen=True, slots=True)
 class TeleopEventMap:
-    """Teleoperator event button mappings for HIL-SERL. No align: events are edges."""
+    """Teleoperator event button mappings. No align: events are edges.
+
+    Event names are open: each consumer acts on the names it knows and ignores
+    the rest, so one contract can serve several consumers.
+    """
 
     channel: Channel
     select: dict[str, str]  # event_name -> field path (dict form of select)

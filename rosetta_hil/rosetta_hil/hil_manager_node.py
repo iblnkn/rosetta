@@ -71,10 +71,12 @@ from rosetta.robots.ros2.node_utils import (
 from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_hil.hil_episode import (
+    HIL_EVENT_NAMES,
     OUTCOME_UNLABELED,
     Control,
     EdgeDetector,
     EpisodeState,
+    ignored_events,
     resolve_outcome,
     termination_reason,
 )
@@ -370,6 +372,9 @@ class HilManagerNode(RosettaLifecycleNode):
             )
             self._mux_subs.append(sub)
             self.get_logger().info(f"Teleop events: {events_spec.channel.topic}")
+            ignored = ignored_events(events_spec.select)
+            if ignored:
+                self.get_logger().warning(f"Teleop events this manager doesn't act on, ignored: {ignored}")
 
         # A leader arm that torque-tracks the command topic (so101_ros2_node's
         # hil_teacher mode) subscribes to this, so this node needs no
@@ -553,13 +558,16 @@ class HilManagerNode(RosettaLifecycleNode):
           end_success        end the episode, outcome success
           end_failure        end the episode, outcome failure
 
-        The four label events are ignored when no episode is running.
+        The four label events are ignored when no episode is running, and
+        names outside HIL_EVENT_NAMES always are.
 
         Edge-triggered because each message reports every button's level, and
         acting on levels would let unpressed buttons undo pressed ones.
         """
         levels = {}
         for event_name, selector in events_spec.select.items():
+            if event_name not in HIL_EVENT_NAMES:
+                continue
             try:
                 levels[event_name] = bool(resolve_indexed(msg, selector))
             except (AttributeError, IndexError, ValueError) as e:

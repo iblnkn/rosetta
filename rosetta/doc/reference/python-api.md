@@ -8,7 +8,7 @@ change without notice. `test/test_public_api.py` pins the list.
 
 | Module | Provides | Needs ROS |
 |---|---|---|
-| `rosetta.contract.schema` | `load_contract`, `parse_contract`, `Contract` and its parts, the teleop names | no |
+| `rosetta.contract.schema` | `load_contract`, `parse_contract`, `Contract` and its parts, the teleop column prefixes | no |
 | `rosetta.contract.specs` | `StreamSpec` types and the `iter_*_specs` functions | no |
 | `rosetta.contract.errors` | `ContractValidationError` | no |
 | `rosetta.contract.sidecar` | Locating the contract a trained model was built with | no |

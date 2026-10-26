@@ -25,6 +25,7 @@ from rosetta_hil.hil_episode import (
     Control,
     EdgeDetector,
     EpisodeState,
+    ignored_events,
     resolve_outcome,
     termination_reason,
 )
@@ -101,3 +102,15 @@ def test_termination_reason(elapsed, max_duration, reward, threshold, reason):
 )
 def test_resolve_outcome(outcome, reason, resolved):
     assert resolve_outcome(outcome, reason) == resolved
+
+
+@pytest.mark.parametrize(
+    ("names", "ignored"),
+    [
+        (["success", "end_failure"], []),
+        (["success", "rerecord_episode"], ["rerecord_episode"]),
+        (["succes", "zz", "start_episode"], ["succes", "zz"]),
+    ],
+)
+def test_ignored_events_are_the_names_outside_hil_vocabulary(names, ignored):
+    assert ignored_events(names) == ignored

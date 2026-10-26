@@ -409,19 +409,19 @@ teleop:
     _expect_error(tmp_path, text, "belongs to multiple entries")
 
 
-def test_unknown_teleop_event_name_rejected(tmp_path):
-    """A typo'd event name would otherwise load fine and be a button that
-    silently does nothing."""
+def test_teleop_event_names_are_open(tmp_path):
+    """Core doesn't own an event vocabulary: each consumer acts on the names it
+    knows, so any name loads."""
     text = (
         BASE
         + """
 teleop:
   events:
     channel: {topic: /joy, type: sensor_msgs/msg/Joy}
-    select: {succes: buttons.0}
+    select: {rerecord_episode: buttons.0}
 """
     )
-    _expect_error(tmp_path, text, "unknown event name")
+    assert _load(tmp_path, text).teleop.events.select == {"rerecord_episode": "buttons.0"}
 
 
 def test_declared_key_colliding_with_synthesized_teleop_key_rejected(tmp_path):

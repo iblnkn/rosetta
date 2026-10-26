@@ -117,7 +117,9 @@ press hands control to teleop and its release hands it back, `start_episode`
 starts an episode with `default_prompt`, `success` and `failure` set the
 label, and `end_success` and `end_failure` end the episode. A label holds
 until the other button, `~/clear_reward_override`, or the next episode. The
-four label buttons are ignored when no episode is running.
+four label buttons are ignored when no episode is running. Event names are
+open in the contract, so the manager ignores names outside these six and logs
+them as a warning at configure.
 
 Result `termination_reason`: `stopped`, `timeout`, `reward_threshold`,
 `cancelled`, `node_deactivated`, `error`. `outcome`: `success`, `failure`,

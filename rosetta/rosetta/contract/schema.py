@@ -59,7 +59,6 @@ from .errors import ContractValidationError
 from .model import (
     EXTENDED_SECTIONS,
     FRAME_SECTIONS,
-    TELEOP_EVENT_NAMES,
     TELEOP_FEEDBACK_KEY,
     TELEOP_INPUT_KEY,
     Align,
@@ -81,7 +80,6 @@ from .operators import lookup_operator
 
 __all__ = [
     "FRAME_SECTIONS",
-    "TELEOP_EVENT_NAMES",
     "TELEOP_FEEDBACK_KEY",
     "TELEOP_INPUT_KEY",
     "Align",
@@ -513,16 +511,11 @@ def _parse_adjunct(data: Any) -> tuple[Channel, ...]:
 
 
 def _parse_teleop_events(data: Any) -> TeleopEventMap:
-    """Parse teleop events: a bare channel plus a dict-form select. No align."""
+    """Parse teleop events: a bare channel plus a dict-form select. No align, and open event names."""
     ctx = "teleop.events"
     data = _mapping(data, ctx, allowed=("channel", "select"), required=("channel", "select"))
     channel = _parse_channel(data["channel"], f"{ctx}.channel", "bare")
     select = _parse_select_map(data["select"], ctx)
-    unknown = sorted(set(select) - TELEOP_EVENT_NAMES)
-    if unknown:
-        raise ContractValidationError(
-            f"{ctx}.select: unknown event name(s) {unknown}. Valid events: {sorted(TELEOP_EVENT_NAMES)}"
-        )
     return TeleopEventMap(channel=channel, select=select)
 
 

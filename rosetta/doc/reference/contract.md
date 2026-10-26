@@ -306,9 +306,12 @@ teleop:
 | `feedback[].origin` | The topic of exactly one observation entry. The origin is decoded with that entry's `select` and `apply`, so the feedback `select` must match it in width and units. |
 | `events.select` | Mapping of event name to a field path such as `buttons.N` or `axes.N`. The path is resolved per message, so a bad one is a runtime warning, not a load error. |
 
-Event names are `is_intervention`, `start_episode`, `success`, `failure`,
-`end_success`, `end_failure`. Any other name is an error. Events are
-edge-triggered and never resampled. A `feedback` source must not declare
+Event names are open. Rosetta loads any name, and each consumer acts on the
+names it knows and logs the ones it ignores, so one contract
+can serve several consumers. The human-in-the-loop manager's names are in the
+[`rosetta_hil` README](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil),
+and the LeRobot teleoperator maps its names onto LeRobot's `TeleopEvents`.
+Events are edge-triggered and never resampled. A `feedback` source must not declare
 `safety`.
 
 The porter writes `teleop.input` into the dataset as

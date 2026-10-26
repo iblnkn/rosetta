@@ -107,6 +107,17 @@ def test_events_channel_need_not_be_joy(node, episode):
     assert node._episode.labeled is True
 
 
+def test_events_outside_hil_vocabulary_are_never_read(node, episode, monkeypatch):
+    """Another consumer's event, even with a broken selector, neither dispatches nor warns."""
+    logged = []
+    logger = SimpleNamespace(warning=logged.append, info=lambda *_: None)
+    monkeypatch.setattr(node, "get_logger", lambda: logger)
+    spec = SimpleNamespace(select={"rerecord_episode": "buttons.99", "success": "buttons.3"})
+    node._on_teleop_events(_joy(success=1), spec)
+    assert node._episode.labeled is True
+    assert logged == []
+
+
 @pytest.mark.parametrize(
     ("select", "warnings"),
     [({"success": "buttons.99"}, 1), ({"success": "buttons.98", "failure": "buttons.99"}, 2)],

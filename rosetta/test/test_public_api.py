@@ -42,7 +42,6 @@ PUBLIC_API = {
         "ResamplePolicy",
         "SafetyBehavior",
         "Source",
-        "TELEOP_EVENT_NAMES",
         "TELEOP_FEEDBACK_KEY",
         "TELEOP_INPUT_KEY",
         "Task",
