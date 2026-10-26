@@ -33,10 +33,10 @@ Forthcoming
   action and observation names. This changes the recorded
   ``teleop.input.*``/``teleop.feedback.*`` feature names for such contracts.
 * **Breaking: the human-in-the-loop manager moved to its own package.**
-  ``hil_manager_node``, ``hil_launch.py`` and ``params/hil_manager.yaml`` are
-  now in ``rosetta_hil``, and ``ManageEpisode``/``StartHILEpisode`` in
-  ``rosetta_hil_interfaces``. Launch with ``ros2 launch rosetta_hil
-  hil_launch.py``. ``contracts/so_101_hil.yaml`` stays here.
+  ``hil_manager_node``, ``hil_launch.py``, ``params/hil_manager.yaml`` and
+  ``contracts/so_101_hil.yaml`` are now in ``rosetta_ros_hil``.
+  ``ManageEpisode``/``StartHILEpisode`` stay in ``rosetta_interfaces``. Launch
+  with ``ros2 launch rosetta_ros_hil hil_launch.py``.
 * **Breaking: a declared public Python API.** Public modules list their names
   in ``__all__`` (see ``doc/reference/python-api.md``); everything else is
   internal. ``node_utils`` moved from ``rosetta.robots.ros2.nodes`` to

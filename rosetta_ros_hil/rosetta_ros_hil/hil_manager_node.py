@@ -31,7 +31,7 @@ Usage:
     ros2 launch rosetta_ros_hil hil_launch.py
 
     ros2 action send_goal /manage_episode \\
-        rosetta_hil_interfaces/action/ManageEpisode \\
+        rosetta_interfaces/action/ManageEpisode \\
         "{prompt: 'pick up cube', max_duration_s: 90.0}" --feedback
 """
 
@@ -51,10 +51,9 @@ from std_msgs.msg import Int8
 from std_srvs.srv import SetBool, Trigger
 
 from rosetta.contract.schema import load_contract
-from rosetta_hil_interfaces.action import ManageEpisode
-from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
-from rosetta_hil_interfaces.srv import StartHILEpisode
-from rosetta_interfaces.action import RecordEpisode, RunPolicy
+from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
+from rosetta_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
+from rosetta_interfaces.srv import StartHILEpisode
 from rosetta_ros.child_goals import cancel_goal, send_goal
 from rosetta_ros.field_access import resolve_indexed
 from rosetta_ros.node_utils import (

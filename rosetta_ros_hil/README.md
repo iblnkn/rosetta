@@ -7,8 +7,9 @@ recorder, and reports how each episode ended and whether the robot did the
 task.
 
 `rosetta_ros_hil` uses only the public Python API of `rosetta` and `rosetta_ros`
-and their actions (`RecordEpisode`, `RunPolicy`). Its own interfaces live in
-[`rosetta_hil_interfaces`](../rosetta_hil_interfaces).
+and their actions (`RecordEpisode`, `RunPolicy`). Its interfaces (`ManageEpisode`, `StartHILEpisode`, `ManageEpisodeStatus`,
+`ManageEpisodeResult`) live with the rest of Rosetta's in
+[`rosetta_interfaces`](../rosetta_interfaces).
 
 ## Declare the teleop device
 
@@ -60,7 +61,7 @@ empty keeps the params-file value.
 
 ```bash
 ros2 action send_goal /manage_episode \
-    rosetta_hil_interfaces/action/ManageEpisode "{prompt: 'place cubes on tray'}"
+    rosetta_interfaces/action/ManageEpisode "{prompt: 'place cubes on tray'}"
 ```
 
 Hold the `is_intervention` button to take over and release it to hand back.
@@ -108,16 +109,16 @@ episode to stop.
 
 | Interface | Type | Effect |
 |---|---|---|
-| `manage_episode` | action `rosetta_hil_interfaces/action/ManageEpisode` | |
-| `~/start_episode` | service `rosetta_hil_interfaces/srv/StartHILEpisode` | |
+| `manage_episode` | action `rosetta_interfaces/action/ManageEpisode` | |
+| `~/start_episode` | service `rosetta_interfaces/srv/StartHILEpisode` | |
 | `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode. `true` labels success, `false` failure. The goal succeeds. |
 | `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. The goal ends `CANCELED`. |
 | `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
 | `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. Refused with no active episode. |
 | `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label. Refused with no active episode. |
 | `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Transient-local. Published on every change, between episodes too, and at the feedback rate while an episode runs. |
-| `~/status` | topic `rosetta_hil_interfaces/msg/ManageEpisodeStatus` | The feedback fields, at the feedback rate while an episode runs, however it started. |
-| `~/result` | topic `rosetta_hil_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode. Transient-local, so a late subscriber gets the last one. |
+| `~/status` | topic `rosetta_interfaces/msg/ManageEpisodeStatus` | The feedback fields, at the feedback rate while an episode runs, however it started. |
+| `~/result` | topic `rosetta_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode. Transient-local, so a late subscriber gets the last one. |
 
 Teleop events from the contract are edge-triggered: an `is_intervention`
 press hands control to teleop and its release hands it back, `start_episode`

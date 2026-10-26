@@ -13,7 +13,7 @@ jobs:
   # industrial_ci is Docker-native: it pulls an official ROS image and builds
   # inside it, so there's no "is ROS actually installed on this runner" class
   # of bug to hand-roll around. rosdep resolves deps straight from
-  # package.xml. All five packages live in this repository, so it needs no
+  # package.xml. All four packages live in this repository, so it needs no
   # UPSTREAM_WORKSPACE.
   industrial_ci:
     runs-on: ubuntu-latest

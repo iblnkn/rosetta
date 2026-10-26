@@ -18,8 +18,8 @@ The shared reasons come from Rosetta's node toolkit; ManageEpisode must spell
 them the same way, and add its own on top.
 """
 
-from rosetta_hil_interfaces.action import ManageEpisode
-from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
+from rosetta_interfaces.action import ManageEpisode
+from rosetta_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_ros import node_utils
 from rosetta_ros_hil import hil_episode
 

@@ -11,7 +11,6 @@
   <exec_depend>rosetta</exec_depend>
   <exec_depend>rosetta_ros</exec_depend>
   <exec_depend>rosetta_interfaces</exec_depend>
-  <exec_depend>rosetta_hil_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>action_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>

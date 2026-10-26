@@ -34,5 +34,5 @@ Forthcoming
   ``feedback_rate_hz`` and ``default_max_duration_s`` moved into those files.
 * ``hil_manager_node``, ``hil_launch.py`` and ``params/hil_manager.yaml`` moved
   here from ``rosetta``. The node uses only Rosetta's public Python API, and its
-  interfaces moved to ``rosetta_hil_interfaces``. Launch with
+  interfaces stay in ``rosetta_interfaces``. Launch with
   ``ros2 launch rosetta_ros_hil hil_launch.py``.

@@ -8,10 +8,10 @@ Forthcoming
   ``RunPolicyStatus``/``RunPolicyResult``** for the recorder's and policy
   runner's ``~/status`` and ``~/result`` topics: the action feedback and
   result fields, visible to clients that started work through a service.
-* **Breaking: ``ManageEpisode`` and ``StartHILEpisode`` moved to
-  ``rosetta_hil_interfaces``**, unchanged, alongside the human-in-the-loop
-  manager that serves them. This package now holds only the core recorder and
-  policy-runner interfaces.
+* Added ``ManageEpisodeStatus``/``ManageEpisodeResult`` for the
+  human-in-the-loop manager's ``~/status`` and ``~/result`` topics.
+  ``ManageEpisode`` and ``StartHILEpisode`` stay here: one interface package
+  for every Rosetta ROS 2 node, like ``nav2_msgs`` and ``moveit_msgs``.
 * **Breaking: ``bool success`` removed from every action result.** It meant
   three different things at once -- did the goal run to term, did anything
   break, and did the robot do the task -- and disagreed with the goal's

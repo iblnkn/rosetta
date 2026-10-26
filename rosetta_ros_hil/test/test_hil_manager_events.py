@@ -32,7 +32,7 @@ from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy
 
-from rosetta_hil_interfaces.msg import ManageEpisodeResult
+from rosetta_interfaces.msg import ManageEpisodeResult
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,

@@ -1,9 +1,10 @@
 # Interfaces
 
-The `rosetta_interfaces` package: two actions, two services and four messages. The nodes
-also use `std_srvs/srv/Trigger`. Apps built on rosetta declare their own
-interfaces; the human-in-the-loop manager's are in
-[`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil_interfaces).
+The `rosetta_interfaces` package holds every Rosetta ROS 2 interface. The nodes
+also use `std_srvs/srv/Trigger`. This page covers the recorder's and the policy
+runner's. The human-in-the-loop manager's (`ManageEpisode`, `StartHILEpisode`,
+`ManageEpisodeStatus`, `ManageEpisodeResult`) are documented in the
+[`rosetta_ros_hil` README](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil).
 
 ## Actions
 
