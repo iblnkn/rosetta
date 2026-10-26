@@ -46,3 +46,11 @@ def test_teleop_input_reaches_the_action_topic_in_its_units(contract):
         assert dict(zip(command.name, command.position, strict=True)) == pytest.approx(
             dict(zip(leader.name, leader.position, strict=True))
         )
+
+
+def test_teleop_input_is_named_like_the_action_it_drives(contract):
+    """Leader-side columns line up with the robot's action columns, namespace included."""
+    actions = {s.source.channel.topic: s for s in iter_action_specs(contract)}
+    for tis, spec in zip(contract.teleop.input, iter_teleop_input_specs(contract), strict=True):
+        target = actions[tis.target]
+        assert (spec.namespace, spec.names) == (target.namespace, target.names)
