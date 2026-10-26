@@ -23,7 +23,7 @@ hil_manager:
     # Whether hil_manager owns the policy's lifecycle: send a RunPolicy goal
     # at episode start, cancel it at episode end. False assumes a policy is
     # already running (started some other way) and hil_manager just
-    # mux/records/labels around it -- it never sends or cancels a goal.
+    # forwards/records/labels around it, and never sends or cancels a goal.
     manage_policy_lifecycle: true
 
     # Task prompt used whenever a goal, service call, or the start_episode
@@ -36,12 +36,12 @@ hil_manager:
     reward_classifier_action_name: "/reward_classifier/run_policy"
     recorder_action_name: "/record_episode"
 
-    # Topic prefix applied to remapped policy output
-    # The robot policy policy_runner_node publishes to {prefix}{original_topic}
-    # The HIL manager subscribes there and forwards to the original topic
+    # The robot policy publishes every contract action topic under this prefix
+    # (policy_runner_launch.py output_prefix), and the HIL manager forwards each
+    # to the real topic while the policy has control.
     policy_remap_prefix: "/hil/policy"
 
-    # Topic prefix applied to remapped reward classifier output
+    # The same for the reward classifier's reward topics.
     reward_remap_prefix: "/hil/reward"
 
     # --- Environment reset (planned, not yet implemented) ---

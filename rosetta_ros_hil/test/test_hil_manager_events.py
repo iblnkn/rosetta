@@ -30,6 +30,7 @@ from types import SimpleNamespace
 import pytest
 from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
+from rclpy.qos import DurabilityPolicy
 
 from rosetta_hil_interfaces.msg import ManageEpisodeResult
 from rosetta_ros.node_utils import (
@@ -44,7 +45,7 @@ from rosetta_ros_hil.hil_episode import (
     OUTCOME_UNLABELED,
     TERMINATION_REWARD_THRESHOLD,
 )
-from rosetta_ros_hil.hil_manager_node import HilManagerNode
+from rosetta_ros_hil.hil_manager_node import INTERVENTION_QOS, HilManagerNode
 
 # events_spec.select maps event name -> Joy selector. Button layout:
 # 0=is_intervention, 1=end_success, 2=end_failure, 3=success, 4=failure, 5=start_episode.
@@ -73,9 +74,14 @@ class FakePublisher:
 
 
 def _with_fake_topics(node):
-    """Install the ~/status and ~/result publishers setup() would create, without a contract."""
+    """Install the ~/status, ~/result and hil_intervention publishers setup() would create, without a contract."""
     node._status_pub, node._result_pub = FakePublisher(), FakePublisher()
+    node._intervention_pub = FakePublisher()
     return node
+
+
+def _announced(node):
+    return [msg.data for msg in node._intervention_pub.published]
 
 
 @pytest.fixture
@@ -164,6 +170,20 @@ def test_intervention_edges_toggle_mux(node):
     assert node._episode.control == "teleop"
     node._on_teleop_events(_joy(), EVENTS_SPEC)  # release edge
     assert node._episode.control == "policy"
+
+
+def test_every_control_change_is_announced_even_between_episodes(node):
+    """A leader arm following hil_intervention must hear a takeover made with no episode running."""
+    assert not node.busy
+    node._on_teleop_events(_joy(intervention=1), EVENTS_SPEC)
+    node._on_teleop_events(_joy(), EVENTS_SPEC)
+    node._on_set_intervention(SimpleNamespace(data=True), SimpleNamespace())
+    assert _announced(node) == [1, 0, 1]
+
+
+def test_hil_intervention_keeps_its_last_value_for_late_subscribers():
+    assert INTERVENTION_QOS.durability == DurabilityPolicy.TRANSIENT_LOCAL
+    assert INTERVENTION_QOS.depth == 1
 
 
 def test_service_intervention_not_fought_by_unpressed_joystick(node):

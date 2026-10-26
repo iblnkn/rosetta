@@ -45,6 +45,7 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionClient, ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import Int8
 from std_srvs.srv import SetBool, Trigger
@@ -78,6 +79,11 @@ from rosetta_ros_hil.hil_episode import (
     ignored_events,
     resolve_outcome,
     termination_reason,
+)
+
+#: hil_intervention keeps its last value for late subscribers.
+INTERVENTION_QOS = QoSProfile(
+    depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL
 )
 
 
@@ -312,7 +318,10 @@ class HilManagerNode(RosettaLifecycleNode):
         # A leader arm that torque-tracks the command topic (so101_ros2_node's
         # hil_teacher mode) subscribes to this, so this node needs no
         # arm-specific service call.
-        self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
+        # Latched, so a subscriber that starts between episodes (a leader arm,
+        # a dashboard) learns who has control without waiting for a change.
+        self._intervention_pub = self.create_publisher(Int8, "hil_intervention", INTERVENTION_QOS)
+        self._publish_control()
         # Feedback and result for every episode, including service and button
         # starts, which have no action client to send them to.
         self._status_pub = self.create_publisher(ManageEpisodeStatus, "~/status", STATUS_QOS)
@@ -477,8 +486,8 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_event_press(self, event_name: str) -> None:
         """Act on a press edge of one teleop event button."""
         if event_name == "is_intervention":
-            self._episode.set_control(Control.TELEOP)
-            self.get_logger().info("Mux: policy -> teleop (human intervention)")
+            self._set_control(Control.TELEOP)
+            self.get_logger().info("Control: policy -> human (intervention)")
 
         elif event_name == "start_episode":
             self._start_episode_from_button()
@@ -502,9 +511,19 @@ class HilManagerNode(RosettaLifecycleNode):
     def _on_event_release(self, event_name: str) -> None:
         """Act on a release edge of one teleop event button."""
         if event_name == "is_intervention":
-            self._episode.set_control(Control.POLICY)
-            self.get_logger().info("Mux: teleop -> policy (intervention released)")
+            self._set_control(Control.POLICY)
+            self.get_logger().info("Control: human -> policy (intervention released)")
         # Other events act on press only.
+
+    def _set_control(self, control: Control) -> None:
+        """Hand the action topics to ``control`` and announce it on ``hil_intervention``."""
+        self._episode.set_control(control)
+        self._publish_control()
+
+    def _publish_control(self) -> None:
+        """Publish who has control: 0 policy, 1 human."""
+        if self._intervention_pub is not None:
+            self._intervention_pub.publish(Int8(data=0 if self._episode.control == Control.POLICY else 1))
 
     def _label_episode(self, success: bool) -> float:
         """Latch the human's verdict on this episode and return its reward value.
@@ -639,7 +658,7 @@ class HilManagerNode(RosettaLifecycleNode):
         Works between episodes too, so a person can drive the robot to a start
         pose; every episode starts with the policy in control.
         """
-        self._episode.set_control(Control.TELEOP if request.data else Control.POLICY)
+        self._set_control(Control.TELEOP if request.data else Control.POLICY)
         response.success = True
         response.message = f"Control source: {'teleop' if request.data else 'policy'}"
         self.get_logger().info(response.message)
@@ -707,6 +726,7 @@ class HilManagerNode(RosettaLifecycleNode):
         )
 
         self._episode.reset()
+        self._publish_control()
 
         enable_reward = self.get_parameter("enable_reward_classifier").value
         enable_recording = self.get_parameter("enable_recording").value
@@ -832,11 +852,9 @@ class HilManagerNode(RosettaLifecycleNode):
             if reason is not None:
                 return reason
 
-            # Publish HIL intervention state (0=policy, 1=human)
-            if self._intervention_pub is not None:
-                intervention_msg = Int8()
-                intervention_msg.data = 0 if source == Control.POLICY else 1
-                self._intervention_pub.publish(intervention_msg)
+            # Also at the feedback rate during an episode, so a recorded
+            # intervention stream has samples throughout.
+            self._publish_control()
 
             # outcome is the label so far. A reward-threshold end promotes an
             # unlabeled episode to success only after the loop returns, so that

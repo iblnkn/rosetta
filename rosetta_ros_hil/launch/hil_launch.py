@@ -15,22 +15,24 @@
 r"""
 Launch the human-in-the-loop system.
 
-Includes rosetta's own launch files for the nodes it builds on, and starts the
+Includes rosetta_ros's launch files for the nodes it builds on, and starts the
 HIL manager next to them:
 
-  robot_policy/policy_runner       rosetta's policy_runner_launch.py, its action
-                                   output remapped so the manager can mux it
+  robot_policy/policy_runner       rosetta_ros's policy_runner_launch.py, its
+                                   output under policy_remap_prefix so the
+                                   manager hands each action topic to the
+                                   policy or the human
   reward_classifier/policy_runner  the same, as a classifier (optional)
-  episode_recorder                 rosetta's episode_recorder_launch.py, recording
-                                   the real (muxed) topics
+  episode_recorder                 rosetta_ros's episode_recorder_launch.py,
+                                   recording the real action topics
   hil_manager                      this package's node
 
 Each included node gets a params file from this package's params/ layered over
-rosetta's defaults; pass your own with robot_policy_params_file:=... and so on.
+rosetta_ros's defaults; pass your own with robot_policy_params_file:=... and so on.
 
 Usage:
     ros2 launch rosetta_ros_hil hil_launch.py \\
-        action_remap_from:=/forward_position_controller/commands \\
+        contract_path:=robot_hil.yaml \\
         pretrained_name_or_path:=/path/to/policy_model
 
     ros2 launch rosetta_ros_hil hil_launch.py \\
@@ -44,48 +46,18 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration, PythonExpression
-from launch_ros.actions import LifecycleNode, PushRosNamespace, SetRemap
+from launch_ros.actions import LifecycleNode, PushRosNamespace
 
-from rosetta_ros.launch_utils import autostart_handlers, typed_config, yaml_params
-
-
-def _validate_remaps(context):
-    """Fail at launch when the remap topology doesn't match the contract.
-
-    The mux only works if the remapped topics are ones the contract declares;
-    otherwise the policy would publish straight to the real command topic with
-    no error anywhere.
-    """
-    from rosetta.contract.schema import load_contract
-
-    contract = load_contract(LaunchConfiguration("contract_path").perform(context))
-    action_topics = sorted({src.channel.topic for entry in contract.actions for src in entry.sources})
-    remap_from = LaunchConfiguration("action_remap_from").perform(context)
-    if remap_from not in action_topics:
-        raise RuntimeError(
-            f"action_remap_from '{remap_from}' is not an action topic of the contract "
-            f"(action topics: {action_topics}); the HIL mux would never intercept policy output."
-        )
-    if typed_config(context, "enable_reward_classifier", bool):
-        reward_topics = sorted({src.channel.topic for entry in contract.rewards for src in entry.sources})
-        reward_from = LaunchConfiguration("reward_remap_from").perform(context)
-        if reward_from not in reward_topics:
-            raise RuntimeError(
-                f"reward_remap_from '{reward_from}' is not a reward topic of the contract "
-                f"(reward topics: {reward_topics}); the reward mux would never intercept classifier output."
-            )
-    return []
+from rosetta_ros.launch_utils import autostart_handlers, yaml_params
 
 
-def _include(launch_file, *, namespace="", remap=None, condition=None, **arguments):
-    """Include one of rosetta's launch files in its own scope, optionally namespaced and remapped."""
+def _include(launch_file, *, namespace="", condition=None, **arguments):
+    """Include one of rosetta_ros's launch files in its own scope, optionally namespaced."""
     actions = [PushRosNamespace(namespace)] if namespace else []
-    if remap is not None:
-        actions.append(SetRemap(src=remap[0], dst=remap[1]))
     actions.append(
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(launch_file),
@@ -121,16 +93,9 @@ def generate_launch_description():
         arg("policy_type", "", "Policy architecture (empty = params file)"),
         arg("policy_device", "", "Inference device for both runners (empty = params file)"),
         arg("server_address", "", "Policy server host:port (empty = params file)"),
-        # The policy's output goes to prefix + remap_from; the manager forwards it
-        # to remap_from while the policy has control. The prefix is declared first
-        # so the derived default resolves.
-        arg("policy_remap_prefix", hil_cfg["policy_remap_prefix"], "Prefix for the remapped policy output"),
-        arg("action_remap_from", "/leader_arm/joint_states", "Action topic to mux (must be in the contract)"),
-        arg(
-            "action_remap_to",
-            [LaunchConfiguration("policy_remap_prefix"), LaunchConfiguration("action_remap_from")],
-            "Remapped policy output topic",
-        ),
+        # The policy publishes every contract action topic under this prefix;
+        # the manager forwards each to the real topic while the policy has control.
+        arg("policy_remap_prefix", hil_cfg["policy_remap_prefix"], "Prefix for the policy's output topics"),
         # Reward classifier.
         arg("enable_reward_classifier", str(hil_cfg["enable_reward_classifier"]).lower(), "Run a reward classifier"),
         arg(
@@ -142,13 +107,7 @@ def generate_launch_description():
         arg("reward_classifier_pretrained_name_or_path", "", "Trained classifier (empty = params file)"),
         arg("reward_classifier_policy_type", "", "Classifier architecture (empty = params file)"),
         arg("reward_classifier_server_address", "", "Classifier server host:port (empty = params file)"),
-        arg("reward_remap_prefix", hil_cfg["reward_remap_prefix"], "Prefix for the remapped classifier output"),
-        arg("reward_remap_from", "/reward", "Reward topic to mux (must be in the contract)"),
-        arg(
-            "reward_remap_to",
-            [LaunchConfiguration("reward_remap_prefix"), LaunchConfiguration("reward_remap_from")],
-            "Remapped classifier output topic",
-        ),
+        arg("reward_remap_prefix", hil_cfg["reward_remap_prefix"], "Prefix for the classifier's output topics"),
         # Episode recorder.
         arg(
             "episode_recorder_params_file",
@@ -172,7 +131,7 @@ def generate_launch_description():
     robot_policy = _include(
         os.path.join(rosetta_launch, "policy_runner_launch.py"),
         namespace="robot_policy",
-        remap=(LaunchConfiguration("action_remap_from"), LaunchConfiguration("action_remap_to")),
+        output_prefix=LaunchConfiguration("policy_remap_prefix"),
         params_file=LaunchConfiguration("robot_policy_params_file"),
         contract_path=LaunchConfiguration("contract_path"),
         pretrained_name_or_path=LaunchConfiguration("pretrained_name_or_path"),
@@ -193,7 +152,7 @@ def generate_launch_description():
     reward_classifier = _include(
         os.path.join(rosetta_launch, "policy_runner_launch.py"),
         namespace="reward_classifier",
-        remap=(LaunchConfiguration("reward_remap_from"), LaunchConfiguration("reward_remap_to")),
+        output_prefix=LaunchConfiguration("reward_remap_prefix"),
         condition=IfCondition(EqualsSubstitution(LaunchConfiguration("enable_reward_classifier"), "true")),
         params_file=LaunchConfiguration("reward_classifier_params_file"),
         contract_path=reward_contract,
@@ -238,7 +197,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             *launch_args,
-            OpaqueFunction(function=_validate_remaps),
             robot_policy,
             reward_classifier,
             episode_recorder,
