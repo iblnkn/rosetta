@@ -1,0 +1,10 @@
+# The reward classifier hil_launch.py starts in namespace reward_classifier
+# (enable_reward_classifier:=true), layered over rosetta's params/policy_runner.yaml.
+policy_runner:
+  ros__parameters:
+    is_classifier: true
+    pretrained_name_or_path: "checkpoints/reward_classifier"
+    policy_type: "reward_classifier"
+    server_address: "127.0.0.1:8081"
+    feedback_rate_hz: 30.0
+    launch_local_server: true

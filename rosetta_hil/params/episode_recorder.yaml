@@ -1,0 +1,5 @@
+# The episode recorder hil_launch.py starts, layered over rosetta's
+# params/episode_recorder.yaml (only the keys that differ).
+episode_recorder:
+  ros__parameters:
+    feedback_rate_hz: 30.0
