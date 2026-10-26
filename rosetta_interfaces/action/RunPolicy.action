@@ -1,0 +1,20 @@
+# Goal
+string prompt                    # Task description for policy execution
+float64 max_duration_s           # Stop the run after this long (0.0 = use the node default)
+---
+# Result
+# termination_reason values. The goal's terminal state (SUCCEEDED / CANCELED /
+# ABORTED) says whether the run reached a defined end, was taken away by a
+# client, or was stopped by the server; this field says which of those, exactly.
+string TERMINATION_COMPLETED="completed"
+string TERMINATION_TIMEOUT="timeout"
+string TERMINATION_CANCELLED="cancelled"
+string TERMINATION_NODE_DEACTIVATED="node_deactivated"
+string TERMINATION_ERROR="error"
+
+string termination_reason        # Why the run ended (one of the constants above)
+string message                   # Detail when something went wrong; empty otherwise
+---
+# Feedback
+uint32 published_actions         # Total actions published so far
+uint32 queue_depth               # Current action queue depth

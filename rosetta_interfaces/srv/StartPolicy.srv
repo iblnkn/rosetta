@@ -1,0 +1,7 @@
+# Request -- mirrors the RunPolicy goal. The policy runs asynchronously after
+# this call returns: monitor via the RunPolicy action feedback, stop via the
+# cancel_policy service; results land in the action result and the node log.
+string prompt                    # Task description for policy execution
+---
+bool accepted                    # Policy started (false: node not active / already running)
+string message                   # Rejection reason or confirmation
