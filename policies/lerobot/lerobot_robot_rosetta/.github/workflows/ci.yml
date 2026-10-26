@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      ROSDEP_SKIP_KEYS: ament_python
+      UPSTREAM_WORKSPACE: "github:iblnkn/rosetta#main"
+      # lerobot and torch are PyPI-only (not a ROS/rosdep package) — colcon
+      # build doesn't resolve a package's own install_requires the way rosdep
+      # resolves package.xml, so nothing installs them without this hook.
+      # --break-system-packages: PEP 668, required on Ubuntu 24.04.
+      # --ignore-installed: torch's dependency tree wants to upgrade packages
+      # (e.g. packaging) that are apt-installed here — pip can't uninstall
+      # those (no RECORD file), so tell it to install alongside instead.
+      # lerobot[dataset]: dataset_writer.py needs the datasets extra, which
+      # plain `pip install lerobot` (matching setup.py's bare install_requires
+      # entry) doesn't pull in.
+      # CPU-only torch index: plain `pip install torch` pulls the CUDA build
+      # and several GB of nvidia-* wheels neither needed nor usable on a
+      # GitHub Actions runner (no GPU) — the CPU wheel is a fraction of the size.
+      # protobuf/grpcio: apt's python3-grpcio pulls in old protobuf (3.21) and
+      # grpcio (1.51.1) that nominally satisfy lerobot/torch's constraints, so
+      # --ignore-installed on the first install leaves them in place; lerobot's
+      # generated gRPC code actually needs grpcio>=1.73.1 and a matching
+      # protobuf runtime. A second, explicit --ignore-installed --upgrade
+      # forces a fresh install (plain --upgrade alone would try to uninstall
+      # the apt ones first, hitting the same no-RECORD-file error
+      # --ignore-installed exists to avoid).
+      BEFORE_BUILD_TARGET_WORKSPACE: "pip install --break-system-packages --ignore-installed 'lerobot[dataset]' torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple && pip install --break-system-packages --ignore-installed --upgrade protobuf grpcio"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/main/ruff.toml -o ruff.toml
+      - uses: astral-sh/ruff-action@v3
+        with:
+          # Pinned to the workspace pixi env's ruff so CI and `pixi run lint` agree.
+          version: "0.15.21"
+          args: check .
