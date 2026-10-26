@@ -155,7 +155,14 @@ adapter's. `params/policy_runner.yaml` sets the third.
 
 Launch arguments: `params_file`, `contract_path`,
 `pretrained_name_or_path`, `policy_type`, `policy_device`, `server_address`,
-`launch_local_server`, `use_sim_time`, `log_level`, `configure`, `activate`.
+`launch_local_server`, `use_sim_time`, `output_prefix`, `log_level`,
+`configure`, `activate`.
+
+`output_prefix` moves every topic the runner can publish, the contract's
+action and reward topics, under a prefix: `output_prefix:=/hil/policy`
+publishes `/arm/joint_commands` as `/hil/policy/arm/joint_commands`. Use it to
+put something between the runner and the robot, such as a mux. The
+[Route commands](../how-to/route-commands.md) page covers the options.
 
 With `use_sim_time`, observations and actions pace on the sim clock at the
 contract `fps`.
@@ -169,4 +176,5 @@ contract `fps`.
 | `~/result` | topic `rosetta_interfaces/msg/RunPolicyResult`. The result fields, once per run. Transient-local, so a late subscriber gets the last one. |
 
 Under `rosetta_ros_hil`'s `hil_launch.py` the runner sits in namespace
-`robot_policy`, so the action is `/robot_policy/run_policy`.
+`robot_policy`, so the action is `/robot_policy/run_policy`, and its output is
+under `output_prefix:=/hil/policy`.

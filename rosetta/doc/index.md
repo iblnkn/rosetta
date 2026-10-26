@@ -61,6 +61,7 @@ how-to/write-a-contract
 how-to/prepare-a-dataset
 how-to/train
 how-to/deploy-a-policy
+how-to/route-commands
 how-to/human-in-the-loop
 how-to/add-a-message-type
 how-to/add-a-framework

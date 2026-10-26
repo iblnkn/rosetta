@@ -30,6 +30,11 @@ ros2 launch rosetta_ros episode_recorder_launch.py contract_path:=robot.yaml
 
 The launch file prints every argument with `--show-args`.
 
+To put a mux or a safety node between the policy and the robot, launch the
+policy runner with `output_prefix:=/policy`. Every action topic of the
+contract is then published under `/policy`, and the mux publishes the real
+topics.
+
 ## Documentation
 
 Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**

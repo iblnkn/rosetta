@@ -22,22 +22,29 @@ Rosetta's Contract reference page.
 ```bash
 ros2 launch rosetta_ros_hil hil_launch.py \
     contract_path:=robot_hil.yaml \
-    action_remap_from:=/forward_position_controller/commands \
     pretrained_name_or_path:=<checkpoint> \
     policy_type:=act
 ```
 
-`action_remap_from` is the contract's action topic. The launch fails if it
-isn't one. With a reward classifier, `reward_remap_from` names the reward
-topic the same way. Run `--show-args` for every argument; `contract_path`
-defaults to this package's `so_101_hil.yaml`.
+Run `--show-args` for every argument; `contract_path` defaults to this
+package's `so_101_hil.yaml`.
 
 The launch file includes `rosetta_ros`'s `policy_runner_launch.py` (in namespace
 `robot_policy`) and `episode_recorder_launch.py`, and starts the manager next
 to them. With `enable_reward_classifier:=true` it includes the policy runner a
-second time, as a classifier in namespace `reward_classifier`. The runner
-publishes to `/hil/policy<topic>`, and the manager forwards to `<topic>` while
-the policy has control.
+second time, as a classifier in namespace `reward_classifier`.
+
+The policy runner publishes every action topic of the contract under
+`policy_remap_prefix` (`/hil/policy<topic>`), through `policy_runner_launch.py`'s
+`output_prefix`. The manager forwards each one to `<topic>` while the policy has
+control. While the human has control it drops the policy's commands and
+re-encodes each teleop input onto the action it targets, so the device and the
+robot may use different message types and units. Teleop feedback reaches the
+device whoever has control. The classifier's reward topics go through
+`reward_remap_prefix` the same way.
+
+There is no command watchdog on the human's side: while a person drives they
+are the safety. The policy's commands keep the policy runner's own watchdog.
 
 Each included node takes a params file from this package's `params/`, layered
 over `rosetta_ros`'s defaults: `robot_policy.yaml`, `reward_classifier.yaml` (which
@@ -108,7 +115,7 @@ episode to stop.
 | `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
 | `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. Refused with no active episode. |
 | `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label. Refused with no active episode. |
-| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Published at the feedback rate while an episode runs. |
+| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Transient-local. Published on every change, between episodes too, and at the feedback rate while an episode runs. |
 | `~/status` | topic `rosetta_hil_interfaces/msg/ManageEpisodeStatus` | The feedback fields, at the feedback rate while an episode runs, however it started. |
 | `~/result` | topic `rosetta_hil_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode. Transient-local, so a late subscriber gets the last one. |
 

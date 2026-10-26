@@ -6,6 +6,17 @@ Forthcoming
 -----------
 * Renamed from ``rosetta_hil``: a ROS app built on ``rosetta_ros``, named like
   MoveIt's ``moveit_ros_*`` packages. ``ros2 launch rosetta_ros_hil hil_launch.py``.
+* Breaking: ``action_remap_from`` and ``reward_remap_from`` are gone. The policy
+  and the classifier publish every contract action and reward topic under
+  ``policy_remap_prefix`` / ``reward_remap_prefix``, so takeover covers every
+  action topic (before, only one was intercepted).
+* Takeover forwarding lives in ``forwarding.py`` and works per topic: a topic
+  shared by several sources is forwarded once, each teleop input resolves to
+  exactly one action (an ambiguous target fails configure), and teleop
+  commands and feedback carry a stamp.
+* ``hil_intervention`` is transient-local and published on every change,
+  between episodes too, as well as at the feedback rate during an episode.
+* ``hil_episode`` imports nothing from ROS.
 * Imports the node toolkit from ``rosetta_ros`` and includes its launch files.
 * Owns its teleop event names (``HIL_EVENT_NAMES``) and logs a warning at
   configure for contract event names it ignores.
