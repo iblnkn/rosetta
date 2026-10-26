@@ -50,7 +50,7 @@ class GoodWriter:
 
 
 class GoodRunner:
-    def setup(self, node, contract):
+    def setup(self, host, contract):
         pass
 
     def run(self, frames, *, task, stop_event):
@@ -80,7 +80,7 @@ class NeedsArgs:
     def __init__(self, required):
         self.required = required
 
-    def setup(self, node, contract):
+    def setup(self, host, contract):
         pass
 
     def run(self, frames, *, task, stop_event):

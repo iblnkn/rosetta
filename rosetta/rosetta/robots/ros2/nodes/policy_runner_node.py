@@ -70,6 +70,7 @@ from rosetta.robots.ros2.node_utils import (
     spin_lifecycle_node,
 )
 from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta.robots.ros2.runner_host import RosParameterHost
 from rosetta.robots.ros2.topic_bridge import TopicBridge
 from rosetta_interfaces.action import RunPolicy
 from rosetta_interfaces.msg import RunPolicyResult, RunPolicyStatus
@@ -203,7 +204,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         # teardown() must still reach in order to release it.
         framework = self.get_parameter("framework").value
         self._runner = load_policy_runner(framework)
-        self._runner.setup(self, self._contract)
+        self._runner.setup(RosParameterHost(self), self._contract)
 
         self._action_server = ActionServer(
             self,

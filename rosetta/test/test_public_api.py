@@ -88,9 +88,9 @@ PUBLIC_API = {
     "rosetta.frames.protocols": {"FrameIO"},
     "rosetta.policies": {
         "DatasetWriter",
-        "NodeLike",
         "PolicyRunner",
         "RunnerFeedback",
+        "RunnerHost",
         "RunnerResult",
         "available_dataset_writers",
         "available_policy_runners",

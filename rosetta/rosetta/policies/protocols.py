@@ -42,9 +42,9 @@ if TYPE_CHECKING:
 class RunnerFeedback:
     """Progress snapshot a :class:`PolicyRunner` emits during execution.
 
-    Keeps the node's ROS feedback message separate from adapter internals.
-    The counters map onto ``uint32`` ROS feedback fields and must stay
-    non-negative.
+    Keeps the host's feedback message separate from adapter internals. The
+    counters must stay non-negative: hosts may carry them as unsigned fields
+    (the ROS 2 host uses ``uint32``).
     """
 
     queue_depth: int = 0
@@ -77,22 +77,30 @@ class RunnerResult:
 # =============================================================================
 
 
-class NodeLike(Protocol):
-    """The slice of the hosting ``rclpy`` node a :class:`PolicyRunner` may use.
+class RunnerHost(Protocol):
+    """What a :class:`PolicyRunner` gets from the process hosting it: configuration and a logger.
 
-    Adapters read their configuration through ROS parameters on the hosting
-    node; pinning that surface to these four methods keeps the seam typed
-    without importing ``rclpy``. Deliberately not ``runtime_checkable`` —
-    it exists for type checking, not isinstance dispatch.
+    A runner declares each setting it reads, with a default, then reads it by
+    name. The host decides where values come from: the ROS 2 host
+    (``rosetta_ros``) maps them onto node parameters, so launch files and
+    params files set them. Hosts may declare shared settings first (e.g.
+    ``contract_path``, ``pretrained_name_or_path``), which is why
+    :meth:`declare` must be a no-op for a name that exists. Deliberately not
+    ``runtime_checkable``: it exists for type checking, not isinstance dispatch.
     """
 
-    def declare_parameter(self, name: str, value: Any = ..., descriptor: Any = ...) -> Any: ...
+    def declare(self, name: str, default: Any, description: str = "", read_only: bool = False) -> None:
+        """Declare setting ``name`` with ``default``, unless it is already declared."""
+        ...
 
-    def has_parameter(self, name: str) -> bool: ...
+    def get(self, name: str) -> Any:
+        """The current value of declared setting ``name``."""
+        ...
 
-    def get_parameter(self, name: str) -> Any: ...
-
-    def get_logger(self) -> Any: ...
+    @property
+    def logger(self) -> Any:
+        """A logger with ``debug``, ``info``, ``warning`` and ``error`` methods."""
+        ...
 
 
 @runtime_checkable
@@ -169,7 +177,7 @@ class PolicyRunner(Protocol):
 
     All framework specifics (server/checkpoint params, control-loop strategy)
     live here so the hosting node stays framework-agnostic. The node calls
-    :meth:`setup` once (the runner declares and reads its own ROS parameters),
+    :meth:`setup` once (the runner declares and reads its own settings on the host),
     then :meth:`run` per goal. The node polls :meth:`feedback` on its own
     cadence. To stop a run it BOTH sets the run's ``stop_event`` AND calls
     :meth:`request_stop` — see those docstrings for why both exist.
@@ -183,15 +191,13 @@ class PolicyRunner(Protocol):
     implementations run their own fps loops.
     """
 
-    def setup(self, node: NodeLike, contract: Contract) -> None:
-        """Declare/read runner ROS parameters on ``node`` and prepare to run.
+    def setup(self, host: RunnerHost, contract: Contract) -> None:
+        """Declare and read runner settings on ``host`` and prepare to run.
 
-        Called after the contract is loaded (e.g. in the node's configure
-        transition). ``node`` is the hosting ``rclpy`` lifecycle node. May run
-        again after a cleanup -> configure lifecycle cycle, and the host may
-        have pre-declared shared parameters (e.g. ``pretrained_name_or_path``)
-        -- guard every declaration with ``has_parameter`` so neither a second
-        pass nor a host-declared parameter makes ``declare_parameter`` raise.
+        Called after the contract is loaded (e.g. in the ROS 2 node's configure
+        transition). May run again after a cleanup -> configure lifecycle
+        cycle; :meth:`RunnerHost.declare` is a no-op for names that exist, so
+        neither a second pass nor a host-declared setting conflicts.
         """
         ...
 

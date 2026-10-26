@@ -82,7 +82,7 @@ def test_configure_with_unknown_framework_fails(tmp_path):
 class _SetupOnlyRunner:
     """Minimal PolicyRunner stand-in for configure/cleanup wiring tests."""
 
-    def setup(self, node, contract):
+    def setup(self, host, contract):
         pass
 
     def request_stop(self):

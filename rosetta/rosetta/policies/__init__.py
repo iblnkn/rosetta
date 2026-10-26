@@ -49,7 +49,7 @@ hosting node *resolves* one by name at runtime.
 
 from __future__ import annotations
 
-from .protocols import DatasetWriter, NodeLike, PolicyRunner, RunnerFeedback, RunnerResult
+from .protocols import DatasetWriter, PolicyRunner, RunnerFeedback, RunnerHost, RunnerResult
 from .registry import (
     available_dataset_writers,
     available_policy_runners,
@@ -59,9 +59,9 @@ from .registry import (
 
 __all__ = [
     "DatasetWriter",
-    "NodeLike",
     "PolicyRunner",
     "RunnerFeedback",
+    "RunnerHost",
     "RunnerResult",
     "available_dataset_writers",
     "available_policy_runners",
