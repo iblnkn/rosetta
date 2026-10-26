@@ -17,7 +17,7 @@
 Rosetta: LeRobot Robot adapter over the framework-neutral TopicBridge.
 
 The ROS2 plumbing (subscriptions, lifecycle publishers, watchdog, resampling)
-lives in rosetta.robots.ros2.topic_bridge. This module presents that bridge as a LeRobot
+lives in rosetta_ros.topic_bridge. This module presents that bridge as a LeRobot
 Robot. It translates between the frame dict ({contract_key: np.ndarray | str}) and
 LeRobot's flattened observation/action shape: images by short key, state and
 action as individual namespaced floats.
@@ -44,10 +44,10 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from rclpy.parameter import Parameter
 
 from rosetta.frames.layout import FrameLayout
-from rosetta.robots.ros2.node_host import NodeHost
-from rosetta.robots.ros2.rclpy_utils import require_transition_success
-from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
-from rosetta.robots.ros2.topic_bridge import TopicBridge
+from rosetta_ros.node_host import NodeHost
+from rosetta_ros.rclpy_utils import require_transition_success
+from rosetta_ros.rosetta_lifecycle_node import BridgeLifecycleNode
+from rosetta_ros.topic_bridge import TopicBridge
 
 from .config_rosetta import RosettaConfig
 

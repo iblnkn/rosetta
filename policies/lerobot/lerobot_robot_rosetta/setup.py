@@ -42,7 +42,7 @@ setup(
         "numpy",
         "lerobot",
         "rclpy",
-        "rosetta",  # Depends on rosetta.contract/frames + rosetta.robots.ros2
+        "rosetta",  # Depends on rosetta.contract/frames + rosetta_ros
     ],
     extras_require={"test": ["pytest"]},
     zip_safe=True,

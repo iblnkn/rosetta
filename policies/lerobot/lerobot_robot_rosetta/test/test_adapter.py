@@ -30,7 +30,7 @@ from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
 
-CONTRACTS = Path(get_package_share_directory("rosetta")) / "contracts"
+CONTRACTS = Path(get_package_share_directory("rosetta_ros")) / "contracts"
 
 
 def _robot(contract_name):
