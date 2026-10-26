@@ -1,5 +1,5 @@
 # Test fixture: so_101 with an input-only teleop device and Joy events, a copy
-# of rosetta_hil's so_101_hil.yaml so this package's tests don't depend on rosetta_hil.
+# of rosetta_ros_hil's so_101_hil.yaml so this package's tests don't depend on rosetta_ros_hil.
 # See rosetta's contracts/stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101
@@ -62,7 +62,7 @@ teleop:
 
   events:
     # This contract wires up 4 of the 6 events the HIL manager acts on
-    # (HIL_EVENT_NAMES in rosetta_hil/hil_episode.py; the README says what
+    # (HIL_EVENT_NAMES in rosetta_ros_hil/hil_episode.py; the README says what
     # each does), each on its OWN button
     # so they fire independently. Nothing here ever deletes a
     # recording; a bad take is filtered later from the recorded reward

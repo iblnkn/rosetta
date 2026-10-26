@@ -53,7 +53,7 @@ from .config_rosetta_teleop import RosettaTeleopConfig
 # Contract event names are open; names not mapped here are ignored. The episode-ending
 # events compose two lerobot events (a reward label plus TERMINATE_EPISODE), and
 # ``start_episode`` has no lerobot counterpart at all (lerobot's record loop
-# starts episodes itself), so the rosetta-native path (rosetta_hil's HIL
+# starts episodes itself), so the rosetta-native path (rosetta_ros_hil's HIL
 # manager) is the only consumer of that event.
 EVENT_NAME_TO_ENUMS: dict[str, tuple[TeleopEvents, ...]] = {
     "is_intervention": (TeleopEvents.IS_INTERVENTION,),
@@ -106,7 +106,7 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
             if unmapped:
                 self.get_logger().info(
                     f"Teleop events with no lerobot mapping, ignored on this path "
-                    f"(a HIL app such as rosetta_hil handles them): {unmapped}"
+                    f"(a HIL app such as rosetta_ros_hil handles them): {unmapped}"
                 )
         self.get_logger().info(
             f"Configured: {len(self._config.input_specs)} inputs, {len(self._config.feedback_specs)} feedback"

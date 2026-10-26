@@ -54,13 +54,13 @@ forward back to the operator (`origin`).
 On this LeRobot-native path, `end_success` and `end_failure` assert the
 matching reward event together with `TERMINATE_EPISODE`, and `start_episode`
 has no LeRobot counterpart (it is consumed by the HIL manager in
-[`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil) on the ROS 2-native path).
+[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil) on the ROS 2-native path).
 
 Schema and a worked example:
 [contract reference](https://iblnkn.github.io/rosetta/reference/contract.html#teleop)
-and the `so_101_hil.yaml` contract shipped with `rosetta_hil`. For the ROS 2-native
+and the `so_101_hil.yaml` contract shipped with `rosetta_ros_hil`. For the ROS 2-native
 loop, where the HIL manager muxes policy and teleop for you, see
-[`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil).
+[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil).
 
 ## Documentation
 
