@@ -12,21 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Episode state and rules for the HIL manager, with no ROS node involved."""
+"""Episode state and rules for the HIL manager. Imports nothing from ROS.
+
+The termination reasons and outcomes are spelled here as plain strings;
+``test/test_hil_vocabulary.py`` checks them against ``ManageEpisode`` and
+``rosetta_ros.node_utils``.
+"""
 
 from __future__ import annotations
 
 import threading
 from enum import StrEnum
 
-from rosetta_hil_interfaces.action import ManageEpisode
-from rosetta_ros.node_utils import TERMINATION_TIMEOUT
-
-# HIL's own vocabulary, declared by ManageEpisode on top of the shared reasons.
-TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD
-OUTCOME_SUCCESS = ManageEpisode.Result.OUTCOME_SUCCESS
-OUTCOME_FAILURE = ManageEpisode.Result.OUTCOME_FAILURE
-OUTCOME_UNLABELED = ManageEpisode.Result.OUTCOME_UNLABELED
+# A shared reason (rosetta_ros.node_utils), and HIL's own, declared by
+# ManageEpisode on top of the shared ones.
+TERMINATION_TIMEOUT = "timeout"
+TERMINATION_REWARD_THRESHOLD = "reward_threshold"
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILURE = "failure"
+OUTCOME_UNLABELED = "unlabeled"
 
 # The teleop event names this manager acts on. The contract's event names are
 # open, so other names belong to other consumers and are ignored here.
