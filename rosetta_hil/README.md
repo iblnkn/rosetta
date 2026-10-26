@@ -13,7 +13,7 @@ task.
 ## Declare the teleop device
 
 Add a `teleop` section to the contract: an `input` whose `target` is the
-action topic, and `events` mapping event names to buttons. Rosetta's
+action topic, and `events` mapping event names to buttons. This package's
 `contracts/so_101_hil.yaml` is a complete example, and the schema is on
 Rosetta's Contract reference page.
 
@@ -30,7 +30,7 @@ ros2 launch rosetta_hil hil_launch.py \
 `action_remap_from` is the contract's action topic. The launch fails if it
 isn't one. With a reward classifier, `reward_remap_from` names the reward
 topic the same way. Run `--show-args` for every argument; `contract_path`
-defaults to Rosetta's `so_101_hil.yaml`.
+defaults to this package's `so_101_hil.yaml`.
 
 The launch file includes Rosetta's own `policy_runner_launch.py` (in namespace
 `robot_policy`) and `episode_recorder_launch.py`, and starts the manager next
@@ -84,7 +84,7 @@ episode to stop.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `contract_path` | `""` | Required. The launch file defaults to Rosetta's `contracts/so_101_hil.yaml`. |
+| `contract_path` | `""` | Required. The launch file defaults to this package's `contracts/so_101_hil.yaml`. |
 | `enable_recording` | `true` | Send a `RecordEpisode` goal per episode. |
 | `manage_policy_lifecycle` | `true` | Send and cancel a `RunPolicy` goal per episode. |
 | `enable_reward_classifier` | `false` | |

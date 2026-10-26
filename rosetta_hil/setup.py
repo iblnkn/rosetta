@@ -14,6 +14,7 @@ setup(
         (os.path.join("share", package_name), ["package.xml"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*_launch.py")),
         (os.path.join("share", package_name, "params"), glob("params/*.yaml")),
+        (os.path.join("share", package_name, "contracts"), glob("contracts/*.yaml")),
     ],
     install_requires=["setuptools", "pyyaml", "rclpy"],
     entry_points={

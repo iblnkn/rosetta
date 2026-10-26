@@ -7,4 +7,4 @@ launching, running an episode, and its parameters and interfaces.
 
 The teleop device is declared in the contract's `teleop` section, described on
 the [Contract](../reference/contract.md#teleop) page.
-`contracts/so_101_hil.yaml` is a complete example.
+`rosetta_hil`'s `contracts/so_101_hil.yaml` is a complete example.

@@ -36,7 +36,7 @@ from rosetta.contract.specs import (
 from rosetta.frames.codecs import decode_value, encode_value
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "contracts"
-TELEOP_CONTRACTS = ["stone.yaml", "so_101_hil.yaml"]
+TELEOP_CONTRACTS = ["stone.yaml"]
 
 
 def _joint_state(spec) -> JointState:

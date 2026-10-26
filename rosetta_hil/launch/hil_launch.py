@@ -112,7 +112,7 @@ def generate_launch_description():
         return DeclareLaunchArgument(name, default_value=default, description=description)
 
     launch_args = [
-        arg("contract_path", os.path.join(rosetta_share, "contracts", "so_101_hil.yaml"), "Contract for every node"),
+        arg("contract_path", os.path.join(hil_share, "contracts", "so_101_hil.yaml"), "Contract for every node"),
         arg("log_level", "info", "Logging level (debug, info, warn, error)"),
         arg("configure", "true", "Auto-configure every node on startup"),
         arg("activate", "true", "Auto-activate every node after configure"),

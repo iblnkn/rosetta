@@ -333,11 +333,10 @@ through a checkpoint warns about each such path before loading.
 
 ## Example contracts
 
-The repository ships four under `contracts/`:
+The `rosetta` package ships three under `contracts/`:
 
 | File | Shows |
 |---|---|
 | `so_101.yaml` | Three compressed cameras, JointState state and action, `rad2deg`. |
-| `so_101_hil.yaml` | The same plus `x-qos` anchors, teleop input, Joy events, a reward. |
 | `stone.yaml` | Every section, annotated. Multi-source state, `asof`, custom codecs, split action, `clamp` with `zeros`. |
 | `turtlebot3.yaml` | Two cameras, a 16-wide state from wheels, IMU and odometry, a TwistStamped action with `zeros`. |

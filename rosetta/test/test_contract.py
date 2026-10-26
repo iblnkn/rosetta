@@ -54,7 +54,7 @@ observations:
 """
 
 
-@pytest.mark.parametrize("name", ["so_101.yaml", "so_101_hil.yaml", "turtlebot3.yaml", "stone.yaml"])
+@pytest.mark.parametrize("name", ["so_101.yaml", "turtlebot3.yaml", "stone.yaml"])
 def test_bundled_contracts_load(name):
     contract = load_contract(CONTRACTS_DIR / name)
     assert contract.robot_type

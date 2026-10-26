@@ -1,5 +1,5 @@
 # so_101 with human-in-the-loop: teleop intervention + reward classifier.
-# See stone.yaml for the annotated tour of the contract format.
+# See rosetta's contracts/stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101
 robot_interface: ros2
@@ -60,8 +60,9 @@ teleop:
       apply: [rad2deg]
 
   events:
-    # This contract wires up 4 of the 6 teleop events (TELEOP_EVENT_NAMES lists
-    # them; rosetta_hil's README says what each does), each on its OWN button
+    # This contract wires up 4 of the 6 events the HIL manager acts on
+    # (HIL_EVENT_NAMES in rosetta_hil/hil_episode.py; the README says what
+    # each does), each on its OWN button
     # so they fire independently. Nothing here ever deletes a
     # recording; a bad take is filtered later from the recorded reward
     # stream, not discarded at record time.
