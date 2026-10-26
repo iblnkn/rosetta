@@ -17,7 +17,7 @@
 LeRobot DatasetWriter.
 
 Consumes framework-neutral frame dicts and writes a LeRobotDataset (Parquet +
-MP4). The frame dicts from rosetta.robots.ros2.bag_frames.iter_bag_frames already match
+MP4). The frame dicts from rosetta_ros.offline.bag_frames.iter_bag_frames already match
 what LeRobotDataset.add_frame expects, so this writer just handles the dataset
 lifecycle and builds the LeRobot feature schema.
 """

@@ -45,7 +45,7 @@ from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
 
-CONTRACTS = sorted((Path(get_package_share_directory("rosetta")) / "contracts").glob("*.yaml"))
+CONTRACTS = sorted((Path(get_package_share_directory("rosetta_ros")) / "contracts").glob("*.yaml"))
 BOUNDARY_MARKERS = {"is_first", "is_last", "is_terminal"}
 
 
