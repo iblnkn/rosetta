@@ -42,10 +42,10 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 from rosidl_runtime_py.utilities import get_message
 
 from rosetta.frames.layout import FrameLayout
-from rosetta.robots.ros2.field_access import resolve_indexed
-from rosetta.robots.ros2.node_host import NodeHost
-from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict, require_transition_success
-from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
+from rosetta_ros.field_access import resolve_indexed
+from rosetta_ros.node_host import NodeHost
+from rosetta_ros.rclpy_utils import qos_profile_from_dict, require_transition_success
+from rosetta_ros.rosetta_lifecycle_node import BridgeLifecycleNode
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 

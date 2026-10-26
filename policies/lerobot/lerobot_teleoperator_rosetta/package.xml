@@ -11,6 +11,7 @@
 
   <depend>rclpy</depend>
   <depend>rosetta</depend>
+  <depend>rosetta_ros</depend>
   <depend>python3-numpy</depend>
 
   <test_depend>ament_index_python</test_depend>
