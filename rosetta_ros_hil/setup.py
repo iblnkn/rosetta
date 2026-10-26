@@ -3,7 +3,7 @@ from glob import glob
 
 from setuptools import find_packages, setup
 
-package_name = "rosetta_hil"
+package_name = "rosetta_ros_hil"
 
 setup(
     name=package_name,
@@ -19,7 +19,7 @@ setup(
     install_requires=["setuptools", "pyyaml", "rclpy"],
     entry_points={
         "console_scripts": [
-            "hil_manager_node = rosetta_hil.hil_manager_node:main",
+            "hil_manager_node = rosetta_ros_hil.hil_manager_node:main",
         ],
     },
     extras_require={"test": ["pytest"]},

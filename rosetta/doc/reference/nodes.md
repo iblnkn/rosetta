@@ -7,7 +7,7 @@ deployment values as launch arguments. An empty launch argument keeps the
 params-file value, except `contract_path`, which is passed as given. Both
 launch files work when included under a namespace. The human-in-the-loop manager is a
 separate app built on these nodes, in
-[`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil).
+[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil).
 
 ```bash
 ros2 launch rosetta_ros <launch_file> --show-args
@@ -168,5 +168,5 @@ contract `fps`.
 | `~/status` | topic `rosetta_interfaces/msg/RunPolicyStatus`. The feedback fields, at `feedback_rate_hz` while a run is in progress, however it started. |
 | `~/result` | topic `rosetta_interfaces/msg/RunPolicyResult`. The result fields, once per run. Transient-local, so a late subscriber gets the last one. |
 
-Under `rosetta_hil`'s `hil_launch.py` the runner sits in namespace
+Under `rosetta_ros_hil`'s `hil_launch.py` the runner sits in namespace
 `robot_policy`, so the action is `/robot_policy/run_policy`.

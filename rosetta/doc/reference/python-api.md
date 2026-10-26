@@ -26,7 +26,7 @@ Core imports no robot middleware, so these modules work without ROS.
 
 ## ROS 2 modules
 
-The node toolkit apps such as `rosetta_hil` build on.
+The node toolkit apps such as `rosetta_ros_hil` build on.
 
 | Module | Provides | Needs ROS |
 |---|---|---|

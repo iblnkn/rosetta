@@ -31,13 +31,6 @@ import pytest
 from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
 
-from rosetta_hil.hil_episode import (
-    OUTCOME_FAILURE,
-    OUTCOME_SUCCESS,
-    OUTCOME_UNLABELED,
-    TERMINATION_REWARD_THRESHOLD,
-)
-from rosetta_hil.hil_manager_node import HilManagerNode
 from rosetta_hil_interfaces.msg import ManageEpisodeResult
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
@@ -45,6 +38,13 @@ from rosetta_ros.node_utils import (
     TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
 )
+from rosetta_ros_hil.hil_episode import (
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    OUTCOME_UNLABELED,
+    TERMINATION_REWARD_THRESHOLD,
+)
+from rosetta_ros_hil.hil_manager_node import HilManagerNode
 
 # events_spec.select maps event name -> Joy selector. Button layout:
 # 0=is_intervention, 1=end_success, 2=end_failure, 3=success, 4=failure, 5=start_episode.

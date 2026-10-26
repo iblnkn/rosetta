@@ -309,7 +309,7 @@ teleop:
 Event names are open. Rosetta loads any name, and each consumer acts on the
 names it knows and logs the ones it ignores, so one contract
 can serve several consumers. The human-in-the-loop manager's names are in the
-[`rosetta_hil` README](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil),
+[`rosetta_ros_hil` README](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil),
 and the LeRobot teleoperator maps its names onto LeRobot's `TeleopEvents`.
 Events are edge-triggered and never resampled. A `feedback` source must not declare
 `safety`.

@@ -22,7 +22,7 @@ from sensor_msgs.msg import JointState
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_teleop_input_specs
 from rosetta.frames.codecs import decode_value, encode_value
-from rosetta_hil.hil_episode import ignored_events
+from rosetta_ros_hil.hil_episode import ignored_events
 
 CONTRACT = Path(__file__).resolve().parent.parent / "contracts" / "so_101_hil.yaml"
 

@@ -14,7 +14,7 @@
 
 """Shipped teleop wiring survives the HIL node's decode -> encode hop.
 
-rosetta_hil's HIL manager forwards teleop input as decode(teleop spec) -> encode(target
+rosetta_ros_hil's HIL manager forwards teleop input as decode(teleop spec) -> encode(target
 action spec), and feedback as decode(origin observation spec) -> encode(feedback
 spec). These tests make the same calls on the shipped contracts, so a width or
 unit mismatch fails here instead of on every message at runtime.

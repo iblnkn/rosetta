@@ -1,4 +1,4 @@
-# rosetta_hil
+# rosetta_ros_hil
 
 A human-in-the-loop episode manager built on
 [Rosetta](https://github.com/iblnkn/rosetta). It runs a policy with a teleop
@@ -6,7 +6,7 @@ device ready to take over, an optional reward classifier, and the episode
 recorder, and reports how each episode ended and whether the robot did the
 task.
 
-`rosetta_hil` uses only the public Python API of `rosetta` and `rosetta_ros`
+`rosetta_ros_hil` uses only the public Python API of `rosetta` and `rosetta_ros`
 and their actions (`RecordEpisode`, `RunPolicy`). Its own interfaces live in
 [`rosetta_hil_interfaces`](../rosetta_hil_interfaces).
 
@@ -20,7 +20,7 @@ Rosetta's Contract reference page.
 ## Launch
 
 ```bash
-ros2 launch rosetta_hil hil_launch.py \
+ros2 launch rosetta_ros_hil hil_launch.py \
     contract_path:=robot_hil.yaml \
     action_remap_from:=/forward_position_controller/commands \
     pretrained_name_or_path:=<checkpoint> \

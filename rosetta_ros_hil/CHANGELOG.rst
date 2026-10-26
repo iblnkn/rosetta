@@ -1,9 +1,11 @@
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Changelog for package rosetta_hil
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Changelog for package rosetta_ros_hil
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 Forthcoming
 -----------
+* Renamed from ``rosetta_hil``: a ROS app built on ``rosetta_ros``, named like
+  MoveIt's ``moveit_ros_*`` packages. ``ros2 launch rosetta_ros_hil hil_launch.py``.
 * Imports the node toolkit from ``rosetta_ros`` and includes its launch files.
 * Owns its teleop event names (``HIL_EVENT_NAMES``) and logs a warning at
   configure for contract event names it ignores.
@@ -22,4 +24,4 @@ Forthcoming
 * ``hil_manager_node``, ``hil_launch.py`` and ``params/hil_manager.yaml`` moved
   here from ``rosetta``. The node uses only Rosetta's public Python API, and its
   interfaces moved to ``rosetta_hil_interfaces``. Launch with
-  ``ros2 launch rosetta_hil hil_launch.py``.
+  ``ros2 launch rosetta_ros_hil hil_launch.py``.

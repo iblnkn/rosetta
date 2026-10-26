@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>rosetta_hil</name>
+  <name>rosetta_ros_hil</name>
   <version>0.2.0</version>
   <description>Human-in-the-loop episode manager built on Rosetta</description>
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>

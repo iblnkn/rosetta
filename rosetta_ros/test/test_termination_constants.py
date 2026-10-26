@@ -20,7 +20,7 @@ rather than restating them -- so what is left to check is coverage: that
 ``RecordEpisode`` declares everything the recorder can report, and so on.
 
 Also pins the shape of the vocabulary: no core result carries ``outcome``
-(apps such as rosetta_hil add it where a task verdict is meaningful), and no
+(apps such as rosetta_ros_hil add it where a task verdict is meaningful), and no
 result carries a ``success`` flag.
 """
 

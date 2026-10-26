@@ -27,7 +27,7 @@ The node acts as an orchestrator:
 - Monitors episode termination conditions (timeout, human stop, reward threshold)
 
 Usage:
-    ros2 launch rosetta_hil hil_launch.py
+    ros2 launch rosetta_ros_hil hil_launch.py
 
     ros2 action send_goal /manage_episode \\
         rosetta_hil_interfaces/action/ManageEpisode \\
@@ -56,16 +56,6 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 from rosetta.frames.codecs import decode_value, encode_value
-from rosetta_hil.hil_episode import (
-    HIL_EVENT_NAMES,
-    OUTCOME_UNLABELED,
-    Control,
-    EdgeDetector,
-    EpisodeState,
-    ignored_events,
-    resolve_outcome,
-    termination_reason,
-)
 from rosetta_hil_interfaces.action import ManageEpisode
 from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_hil_interfaces.srv import StartHILEpisode
@@ -84,6 +74,16 @@ from rosetta_ros.node_utils import (
 )
 from rosetta_ros.rclpy_utils import qos_profile_from_dict
 from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta_ros_hil.hil_episode import (
+    HIL_EVENT_NAMES,
+    OUTCOME_UNLABELED,
+    Control,
+    EdgeDetector,
+    EpisodeState,
+    ignored_events,
+    resolve_outcome,
+    termination_reason,
+)
 
 
 class HilManagerNode(RosettaLifecycleNode):

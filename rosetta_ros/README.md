@@ -10,7 +10,7 @@ It provides:
 - `TopicBridge`, which samples subscriptions into frames and publishes actions
 - the `episode_recorder_node`, `policy_runner_node` and `episode_keyboard_node` nodes, with their launch files and params
 - `rosetta_port`, which converts recorded bags into datasets
-- the node toolkit (`RosettaLifecycleNode`, `node_utils`, `child_goals`, ...) that apps such as [`rosetta_hil`](../rosetta_hil) build on
+- the node toolkit (`RosettaLifecycleNode`, `node_utils`, `child_goals`, ...) that apps such as [`rosetta_ros_hil`](../rosetta_ros_hil) build on
 - the example contracts in `contracts/`
 
 ## Build

@@ -226,7 +226,7 @@ def _teleop_feedback(feedback_source):
 def test_teleop_feedback_requires_encoder():
     """Teleop feedback gets the same encoder check as the other publish paths
     (actions, reward-as-action), so failure comes at load, not at first
-    publish in rosetta_hil's HIL manager."""
+    publish in rosetta_ros_hil's HIL manager."""
     c = _teleop_feedback(_source("/leader/fb", "my_msgs/msg/NoEncoder", ["a"]))
     with pytest.raises(ContractValidationError, match="No encoder registered"):
         list(iter_teleop_feedback_specs(c))

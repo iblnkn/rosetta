@@ -29,15 +29,15 @@ Each included node gets a params file from this package's params/ layered over
 rosetta's defaults; pass your own with robot_policy_params_file:=... and so on.
 
 Usage:
-    ros2 launch rosetta_hil hil_launch.py \\
+    ros2 launch rosetta_ros_hil hil_launch.py \\
         action_remap_from:=/forward_position_controller/commands \\
         pretrained_name_or_path:=/path/to/policy_model
 
-    ros2 launch rosetta_hil hil_launch.py \\
+    ros2 launch rosetta_ros_hil hil_launch.py \\
         enable_reward_classifier:=true \\
         reward_classifier_pretrained_name_or_path:=/path/to/reward_model
 
-    ros2 launch rosetta_hil hil_launch.py configure:=false activate:=false
+    ros2 launch rosetta_ros_hil hil_launch.py configure:=false activate:=false
 """
 
 import os
@@ -102,7 +102,7 @@ def _include(launch_file, *, namespace="", remap=None, condition=None, **argumen
 
 def generate_launch_description():
     """Generate the launch description for the human-in-the-loop system."""
-    hil_share = get_package_share_directory("rosetta_hil")
+    hil_share = get_package_share_directory("rosetta_ros_hil")
     rosetta_launch = os.path.join(get_package_share_directory("rosetta_ros"), "launch")
     hil_params = os.path.join(hil_share, "params")
     hil_cfg = yaml_params(os.path.join(hil_params, "hil_manager.yaml"), "hil_manager")
@@ -212,7 +212,7 @@ def generate_launch_description():
     )
 
     hil_manager = LifecycleNode(
-        package="rosetta_hil",
+        package="rosetta_ros_hil",
         executable="hil_manager_node",
         name="hil_manager",
         namespace="",

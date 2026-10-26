@@ -13,7 +13,7 @@ turn frames into datasets and policy actions.
 | [`rosetta`](https://github.com/iblnkn/rosetta/tree/main/rosetta) | Contract loader, frame pipeline, and the protocols and registries for robot interfaces and framework adapters. Imports no ROS. |
 | [`rosetta_ros`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros) | The ROS 2 robot interface: message codecs, `TopicBridge`, the recorder, policy runner and keyboard nodes, `rosetta_port`, the node toolkit for building apps, example contracts and launch files. |
 | [`rosetta_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_interfaces) | `RecordEpisode`, `RunPolicy` actions. `StartRecording`, `StartPolicy` services. |
-| [`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil) | The human-in-the-loop manager, an app built on the recorder, the policy runner and the node toolkit. |
+| [`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil) | The human-in-the-loop manager, an app built on the recorder, the policy runner and the node toolkit. |
 | [`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil_interfaces) | `ManageEpisode` action, `StartHILEpisode` service. |
 | [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | The LeRobot adapter. Registers `lerobot` under `rosetta.dataset_writers` and `rosetta.policy_runners`. Executables `rosetta_policy_server`, `rosetta_classifier_server`. |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | A LeRobot `Robot` plugin. `--robot.type=rosetta` in LeRobot's own CLIs. |
