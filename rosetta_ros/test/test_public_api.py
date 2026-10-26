@@ -26,7 +26,7 @@ import pytest
 PUBLIC_API = {
     "rosetta_ros.child_goals": {"cancel_goal", "send_goal"},
     "rosetta_ros.field_access": {"dot_get", "dot_set", "resolve_indexed"},
-    "rosetta_ros.launch_utils": {"autostart_handlers", "typed_config", "yaml_params"},
+    "rosetta_ros.launch_utils": {"autostart_handlers", "contract_output_remaps", "typed_config", "yaml_params"},
     "rosetta_ros.node_host": {"NodeHost"},
     "rosetta_ros.node_utils": {
         "RESULT_QOS",

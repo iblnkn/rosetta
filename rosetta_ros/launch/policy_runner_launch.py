@@ -53,7 +53,7 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 
-from rosetta_ros.launch_utils import autostart_handlers, typed_config, yaml_params
+from rosetta_ros.launch_utils import autostart_handlers, contract_output_remaps, typed_config, yaml_params
 
 DEFAULT_PARAMS = os.path.join(get_package_share_directory("rosetta_ros"), "params", "policy_runner.yaml")
 
@@ -70,6 +70,7 @@ def launch_setup(context, *args, **kwargs):
     launch_local_server = LaunchConfiguration("launch_local_server").perform(context)
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
     log_level = LaunchConfiguration("log_level").perform(context)
+    output_prefix = LaunchConfiguration("output_prefix").perform(context)
 
     # YAML first; overrides carry only the non-empty launch args (empty =
     # keep the params-file value).
@@ -99,6 +100,7 @@ def launch_setup(context, *args, **kwargs):
         # this file is included under a namespace. params_file layers over the
         # package defaults, so it only needs the keys it changes.
         parameters=[yaml_params(DEFAULT_PARAMS, "policy_runner"), yaml_params(params_file, "policy_runner"), overrides],
+        remappings=contract_output_remaps(contract_path, output_prefix),
         arguments=["--ros-args", "--log-level", log_level],
     )
 
@@ -156,6 +158,12 @@ def generate_launch_description():
             "use_sim_time",
             default_value="",  # Empty = use value from params file
             description="Use simulated time from /clock topic (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "output_prefix",
+            default_value="",
+            description="Publish every contract action and reward topic under this prefix instead, "
+            "e.g. /hil/policy for a mux between the runner and the robot (empty = the contract's topics)",
         ),
         DeclareLaunchArgument(
             "log_level",

@@ -35,6 +35,7 @@ from lifecycle_msgs.msg import Transition
 
 __all__ = [
     "autostart_handlers",
+    "contract_output_remaps",
     "typed_config",
     "yaml_params",
 ]
@@ -51,6 +52,27 @@ def typed_config(context, name: str, data_type):
     """
     normalized = normalize_typed_substitution(LaunchConfiguration(name), data_type)
     return perform_typed_substitution(context, normalized, data_type)
+
+
+def contract_output_remaps(contract_path: str, prefix: str) -> list[tuple[str, str]]:
+    """Remaps that move every topic a policy runner can publish under ``prefix``.
+
+    Those are the contract's action and reward topics: a runner publishes one
+    or the other (rewards when ``is_classifier`` is set), and a remap for a
+    topic a node never uses has no effect, so both are remapped. Use it to put
+    something between the runner and the robot, such as a mux. An empty
+    ``prefix`` returns no remaps.
+    """
+    if not prefix:
+        return []
+    from rosetta.contract.schema import load_contract
+
+    contract = load_contract(contract_path)
+    topics = dict.fromkeys(
+        src.channel.topic for entry in (*contract.actions, *contract.rewards) for src in entry.sources
+    )
+    base = prefix.rstrip("/")
+    return [(topic, f"{base}{topic}" if topic.startswith("/") else f"{base}/{topic}") for topic in topics]
 
 
 def yaml_params(path: str, node_name: str) -> dict:
