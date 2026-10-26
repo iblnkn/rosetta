@@ -2,7 +2,9 @@
 
 The [Contract](../reference/contract.md) page has every key and rule. This
 page walks through writing one. If you'd rather start from an annotated file,
-copy `contracts/stone.yaml` from the repository.
+copy `stone.yaml` from `rosetta_ros`'s `contracts/` directory
+(`robots/ros/rosetta_ros/contracts/` in the repository, or
+`$(ros2 pkg prefix rosetta_ros)/share/rosetta_ros/contracts/` once installed).
 
 ## Name the keys
 

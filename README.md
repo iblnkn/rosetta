@@ -58,9 +58,9 @@ This repository holds four packages:
 | Package | Purpose |
 |---------|---------|
 | [`rosetta`](rosetta) | Core: contract, frame pipeline, and the plugin protocols for robot interfaces and framework adapters. No ROS. |
-| [`rosetta_ros`](rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder and policy runner nodes, bag porter, node toolkit |
-| [`rosetta_interfaces`](rosetta_interfaces) | Action, service and message definitions for every Rosetta ROS 2 node, HIL included |
-| [`rosetta_ros_hil`](rosetta_ros_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
+| [`rosetta_ros`](robots/ros/rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder and policy runner nodes, bag porter, node toolkit |
+| [`rosetta_interfaces`](robots/ros/rosetta_interfaces) | Action, service and message definitions for every Rosetta ROS 2 node, HIL included |
+| [`rosetta_ros_hil`](robots/ros/rosetta_ros_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
 
 Framework adapters live in their own repositories:
 

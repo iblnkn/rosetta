@@ -4,7 +4,7 @@ The `rosetta_interfaces` package holds every Rosetta ROS 2 interface. The nodes
 also use `std_srvs/srv/Trigger`. This page covers the recorder's and the policy
 runner's. The human-in-the-loop manager's (`ManageEpisode`, `StartHILEpisode`,
 `ManageEpisodeStatus`, `ManageEpisodeResult`) are documented in the
-[`rosetta_ros_hil` README](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil).
+[`rosetta_ros_hil` README](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil).
 
 ## Actions
 

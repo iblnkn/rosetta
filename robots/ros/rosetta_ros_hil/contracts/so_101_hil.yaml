@@ -1,5 +1,5 @@
 # so_101 with human-in-the-loop: teleop intervention + reward classifier.
-# See rosetta's contracts/stone.yaml for the annotated tour of the contract format.
+# See rosetta_ros's contracts/stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101
 robot_interface: ros2

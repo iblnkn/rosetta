@@ -7,7 +7,7 @@ deployment values as launch arguments. An empty launch argument keeps the
 params-file value, except `contract_path`, which is passed as given. Both
 launch files work when included under a namespace. The human-in-the-loop manager is a
 separate app built on these nodes, in
-[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_ros_hil).
+[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil).
 
 ```bash
 ros2 launch rosetta_ros <launch_file> --show-args
