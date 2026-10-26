@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the FrameIO seam: waist purity and TopicBridge conformance.
+"""Tests for the FrameIO seam and core's purity.
 
-The architecture promises two properties this file pins down:
-
-1. The waist (``rosetta.contract``, ``rosetta.frames``) and the policy side
-   (``rosetta.policies``) import without any ROS dependency, so framework
-   adapters are usable and testable outside a ROS environment.
-2. ``TopicBridge`` structurally satisfies the ``FrameIO`` protocol that
-   ``PolicyRunner.run()`` is typed against.
+Core (``rosetta.contract``, ``rosetta.frames``, ``rosetta.policies``,
+``rosetta.robots``) imports without any ROS dependency, so framework adapters
+and robot interfaces other than ROS 2 are usable and testable without ROS.
 """
 
 import subprocess
@@ -39,22 +35,17 @@ import rosetta.frames.naming
 import rosetta.frames.resample
 import rosetta.frames.protocols
 import rosetta.policies
-assert 'rclpy' not in sys.modules, 'rclpy leaked into the waist import graph'
-assert 'rosidl_runtime_py' not in sys.modules, 'rosidl leaked into the waist import graph'
+import rosetta.robots.protocols
+import rosetta.robots.registry
+assert 'rclpy' not in sys.modules, 'rclpy leaked into the core import graph'
+assert 'rosidl_runtime_py' not in sys.modules, 'rosidl leaked into the core import graph'
 """
 
 
-def test_waist_and_policies_import_without_rclpy():
+def test_core_imports_without_rclpy():
     # A subprocess gives a clean sys.modules regardless of what this test
     # session has already imported.
     subprocess.run([sys.executable, "-c", NO_RCLPY_PROBE], check=True)
-
-
-def test_topic_bridge_satisfies_frame_stream():
-    from rosetta.robots.ros2.topic_bridge import TopicBridge
-
-    bridge = TopicBridge([], [], fps=10)
-    assert isinstance(bridge, FrameIO)
 
 
 def test_minimal_double_satisfies_source_and_sink():

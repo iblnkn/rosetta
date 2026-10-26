@@ -25,9 +25,9 @@ import threading
 
 import pytest
 
-from rosetta.robots.ros2.node_utils import wait_until
 from rosetta_hil.hil_manager_node import HilManagerNode
 from rosetta_hil_interfaces.srv import StartHILEpisode
+from rosetta_ros.node_utils import wait_until
 
 
 @pytest.fixture

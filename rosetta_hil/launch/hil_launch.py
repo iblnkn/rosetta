@@ -50,7 +50,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EqualsSubstitution, LaunchConfiguration, PythonExpression
 from launch_ros.actions import LifecycleNode, PushRosNamespace, SetRemap
 
-from rosetta.robots.ros2.launch_utils import autostart_handlers, typed_config, yaml_params
+from rosetta_ros.launch_utils import autostart_handlers, typed_config, yaml_params
 
 
 def _validate_remaps(context):
@@ -102,9 +102,8 @@ def _include(launch_file, *, namespace="", remap=None, condition=None, **argumen
 
 def generate_launch_description():
     """Generate the launch description for the human-in-the-loop system."""
-    rosetta_share = get_package_share_directory("rosetta")
     hil_share = get_package_share_directory("rosetta_hil")
-    rosetta_launch = os.path.join(rosetta_share, "launch")
+    rosetta_launch = os.path.join(get_package_share_directory("rosetta_ros"), "launch")
     hil_params = os.path.join(hil_share, "params")
     hil_cfg = yaml_params(os.path.join(hil_params, "hil_manager.yaml"), "hil_manager")
 

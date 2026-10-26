@@ -19,8 +19,8 @@ from __future__ import annotations
 import threading
 from enum import StrEnum
 
-from rosetta.robots.ros2.node_utils import TERMINATION_TIMEOUT
 from rosetta_hil_interfaces.action import ManageEpisode
+from rosetta_ros.node_utils import TERMINATION_TIMEOUT
 
 # HIL's own vocabulary, declared by ManageEpisode on top of the shared reasons.
 TERMINATION_REWARD_THRESHOLD = ManageEpisode.Result.TERMINATION_REWARD_THRESHOLD

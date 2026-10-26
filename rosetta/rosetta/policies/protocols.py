@@ -117,7 +117,7 @@ class DatasetWriter(Protocol):
     A frame dict maps each contract key to a ``np.ndarray`` (or ``str`` for
     task-like values), plus the boundary markers ``is_first``/``is_last``/
     ``is_terminal`` (``(1,)`` bool arrays) and a ``task`` string.
-    :func:`rosetta.robots.ros2.offline.bag_frames.iter_bag_frames` produces
+    :func:`rosetta_ros.offline.bag_frames.iter_bag_frames` produces
     exactly this shape.
     """
 

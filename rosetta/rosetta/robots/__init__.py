@@ -27,11 +27,12 @@ rates, ecosystem-specific message types) adapted onto two clean surfaces:
 :mod:`.protocols` is what contract loading needs from an interface
 (message types, timelines, qos, built-in codecs), and :mod:`.registry` finds
 the interface a contract names among the installed ``rosetta.robot_interfaces``
-entry points. :mod:`.ros2` is the ROS2 implementation (topic bridge, rosbag2
-replay, nodes, message codecs). A future ecosystem (ROS1, zenoh-native,
-MQTT, ...) slots in as a sibling package implementing the same surfaces;
-nothing on the policy side changes, because both sides speak only frames.
+entry points. The ROS2 implementation (topic bridge, rosbag2 replay, nodes,
+message codecs) is the ``rosetta_ros`` package. A future ecosystem (ROS1,
+zenoh-native, MQTT, ...) is a sibling package implementing the same
+surfaces; nothing on the policy side changes, because both sides speak only
+frames.
 
-This side imports only Rosetta's waist (:mod:`rosetta.contract`,
-:mod:`rosetta.frames`) — never :mod:`rosetta.policies`.
+This module imports only :mod:`rosetta.contract`. Interface packages build
+on the rest of core as they need.
 """

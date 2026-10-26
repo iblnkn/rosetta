@@ -16,7 +16,6 @@
 
 import pytest
 
-from rosetta.robots.ros2.node_utils import TERMINATION_STOPPED, TERMINATION_TIMEOUT
 from rosetta_hil.hil_episode import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
@@ -29,6 +28,7 @@ from rosetta_hil.hil_episode import (
     resolve_outcome,
     termination_reason,
 )
+from rosetta_ros.node_utils import TERMINATION_STOPPED, TERMINATION_TIMEOUT
 
 
 def test_new_episode_starts_with_policy_in_control_and_no_label():

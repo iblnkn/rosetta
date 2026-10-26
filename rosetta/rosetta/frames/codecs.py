@@ -139,7 +139,7 @@ def register_decoder(type_str: str, dtype: str, *, override: bool = False, requi
 
     Args:
     ----
-    type_str: ROS message type (e.g., "sensor_msgs/msg/JointState")
+    type_str: Message type, as the robot interface names it (e.g., "sensor_msgs/msg/JointState")
     dtype: Contract dtype, one of SUPPORTED_NUMERIC_DTYPES or SPECIAL_DTYPES
         (float32, float64, int32, int64, bool, video, string). Validated at
         registration, so a typo fails the plugin at import instead of
@@ -187,7 +187,7 @@ def register_encoder(type_str: str, *, override: bool = False, requires_select: 
 
     Args:
     ----
-    type_str: ROS message type (e.g., "geometry_msgs/msg/Twist")
+    type_str: Message type, as the robot interface names it (e.g., "geometry_msgs/msg/Twist")
     override: Replace an existing encoder for ``type_str``. Without it, a second
         registration for an already-registered type is an error (see
         :func:`register_decoder`).

@@ -24,13 +24,16 @@ onto that frame stream — ROS2 today; ROS1, zenoh, MQTT tomorrow. The
 **policy side** (:mod:`rosetta.policies`) adapts each learning framework
 (LeRobot, ...) to consume it, for dataset writing and
 live policy execution. Either side swaps out without touching the other,
-because both speak only frames.
+because both speak only frames. This package holds the protocols and
+registries for both sides and imports no robot middleware.
 
 The same frame machinery runs live inference and offline bag conversion, so
 training data matches inference input sample-for-sample by construction.
 
-Framework adapters live in their own packages and register via entry points
-(see :mod:`rosetta.policies`), e.g. ``lerobot_rosetta``.
+Both sides' implementations live in their own packages and register via
+entry points: robot interfaces such as ``rosetta_ros`` (see
+:mod:`rosetta.robots`) and framework adapters such as ``lerobot_rosetta``
+(see :mod:`rosetta.policies`).
 
 Public API. Other packages import only these modules, and only the names in
 each module's ``__all__``; every other module is internal:
@@ -41,12 +44,6 @@ each module's ``__all__``; every other module is internal:
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)
-- ROS 2 node toolkit: ``robots.ros2.rosetta_lifecycle_node``,
-  ``robots.ros2.node_utils``, ``robots.ros2.child_goals``, ``robots.ros2.topic_bridge``,
-  ``robots.ros2.node_host``, ``robots.ros2.rclpy_utils``,
-  ``robots.ros2.field_access``, ``robots.ros2.launch_utils``
-
-The contract, frames and policies modules import without ROS.
 
 Usage::
 

@@ -56,20 +56,6 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 from rosetta.frames.codecs import decode_value, encode_value
-from rosetta.robots.ros2.child_goals import cancel_goal, send_goal
-from rosetta.robots.ros2.field_access import resolve_indexed
-from rosetta.robots.ros2.node_utils import (
-    RESULT_QOS,
-    STATUS_QOS,
-    TERMINATION_ERROR,
-    TERMINATION_STOPPED,
-    copy_fields,
-    finish_goal,
-    positive_rate_descriptor,
-    spin_lifecycle_node,
-)
-from rosetta.robots.ros2.rclpy_utils import qos_profile_from_dict
-from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_hil.hil_episode import (
     HIL_EVENT_NAMES,
     OUTCOME_UNLABELED,
@@ -84,6 +70,20 @@ from rosetta_hil_interfaces.action import ManageEpisode
 from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_hil_interfaces.srv import StartHILEpisode
 from rosetta_interfaces.action import RecordEpisode, RunPolicy
+from rosetta_ros.child_goals import cancel_goal, send_goal
+from rosetta_ros.field_access import resolve_indexed
+from rosetta_ros.node_utils import (
+    RESULT_QOS,
+    STATUS_QOS,
+    TERMINATION_ERROR,
+    TERMINATION_STOPPED,
+    copy_fields,
+    finish_goal,
+    positive_rate_descriptor,
+    spin_lifecycle_node,
+)
+from rosetta_ros.rclpy_utils import qos_profile_from_dict
+from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
 
 
 class HilManagerNode(RosettaLifecycleNode):

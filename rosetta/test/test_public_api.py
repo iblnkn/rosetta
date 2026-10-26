@@ -99,28 +99,6 @@ PUBLIC_API = {
     },
     "rosetta.robots.protocols": {"RobotInterface"},
     "rosetta.robots.registry": {"ROBOT_INTERFACE_GROUP", "available_robot_interfaces", "load_robot_interface"},
-    "rosetta.robots.ros2.child_goals": {"cancel_goal", "send_goal"},
-    "rosetta.robots.ros2.field_access": {"dot_get", "dot_set", "resolve_indexed"},
-    "rosetta.robots.ros2.launch_utils": {"autostart_handlers", "typed_config", "yaml_params"},
-    "rosetta.robots.ros2.node_host": {"NodeHost"},
-    "rosetta.robots.ros2.node_utils": {
-        "RESULT_QOS",
-        "STATUS_QOS",
-        "TERMINATION_CANCELLED",
-        "TERMINATION_COMPLETED",
-        "TERMINATION_ERROR",
-        "TERMINATION_NODE_DEACTIVATED",
-        "TERMINATION_STOPPED",
-        "TERMINATION_TIMEOUT",
-        "copy_fields",
-        "finish_goal",
-        "positive_rate_descriptor",
-        "spin_lifecycle_node",
-        "wait_until",
-    },
-    "rosetta.robots.ros2.rclpy_utils": {"lifecycle_state_label", "qos_profile_from_dict", "require_transition_success"},
-    "rosetta.robots.ros2.rosetta_lifecycle_node": {"BridgeLifecycleNode", "RosettaLifecycleNode"},
-    "rosetta.robots.ros2.topic_bridge": {"TopicBridge"},
 }
 
 

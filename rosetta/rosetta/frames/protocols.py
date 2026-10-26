@@ -22,7 +22,7 @@ frame is): observations sampled out on the clock set by the contract's
 :class:`~rosetta.policies.PolicyRunner` can be written and tested against
 frames alone, with no dependency on any pub/sub ecosystem.
 
-``rosetta.robots.ros2.topic_bridge.TopicBridge`` is the ROS2 implementation.
+``rosetta_ros.topic_bridge.TopicBridge`` is the ROS2 implementation.
 A future robot interface (ROS1, zenoh, MQTT, ...) implements the same methods,
 and every policy framework works with it unchanged.
 """
