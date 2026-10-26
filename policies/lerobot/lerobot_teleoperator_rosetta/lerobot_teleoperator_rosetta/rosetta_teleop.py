@@ -49,8 +49,8 @@ from rosetta.robots.ros2.rosetta_lifecycle_node import BridgeLifecycleNode
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 
-# Contract event names (rosetta.contract.schema.TELEOP_EVENT_NAMES) mapped onto
-# lerobot's TeleopEvents. The vocabularies differ: the contract's episode-ending
+# Contract event names this plugin acts on, mapped onto lerobot's TeleopEvents.
+# Contract event names are open; names not mapped here are ignored. The episode-ending
 # events compose two lerobot events (a reward label plus TERMINATE_EPISODE), and
 # ``start_episode`` has no lerobot counterpart at all (lerobot's record loop
 # starts episodes itself), so the rosetta-native path (rosetta_hil's HIL

@@ -1,27 +1,18 @@
-"""Pin the contract's teleop event vocabulary to the lerobot event mapping.
+"""Pin the contract event names this plugin maps onto lerobot's TeleopEvents.
 
-The mapping once carried names the contract rejects at load
-(``terminate_episode``, ``rerecord_episode``) while three real contract
-events went unmapped and were silently dropped. These tests fail when either
-vocabulary changes without the other.
+Contract event names are open, so this plugin owns its vocabulary. The
+mapping once left three events unmapped and silently dropped; these tests
+fail if a lerobot event becomes unreachable or the composed events change.
 """
 
 from lerobot.teleoperators.utils import TeleopEvents
 
 from lerobot_teleoperator_rosetta.rosetta_teleop import DEFAULT_EVENTS, EVENT_NAME_TO_ENUMS
-from rosetta.contract.schema import TELEOP_EVENT_NAMES
-
-# The one contract event with no lerobot counterpart: lerobot's record loop
-# starts episodes itself, so only the rosetta-native path consumes it.
-LEROBOT_UNMAPPABLE = {"start_episode"}
 
 
-def test_every_mapping_key_is_a_contract_event():
-    assert set(EVENT_NAME_TO_ENUMS) <= TELEOP_EVENT_NAMES
-
-
-def test_every_contract_event_maps_or_is_known_unmappable():
-    assert set(EVENT_NAME_TO_ENUMS) == TELEOP_EVENT_NAMES - LEROBOT_UNMAPPABLE
+def test_every_lerobot_event_but_rerecord_is_reachable_from_a_contract_name():
+    reachable = {e for enums in EVENT_NAME_TO_ENUMS.values() for e in enums}
+    assert reachable == set(TeleopEvents) - {TeleopEvents.RERECORD_EPISODE}
 
 
 def test_end_success_composes_reward_and_termination():

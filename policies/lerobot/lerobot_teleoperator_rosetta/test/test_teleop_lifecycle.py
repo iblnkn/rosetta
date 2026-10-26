@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Input-only teleop lifecycle end-to-end (the so_101_hil shape).
+"""Input-only teleop lifecycle end-to-end (the so_101_teleop.yaml fixture).
 
 Regression guard: is_active used to read the first feedback publisher's
-is_activated — an input-only teleop (feedback: [], the repo's only teleop
-contract) therefore never reported connected, get_action() returned {}
+is_activated — an input-only teleop (feedback: [], like this fixture)
+therefore never reported connected, get_action() returned {}
 forever, and disconnect() raised on an invalid ACTIVE->cleanup transition,
 leaking the spin thread. Also pins the _on_input timestamp fix (the helper
 returns a (ts, used_fallback) tuple).
@@ -27,14 +27,13 @@ from pathlib import Path
 
 import pytest
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from lerobot.utils.errors import DeviceAlreadyConnectedError
 from sensor_msgs.msg import JointState
 
 from lerobot_teleoperator_rosetta.config_rosetta_teleop import RosettaTeleopConfig
 from lerobot_teleoperator_rosetta.rosetta_teleop import RosettaTeleop
 
-CONTRACT = Path(get_package_share_directory("rosetta")) / "contracts" / "so_101_hil.yaml"
+CONTRACT = Path(__file__).resolve().parent / "so_101_teleop.yaml"
 INPUT_TOPIC = "/human/leader_arm/joint_states"
 JOINTS = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_pitch", "wrist_roll", "wrist_yaw"]
 
@@ -67,7 +66,7 @@ def test_input_only_teleop_connects(teleop):
 
 
 def test_connect_subscribes_to_the_contract_events(teleop):
-    # so_101_hil declares Joy events; the node's setup() override must run.
+    # The fixture declares Joy events; the node's setup() override must run.
     teleop.connect()
     assert teleop._node._events_sub is not None
 
