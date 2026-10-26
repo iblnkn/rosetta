@@ -44,24 +44,18 @@ class _FakeLogger:
         pass
 
 
-class _FakeNode:
-    """Duck-typed rclpy node: dict-backed parameters."""
+class _FakeHost:
+    """A RunnerHost backed by a dict."""
 
     def __init__(self, params):
-        self._params = dict(params)
-        self._logger = _FakeLogger()
+        self.params = dict(params)
+        self.logger = _FakeLogger()
 
-    def declare_parameter(self, name, default, _descriptor=None):
-        self._params.setdefault(name, default)
+    def declare(self, name, default, description="", read_only=False):
+        self.params.setdefault(name, default)
 
-    def has_parameter(self, name):
-        return name in self._params
-
-    def get_parameter(self, name):
-        return SimpleNamespace(value=self._params[name])
-
-    def get_logger(self):
-        return self._logger
+    def get(self, name):
+        return self.params[name]
 
 
 class _FakeProc:
@@ -96,13 +90,12 @@ def spawned(monkeypatch):
 
 
 def _setup_runner(param_overrides=None):
-    # use_sim_time mirrors rclpy's auto-declaration on every real node.
-    params = {"contract_path": "/tmp/contract.yaml", "is_classifier": False, "use_sim_time": False}
+    params = {"contract_path": "/tmp/contract.yaml", "is_classifier": False}
     params.update(param_overrides or {})
-    node = _FakeNode(params)
+    host = _FakeHost(params)
     runner = pr.LeRobotPolicyRunner()
-    runner.setup(node, contract=object())
-    return runner, node
+    runner.setup(host, contract=object())
+    return runner, host
 
 
 def test_setup_spawns_server_with_preload_args(spawned):
@@ -123,11 +116,11 @@ def test_classifier_flag_picks_classifier_module(spawned):
 
 
 def test_empty_pretrained_spawns_without_preload(spawned):
-    _runner, node = _setup_runner()  # pretrained_name_or_path defaults to ''
+    _runner, host = _setup_runner()  # pretrained_name_or_path defaults to ''
     argv = spawned[0].argv
     assert not any(a.startswith("--policy-type") for a in argv)
     assert not any(a.startswith("--pretrained-name-or-path") for a in argv)
-    assert any("load the model on the first goal" in w for w in node.get_logger().warnings)
+    assert any("load the model on the first goal" in w for w in host.logger.warnings)
 
 
 def test_no_spawn_when_local_server_disabled(spawned):
@@ -148,7 +141,7 @@ def test_server_crash_at_startup_fails_setup(spawned, monkeypatch):
 
 
 def test_dead_server_respawns_with_same_args(spawned):
-    runner, _node = _setup_runner({"pretrained_name_or_path": "user/repo"})
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo"})
     spawned[0].poll_value = 1  # server died between goals
 
     runner._start_policy_server()  # what run() calls as self-heal
@@ -157,7 +150,7 @@ def test_dead_server_respawns_with_same_args(spawned):
 
 
 def test_live_server_not_respawned(spawned):
-    runner, _node = _setup_runner({"pretrained_name_or_path": "user/repo"})
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo"})
     runner._start_policy_server()
     assert len(spawned) == 1
 
@@ -174,24 +167,24 @@ def _robot_config(fps=30):
 
 
 def test_wall_clock_fps_is_contract_fps(spawned):
-    runner, _node = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
     config = runner._build_client_config(_robot_config(fps=30), task="t")
     assert config.fps == 30
 
 
 def test_sim_time_lifts_fps_ceiling(spawned):
-    runner, node = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu", "use_sim_time": True})
+    runner, host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu", "use_sim_time": True})
     config = runner._build_client_config(_robot_config(fps=30), task="t")
     # The ceiling is the gate's slice-resolution rate: the loop must not bind
     # before the gate itself runs out of resolution.
     assert config.fps == int(1 / pr.GATE_SLICE_SEC)
     assert config.fps > 30
-    assert any("Sim time active" in msg for msg in node.get_logger().infos)
+    assert any("Sim time active" in msg for msg in host.logger.infos)
 
 
 def test_sim_time_multiplier_gone(spawned):
-    _runner, node = _setup_runner()
-    assert not node.has_parameter("sim_time_multiplier")
+    _runner, host = _setup_runner()
+    assert "sim_time_multiplier" not in host.params
 
 
 def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
@@ -202,7 +195,7 @@ def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
     monkeypatch.setattr(cr, "load_contract", lambda path: SimpleNamespace(fps=30, robot_type="bot"))
     monkeypatch.setattr(cr, "iter_observation_specs", lambda c: [])
     monkeypatch.setattr(cr, "iter_action_specs", lambda c: [])
-    runner, _node = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
 
     captured = {}
 

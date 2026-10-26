@@ -41,7 +41,6 @@ from typing import Optional
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.utils.device_utils import is_torch_device_available
-from rcl_interfaces.msg import ParameterDescriptor
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
@@ -82,7 +81,7 @@ class LeRobotPolicyRunner:
     """PolicyRunner backed by LeRobot's RobotClient."""
 
     def __init__(self) -> None:
-        self._node = None
+        self._host = None
         self._contract: Optional[Contract] = None
         self._contract_path: str = ""
         self._client: Optional[RobotClient] = None
@@ -93,12 +92,12 @@ class LeRobotPolicyRunner:
 
     # -------------------- Lifecycle --------------------
 
-    def setup(self, node, contract: Contract) -> None:
-        """Declare LeRobot inference parameters on node and store the contract."""
-        self._node = node
+    def setup(self, host, contract: Contract) -> None:
+        """Declare LeRobot inference settings on the host and store the contract."""
+        self._host = host
         self._contract = contract
-        # contract_path is declared by the node and shared by all backends. Read it.
-        self._contract_path = node.get_parameter("contract_path").value
+        # contract_path is declared by the host and shared by all backends. Read it.
+        self._contract_path = host.get("contract_path")
 
         # Fail the lifecycle configure early: the live LeRobot stack cannot
         # represent >1 numeric observation key or >1 action key (see
@@ -108,16 +107,7 @@ class LeRobotPolicyRunner:
 
         ensure_live_observation_layout(list(iter_observation_specs(contract)), list(iter_action_specs(contract)))
 
-        declare = node.declare_parameter
-
-        def _p(name, default, desc, read_only=False):
-            if not node.has_parameter(name):
-                declare(
-                    name,
-                    default,
-                    ParameterDescriptor(description=desc, read_only=read_only),
-                )
-
+        _p = host.declare
         _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
         _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
         _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
@@ -138,10 +128,10 @@ class LeRobotPolicyRunner:
 
         # Resolve once at configure time (the parameter is read-only): both the
         # client config and the server subprocess args use the resolved device.
-        requested_device = node.get_parameter("policy_device").value
+        requested_device = host.get("policy_device")
         self._policy_device = _resolve_policy_device(requested_device)
         if self._policy_device != requested_device:
-            node.get_logger().warning(
+            host.logger.warning(
                 f"Requested policy device '{requested_device}' but the requested backend "
                 f"is unavailable; using '{self._policy_device}' instead."
             )
@@ -149,7 +139,7 @@ class LeRobotPolicyRunner:
         # Warm start: pay subprocess spawn + torch/CUDA init + model preload at
         # configure time so the first goal costs the same as any other. A
         # failure here propagates and fails the lifecycle configure transition.
-        if node.get_parameter("launch_local_server").value:
+        if host.get("launch_local_server"):
             self._start_policy_server()
 
     def teardown(self) -> None:
@@ -168,13 +158,13 @@ class LeRobotPolicyRunner:
         """Run policy inference until completion or stop_event is set."""
         # Self-heal: the server is started eagerly in setup(); this respawns it
         # (with the same preload args — params are read-only) if it died.
-        if self._node.get_parameter("launch_local_server").value:
+        if self._host.get("launch_local_server"):
             self._start_policy_server()
 
         robot_config = RosettaConfig(
             id="rosetta",
             config_path=self._contract_path,
-            is_classifier=self._node.get_parameter("is_classifier").value,
+            is_classifier=self._host.get("is_classifier"),
         )
         robot_config._external_bridge = frames  # Inject the pre-built frame I/O
         # Under sim time the adapter's tick gates pace on the node clock; the
@@ -262,38 +252,39 @@ class LeRobotPolicyRunner:
         rate IS the ceiling: faster gains nothing, slower throttles fast sims.
         On wall clock the contract fps paces the loop exactly as before.
         """
-        node = self._node
+        host = self._host
         contract_fps = robot_config.fps
-        # Auto-declared on every rclpy node by TimeSource.attach_node.
-        use_sim_time = bool(node.get_parameter("use_sim_time").value)
+        # A ROS 2 host already declares use_sim_time (TimeSource.attach_node); other hosts get the default.
+        host.declare("use_sim_time", False, "Pace on the host's simulated clock")
+        use_sim_time = bool(host.get("use_sim_time"))
         control_loop_fps = max(contract_fps, int(1 / GATE_SLICE_SEC)) if use_sim_time else contract_fps
         if use_sim_time:
-            node.get_logger().info(
+            host.logger.info(
                 f"Sim time active: pacing on the sim clock at contract fps={contract_fps}Hz; "
                 f"client fps ceiling lifted to {control_loop_fps}Hz (FPSTracker logs the ceiling)."
             )
 
         config_kwargs = {
             "robot": robot_config,
-            "server_address": node.get_parameter("server_address").value,
-            "policy_type": node.get_parameter("policy_type").value,
-            "pretrained_name_or_path": node.get_parameter("pretrained_name_or_path").value,
+            "server_address": host.get("server_address"),
+            "policy_type": host.get("policy_type"),
+            "pretrained_name_or_path": host.get("pretrained_name_or_path"),
             "policy_device": self._policy_device,
             "task": task,
             "fps": control_loop_fps,
-            "actions_per_chunk": node.get_parameter("actions_per_chunk").value,
-            "chunk_size_threshold": node.get_parameter("chunk_size_threshold").value,
-            "aggregate_fn_name": node.get_parameter("aggregate_fn_name").value,
+            "actions_per_chunk": host.get("actions_per_chunk"),
+            "chunk_size_threshold": host.get("chunk_size_threshold"),
+            "aggregate_fn_name": host.get("aggregate_fn_name"),
         }
 
         # obs_similarity_atol is optional in some LeRobot versions. Gate on availability.
-        atol_param = node.get_parameter("obs_similarity_atol").value
+        atol_param = host.get("obs_similarity_atol")
         atol = None if atol_param < 0 else atol_param
         supported = {f.name for f in fields(RobotClientConfig)}
         if "obs_similarity_atol" in supported:
             config_kwargs["obs_similarity_atol"] = atol
         elif atol_param != 1.0:
-            node.get_logger().warning("obs_similarity_atol not supported in this LeRobot version; ignoring.")
+            host.logger.warning("obs_similarity_atol not supported in this LeRobot version; ignoring.")
 
         return RobotClientConfig(**config_kwargs)
 
@@ -302,36 +293,36 @@ class LeRobotPolicyRunner:
         if self._server_process is not None and self._server_process.poll() is None:
             return  # already running
 
-        node = self._node
-        server_address = node.get_parameter("server_address").value
+        cfg = self._host
+        server_address = cfg.get("server_address")
         host, port = server_address.split(":")
 
-        if node.get_parameter("is_classifier").value:
+        if cfg.get("is_classifier"):
             module = "lerobot_rosetta.classifier_server"
         else:
             module = "lerobot_rosetta.policy_server"
 
         cmd = [sys.executable, "-m", module, f"--host={host}", f"--port={port}"]
-        pretrained = node.get_parameter("pretrained_name_or_path").value
+        pretrained = cfg.get("pretrained_name_or_path")
         if pretrained:
             cmd += [
-                f"--policy-type={node.get_parameter('policy_type').value}",
+                f"--policy-type={cfg.get('policy_type')}",
                 f"--pretrained-name-or-path={pretrained}",
                 f"--policy-device={self._policy_device}",
             ]
         else:
-            node.get_logger().warning(
+            cfg.logger.warning(
                 "pretrained_name_or_path is empty; the policy server will load "
                 "the model on the first goal instead of at startup"
             )
-        timeout = node.get_parameter("server_startup_timeout_sec").value
+        timeout = cfg.get("server_startup_timeout_sec")
 
         # Capture stdout+stderr to a log file so startup failures are visible
         # (a pipe could deadlock if nobody drains it while the server runs).
         log = tempfile.NamedTemporaryFile(prefix="rosetta_policy_server_", suffix=".log", delete=False)
         self._server_log = log
         self._server_log_path = log.name
-        node.get_logger().info(
+        cfg.logger.info(
             f"Launching {module} on {host}:{port} "
             f"(preload={pretrained or 'none'}, timeout={timeout}s, log: {log.name})..."
         )
@@ -346,7 +337,7 @@ class LeRobotPolicyRunner:
                 )
             try:
                 with socket.create_connection((host, int(port)), timeout=1.0):
-                    node.get_logger().info(f"Policy server ready on {host}:{port}")
+                    cfg.logger.info(f"Policy server ready on {host}:{port}")
                     return
             except (ConnectionRefusedError, socket.timeout, OSError):
                 time.sleep(SERVER_STARTUP_POLL_SEC)
@@ -370,8 +361,8 @@ class LeRobotPolicyRunner:
             self._close_server_log()
             self._server_process = None
             return
-        if self._node is not None:
-            self._node.get_logger().info("Stopping local policy server...")
+        if self._host is not None:
+            self._host.logger.info("Stopping local policy server...")
         proc.terminate()
         try:
             proc.wait(timeout=SERVER_STOP_TIMEOUT_SEC)
@@ -380,8 +371,8 @@ class LeRobotPolicyRunner:
             try:
                 proc.wait(timeout=SERVER_STOP_TIMEOUT_SEC)
             except subprocess.TimeoutExpired:
-                if self._node is not None:
-                    self._node.get_logger().error("Policy server did not exit after kill().")
+                if self._host is not None:
+                    self._host.logger.error("Policy server did not exit after kill().")
         self._close_server_log()
         self._server_process = None
 
