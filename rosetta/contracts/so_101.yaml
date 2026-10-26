@@ -1,4 +1,4 @@
-# so_101: recording and inference without HIL.
+# so_101: recording and inference.
 # See stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101

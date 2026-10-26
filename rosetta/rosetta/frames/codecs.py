@@ -391,8 +391,8 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> "np.n
 
     # Width gate for numeric vectors (images and strings excepted): select
     # declares the stream's width. FrameLayout re-checks on the bridge path,
-    # but this is the only guard for direct decode->encode callers (the HIL
-    # teleop passthrough) and for custom decoders. It fails at ingest, next to
+    # but this is the only guard for direct decode->encode callers (a teleop
+    # passthrough) and for custom decoders. It fails at ingest, next to
     # the message that caused it, instead of at sample time.
     if isinstance(val, np.ndarray) and not spec.is_image and val.size != spec.dim:
         raise ValueError(
@@ -462,8 +462,8 @@ def encode_value(
     # by name position, so a mismatched vector is a structural error. Checked
     # before the finiteness gate (whose per-name labels only make sense at the
     # right width) and before dispatch, so custom encoders are covered too.
-    # FrameLayout.split guarantees this on the bridge path. The HIL teleop
-    # passthrough and direct callers have no other guard.
+    # FrameLayout.split guarantees this on the bridge path. A teleop
+    # passthrough and other direct callers have no other guard.
     if action_vec.size != spec.dim:
         raise ValueError(
             width_mismatch_message(

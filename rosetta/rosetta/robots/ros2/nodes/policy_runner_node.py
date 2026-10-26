@@ -27,8 +27,9 @@ fills in its hooks and the action callbacks.
 
 The action is served under the relative name ``run_policy``. The launch-file
 namespace sets the fully qualified name. The default launch gives
-``/run_policy``. The HIL launch runs two clients as ``/robot_policy/run_policy``
-and ``/reward_classifier/run_policy``.
+``/run_policy``. A launch that runs a policy and a reward classifier side by
+side puts each in its own namespace, e.g. ``/robot_policy/run_policy`` and
+``/reward_classifier/run_policy``.
 
 Usage:
     ros2 launch rosetta policy_runner_launch.py
@@ -113,7 +114,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             "is_classifier",
             False,
             ParameterDescriptor(
-                description="Publish the reward section as the action output",
+                description="Serve a reward model: publish the contract's rewards section as the output",
                 read_only=True,
             ),
         )

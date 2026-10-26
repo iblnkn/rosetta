@@ -234,7 +234,7 @@ def owning_key(entries: Iterable[FrameEntry], topic: str, ref: str) -> str:
     """Key of the one entry whose sources include ``topic``.
 
     A teleop ``target``/``origin`` must name exactly one entry: its recording
-    column is named after that entry, and the HIL node routes by topic.
+    column is named after that entry, and teleop consumers route by topic.
     Sharing a topic across entries stays legal everywhere else. ``ref`` names
     the reference in errors, e.g. ``"teleop.input[0]: target"``.
     """

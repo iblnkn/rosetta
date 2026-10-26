@@ -464,7 +464,7 @@ def iter_specs(contract: Contract) -> Iterable[ObservationStreamSpec | ActionStr
     """Yield all stream specs (observations, actions, extended, teleop): what the recorder records.
 
     Teleop specs are diagnostic columns. During teleop the executed action is
-    already recorded through the action's own spec, because rosetta_hil's HIL manager
+    already recorded through the action's own spec, because the teleop consumer
     republishes teleop input onto the action topic.
     """
     yield from iter_observation_specs(contract)
@@ -498,14 +498,14 @@ def _namespace_in_entry(entries: Iterable[FrameEntry], key: str, topic: str) -> 
 def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpec]:
     """Yield teleop inputs as diagnostic observation columns, keyed by the action each drives.
 
-    rosetta_hil's HIL manager also uses these specs to decode teleop input before
+    Teleop consumers also use these specs to decode teleop input before
     re-encoding it onto the target action topic.
     """
     if not contract.teleop or not contract.teleop.input:
         return
 
-    # Yield order must match contract.teleop.input: rosetta_hil's HIL manager zips
-    # these specs strict=True against the declaration list.
+    # Yield order matches contract.teleop.input, so consumers can zip these
+    # specs strict=True against the declaration list.
     resolved = [
         (tis.source, owning_key(contract.actions, tis.target, "teleop.input: target")) for tis in contract.teleop.input
     ]
@@ -518,8 +518,8 @@ def iter_teleop_input_specs(contract: Contract) -> Iterable[ObservationStreamSpe
             contract,
             context=f"teleop input (target '{tis.target}')",
         )
-        # rosetta_hil's HIL manager re-encodes the decoded value onto the numeric action
-        # topic; a non-numeric input would fail on every message.
+        # Teleop input drives an action: consumers re-encode the decoded value onto
+        # the numeric action topic, so a non-numeric input would fail on every message.
         if spec.dtype not in SUPPORTED_NUMERIC_DTYPES:
             raise ContractValidationError(
                 f"Teleop input (target '{tis.target}') resolves to dtype '{spec.dtype}', "

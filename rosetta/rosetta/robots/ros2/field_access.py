@@ -62,7 +62,7 @@ def resolve_indexed(obj, path: str):
     Example: resolve_indexed(msg, "buttons.5") returns msg.buttons[5]
 
     Unlike :func:`dot_get`, a purely-numeric segment is a sequence index.
-    Used by the HIL Joy event handler (buttons/axes). Lives here so the
+    Used by teleop event handlers (buttons/axes). Lives here so the
     indexed-selector grammar has one home. Negative indices are rejected for
     the same reason as :func:`parse_joy_selector`.
     """
