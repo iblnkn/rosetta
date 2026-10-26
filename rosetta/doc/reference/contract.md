@@ -23,7 +23,7 @@ Errors raise `rosetta.contract.errors.ContractValidationError`, a subclass of
 | Key | Required | Rule |
 |---|---|---|
 | `robot_type` | yes | Non-empty string. |
-| `robot_interface` | yes | `ros2`. Case-insensitive. |
+| `robot_interface` | yes | The robot interface the contract is written for, exactly as it registers: `ros2` for `rosetta_ros`. A contract for an interface that isn't installed doesn't load. |
 | `fps` | yes | Positive integer. An integral float such as `30.0` is accepted. |
 | `observations` | no | Mapping of key to source or list of sources. |
 | `actions` | no | Mapping of key to source or list of sources. |
@@ -333,7 +333,7 @@ through a checkpoint warns about each such path before loading.
 
 ## Example contracts
 
-The `rosetta` package ships three under `contracts/`:
+The `rosetta_ros` package ships three under `contracts/`:
 
 | File | Shows |
 |---|---|

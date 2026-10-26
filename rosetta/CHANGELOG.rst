@@ -4,6 +4,23 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Breaking: the ROS 2 code moved to the new ``rosetta_ros`` package.**
+  ``rosetta.robots.ros2.X`` is now ``rosetta_ros.X``, and the launch files,
+  params, example contracts and the four executables moved with it
+  (``ros2 launch rosetta_ros ...``, ``ros2 run rosetta_ros rosetta_port``).
+  ``rosetta`` now depends only on ``numpy`` and ``pyyaml``.
+* **Robot interfaces are plugins.** A contract's ``robot_interface`` names a
+  class registered under ``rosetta.robot_interfaces``
+  (``rosetta.robots.protocols.RobotInterface``). It checks message types,
+  timelines and qos at load and registers its built-in codecs. Breaking: a
+  contract for an interface that isn't installed no longer loads; before, the
+  checks were skipped when ROS wasn't installed.
+* **Breaking: ``PolicyRunner.setup(host, contract)``** takes a ``RunnerHost``
+  (``declare``, ``get``, ``logger``) instead of an rclpy node, so framework
+  adapters import no ROS. ``NodeLike`` is removed.
+* **Breaking: teleop event names are open.** Core accepts any name in
+  ``teleop.events.select`` and ``TELEOP_EVENT_NAMES`` is removed; each
+  consumer acts on the names it knows.
 * **Added ``~/status`` and ``~/result`` topics** to the recorder and the policy
   runner: the action feedback and result fields, published for every run
   however it was started, so clients that start work through a service (such

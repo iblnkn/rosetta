@@ -6,7 +6,7 @@ are under [policy_runner_node](../reference/nodes.md#policy_runner_node).
 ## Run
 
 ```bash
-ros2 launch rosetta policy_runner_launch.py \
+ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:=robot.yaml \
     pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model \
     policy_type:=act
@@ -33,7 +33,7 @@ the checkpoint, finds the training dataset, and loads
 it was trained with.
 
 ```bash
-ros2 launch rosetta policy_runner_launch.py \
+ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:= \
     pretrained_name_or_path:=<hf_user>/<model>
 ```
@@ -60,7 +60,7 @@ first request.
 On the robot:
 
 ```bash
-ros2 launch rosetta policy_runner_launch.py \
+ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:=robot.yaml \
     launch_local_server:=false \
     server_address:=<gpu-host>:8080

@@ -1,31 +1,44 @@
 # Python API
 
-The modules and names other packages may import from `rosetta`. Each public
-module lists its names in `__all__`; every other module is internal and can
-change without notice. `test/test_public_api.py` pins the list.
+The modules and names other packages may import from `rosetta` (core) and
+`rosetta_ros` (the ROS 2 robot interface). Each public module lists its names
+in `__all__`; every other module is internal and can change without notice.
+Each package's `test/test_public_api.py` pins its list.
 
-## Public modules
+## Core modules
+
+Core imports no robot middleware, so these modules work without ROS.
+
+| Module | Provides |
+|---|---|
+| `rosetta.contract.schema` | `load_contract`, `parse_contract`, `Contract` and its parts, the teleop column prefixes |
+| `rosetta.contract.specs` | `StreamSpec` types and the `iter_*_specs` functions |
+| `rosetta.contract.errors` | `ContractValidationError` |
+| `rosetta.contract.sidecar` | Locating the contract a trained model was built with |
+| `rosetta.contract.operators` | `Operator`, `Invertibility`, `register_operator`, for operator plugins |
+| `rosetta.frames.codecs` | `decode_value`, `encode_value`, `register_decoder`, `register_encoder`, `discover_codecs` |
+| `rosetta.frames.layout` | `FrameLayout`, `build_feature` |
+| `rosetta.frames.naming` | Feature and camera naming |
+| `rosetta.frames.protocols` | `FrameIO` |
+| `rosetta.policies` | `PolicyRunner`, `RunnerHost`, `DatasetWriter`, their result types and loaders |
+| `rosetta.robots.protocols` | `RobotInterface`, for robot interface packages |
+| `rosetta.robots.registry` | `load_robot_interface`, `available_robot_interfaces` |
+
+## ROS 2 modules
+
+The node toolkit apps such as `rosetta_hil` build on.
 
 | Module | Provides | Needs ROS |
 |---|---|---|
-| `rosetta.contract.schema` | `load_contract`, `parse_contract`, `Contract` and its parts, the teleop column prefixes | no |
-| `rosetta.contract.specs` | `StreamSpec` types and the `iter_*_specs` functions | no |
-| `rosetta.contract.errors` | `ContractValidationError` | no |
-| `rosetta.contract.sidecar` | Locating the contract a trained model was built with | no |
-| `rosetta.contract.operators` | `Operator`, `Invertibility`, `register_operator`, for operator plugins | no |
-| `rosetta.frames.codecs` | `decode_value`, `encode_value`, `register_decoder`, `register_encoder`, `discover_codecs` | no |
-| `rosetta.frames.layout` | `FrameLayout`, `build_feature` | no |
-| `rosetta.frames.naming` | Feature and camera naming | no |
-| `rosetta.frames.protocols` | `FrameIO` | no |
-| `rosetta.policies` | `PolicyRunner`, `DatasetWriter`, their result types and loaders | no |
-| `rosetta.robots.ros2.rosetta_lifecycle_node` | `RosettaLifecycleNode`, `BridgeLifecycleNode` | yes |
-| `rosetta.robots.ros2.node_utils` | Termination reasons, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`/`RESULT_QOS` for `~/status` and `~/result` topics | yes |
-| `rosetta.robots.ros2.child_goals` | `send_goal`, `cancel_goal`, for running other action servers' goals from inside a node's work | yes |
-| `rosetta.robots.ros2.topic_bridge` | `TopicBridge` | yes |
-| `rosetta.robots.ros2.node_host` | `NodeHost` | yes |
-| `rosetta.robots.ros2.rclpy_utils` | `qos_profile_from_dict`, `require_transition_success`, `lifecycle_state_label` | yes |
-| `rosetta.robots.ros2.field_access` | `resolve_indexed`, `dot_get`, `dot_set` | no |
-| `rosetta.robots.ros2.launch_utils` | `typed_config`, `yaml_params`, `autostart_handlers` | yes |
+| `rosetta_ros.rosetta_lifecycle_node` | `RosettaLifecycleNode`, `BridgeLifecycleNode` | yes |
+| `rosetta_ros.node_utils` | Termination reasons, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`/`RESULT_QOS` for `~/status` and `~/result` topics | yes |
+| `rosetta_ros.child_goals` | `send_goal`, `cancel_goal`, for running other action servers' goals from inside a node's work | yes |
+| `rosetta_ros.topic_bridge` | `TopicBridge` | yes |
+| `rosetta_ros.node_host` | `NodeHost` | yes |
+| `rosetta_ros.runner_host` | `RosParameterHost`, a `RunnerHost` whose settings are node parameters | yes |
+| `rosetta_ros.rclpy_utils` | `qos_profile_from_dict`, `require_transition_success`, `lifecycle_state_label` | yes |
+| `rosetta_ros.field_access` | `resolve_indexed`, `dot_get`, `dot_set` | no |
+| `rosetta_ros.launch_utils` | `typed_config`, `yaml_params`, `autostart_handlers` | yes |
 
 Plugins register through the entry-point groups listed in
 [Packages](packages.md).
@@ -61,8 +74,8 @@ cancelled or `max_duration_s` passes.
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from rosetta.robots.ros2.node_utils import TERMINATION_COMPLETED, finish_goal, spin_lifecycle_node
-from rosetta.robots.ros2.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta_ros.node_utils import TERMINATION_COMPLETED, finish_goal, spin_lifecycle_node
+from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import RunPolicy
 
 

@@ -3,7 +3,7 @@
 Turns a directory of bags into a training dataset through a contract.
 
 ```bash
-ros2 run rosetta rosetta_port --raw-dir <bags> --contract <robot.yaml> [options]
+ros2 run rosetta_ros rosetta_port --raw-dir <bags> --contract <robot.yaml> [options]
 ```
 
 ## Options

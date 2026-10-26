@@ -76,7 +76,7 @@ Start the policy runner with the checkpoint from the Hugging Face Hub. The
 first start downloads the weights.
 
 ```bash
-ros2 launch rosetta policy_runner_launch.py \
+ros2 launch rosetta_ros policy_runner_launch.py \
     params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
     contract_path:=$CONTRACT \
     pretrained_name_or_path:=francocipollone/rospai_act_sim_arm101_place_cubes_on_tray \
@@ -109,7 +109,7 @@ into `datasets/bags/`. Each is a directory containing `metadata.yaml`. Port
 them:
 
 ```bash
-ros2 run rosetta rosetta_port \
+ros2 run rosetta_ros rosetta_port \
     --raw-dir datasets/bags \
     --contract $CONTRACT \
     --repo-id tutorial_480 \
@@ -156,7 +156,7 @@ Stop the policy runner from step 4 with Ctrl+C. Start it again on your
 checkpoint:
 
 ```bash
-ros2 launch rosetta policy_runner_launch.py \
+ros2 launch rosetta_ros policy_runner_launch.py \
     params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
     contract_path:=$CONTRACT \
     pretrained_name_or_path:=outputs/train/act_tutorial/checkpoints/last/pretrained_model \
@@ -180,7 +180,7 @@ The diff shows the two `resize` lines. Port the same three bags with the new
 contract:
 
 ```bash
-ros2 run rosetta rosetta_port \
+ros2 run rosetta_ros rosetta_port \
     --raw-dir datasets/bags \
     --contract so_arm101_240.yaml \
     --repo-id tutorial_240 \

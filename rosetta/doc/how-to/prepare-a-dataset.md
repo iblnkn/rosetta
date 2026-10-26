@@ -6,7 +6,7 @@
 ## Port
 
 ```bash
-ros2 run rosetta rosetta_port \
+ros2 run rosetta_ros rosetta_port \
     --raw-dir datasets/bags \
     --contract robot.yaml \
     --repo-id my_org/my_dataset \
@@ -39,7 +39,7 @@ Split the bags into shards. Each process takes every nth bag.
 
 ```bash
 for i in 0 1 2 3; do
-  ros2 run rosetta rosetta_port --raw-dir datasets/bags --contract robot.yaml \
+  ros2 run rosetta_ros rosetta_port --raw-dir datasets/bags --contract robot.yaml \
       --repo-id my_org/my_dataset --root datasets/lerobot \
       --num-shards 4 --shard-index $i &
 done
@@ -49,7 +49,7 @@ wait
 ## Push to the Hugging Face Hub
 
 ```bash
-ros2 run rosetta rosetta_port ... --repo-id <hf_user>/<name> --push-to-hub
+ros2 run rosetta_ros rosetta_port ... --repo-id <hf_user>/<name> --push-to-hub
 ```
 
 The upload is private unless you add `--hub-public`.

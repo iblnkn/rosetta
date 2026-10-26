@@ -1,10 +1,12 @@
 # rosetta
 
-The core Rosetta package: the contract loader, the frame pipeline, the episode
-recorder and policy runner nodes, and the bag porter (`rosetta_port`).
+Rosetta's core: the contract loader, the frame pipeline, and the protocols and
+registries the two kinds of plugin package implement. Robot interfaces such as
+[`rosetta_ros`](../rosetta_ros) turn a robot's middleware into frames.
+Framework adapters such as `lerobot_rosetta` turn frames into datasets and
+policy actions. Core imports no ROS, so it installs and tests without it.
 
-Framework adapters and apps such as [`rosetta_hil`](../rosetta_hil) build on
-its public Python API, listed on the
+The public modules are listed on the
 [Python API reference](https://iblnkn.github.io/rosetta/reference/python-api.html)
 page.
 

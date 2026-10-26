@@ -6,7 +6,7 @@ is listed under [episode_recorder_node](../reference/nodes.md#episode_recorder_n
 ## Start the recorder
 
 ```bash
-ros2 launch rosetta episode_recorder_launch.py \
+ros2 launch rosetta_ros episode_recorder_launch.py \
     contract_path:=robot.yaml \
     bag_base_dir:=datasets/bags
 ```
@@ -24,7 +24,7 @@ file. To skip specific topics, list regexes in `exclude_topics`.
 In a second terminal:
 
 ```bash
-ros2 run rosetta episode_keyboard_node
+ros2 run rosetta_ros episode_keyboard_node
 ```
 
 `t` types the task prompt, `r` starts, `s` stops and keeps, `d` stops and

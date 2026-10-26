@@ -4,6 +4,10 @@ Changelog for package rosetta_hil
 
 Forthcoming
 -----------
+* Imports the node toolkit from ``rosetta_ros`` and includes its launch files.
+* Owns its teleop event names (``HIL_EVENT_NAMES``) and logs a warning at
+  configure for contract event names it ignores.
+* Ships ``contracts/so_101_hil.yaml``, the launch file's default contract.
 * Added ``~/status`` and ``~/result`` topics (``ManageEpisodeStatus``,
   ``ManageEpisodeResult``): the action feedback and result fields for every
   episode, including ones started by service or button. ``~/result`` is

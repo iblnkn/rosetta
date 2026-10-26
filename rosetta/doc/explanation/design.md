@@ -60,17 +60,27 @@ bag's metadata, and the porter writes the contract it was given into the
 dataset. A policy runner started without a contract path follows the
 checkpoint back to its training dataset and reads the contract there.
 
-## Frameworks
+## Two kinds of plugin
 
-The robot side turns ROS 2 into frames. The policy side turns frames into a
-dataset or into actions. Neither imports the other. `rosetta_port` joins
-them offline and `policy_runner_node` joins them live, each looking the
-framework up by name.
+The robot side turns a robot's middleware into frames. The policy side turns
+frames into a dataset or into actions. Neither imports the other, and the
+core package `rosetta` imports neither: each side is a separate package that
+plugs into it.
 
-Entry points extend this. `rosetta.codecs` adds message types,
-`rosetta.operators` adds value transforms, `rosetta.dataset_writers` and
-`rosetta.policy_runners` add a framework. A contract names message types and
-operators but never a framework.
+A robot interface such as `rosetta_ros` registers under
+`rosetta.robot_interfaces`, named after the `robot_interface` value contracts
+use. Loading a contract asks that interface which message types exist, which
+timelines each carries and whether a `qos` parses, so a contract for an
+interface that isn't installed fails to load. A framework adapter such as
+`lerobot_rosetta` registers a dataset writer and a policy runner. Under ROS 2,
+`rosetta_port` joins the two sides offline and `policy_runner_node` joins
+them live, each looking the framework up by name.
+
+Entry points extend this. `rosetta.robot_interfaces` adds a middleware,
+`rosetta.codecs` adds message types, `rosetta.operators` adds value
+transforms, `rosetta.dataset_writers` and `rosetta.policy_runners` add a
+framework. A contract names its robot interface, message types and operators
+but never a framework.
 
 ## One numeric key on the live path
 

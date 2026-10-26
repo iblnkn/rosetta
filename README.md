@@ -40,11 +40,11 @@ Five steps. When you change the contract you redo steps 2 to 5. The bags
 from step 1 stay.
 
 ```bash
-ros2 launch rosetta episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
-$EDITOR robot.yaml                                                                # 2 define
-ros2 run rosetta rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
-lerobot-train --dataset.repo_id=my --policy.type=act                              # 4 train
-ros2 launch rosetta policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
+ros2 launch rosetta_ros episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
+$EDITOR robot.yaml                                                                   # 2 define
+ros2 run rosetta_ros rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
+lerobot-train --dataset.repo_id=my --policy.type=act                                 # 4 train
+ros2 launch rosetta_ros policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
 ```
 
 New here? [Install](https://iblnkn.github.io/rosetta/installation.html), then
@@ -53,13 +53,14 @@ follow
 
 ## Packages
 
-This repository holds four packages:
+This repository holds five packages:
 
 | Package | Purpose |
 |---------|---------|
-| [`rosetta`](rosetta) | Contract, frame pipeline, ROS 2 nodes, bag porter |
+| [`rosetta`](rosetta) | Core: contract, frame pipeline, and the plugin protocols for robot interfaces and framework adapters. No ROS. |
+| [`rosetta_ros`](rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder and policy runner nodes, bag porter, node toolkit |
 | [`rosetta_interfaces`](rosetta_interfaces) | Action and service definitions |
-| [`rosetta_hil`](rosetta_hil) | Human-in-the-loop episode manager, built on `rosetta`'s public API |
+| [`rosetta_hil`](rosetta_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
 | [`rosetta_hil_interfaces`](rosetta_hil_interfaces) | Action and service definitions for `rosetta_hil` |
 
 Framework adapters live in their own repositories:

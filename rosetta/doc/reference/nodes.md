@@ -10,7 +10,7 @@ separate app built on these nodes, in
 [`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil).
 
 ```bash
-ros2 launch rosetta <launch_file> --show-args
+ros2 launch rosetta_ros <launch_file> --show-args
 ```
 
 ## Lifecycle

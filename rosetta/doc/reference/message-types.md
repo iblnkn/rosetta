@@ -1,6 +1,8 @@
 # Message types and operators
 
-Built-in decoders, encoders and operators, and how to register your own.
+Built-in decoders, encoders and operators, and how to register your own. The
+built-in decoders and encoders come with the ROS 2 robot interface,
+`rosetta_ros`; the operators are part of core.
 
 ## Decoders
 

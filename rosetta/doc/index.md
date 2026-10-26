@@ -34,11 +34,11 @@ actions:
 In just five simple steps you can go from data collection to running a policy on your robot.
 
 ```bash
-ros2 launch rosetta episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
-$EDITOR robot.yaml                                                                # 2 define
-ros2 run rosetta rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
-lerobot-train --dataset.repo_id=my --policy.type=act                              # 4 train
-ros2 launch rosetta policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
+ros2 launch rosetta_ros episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
+$EDITOR robot.yaml                                                                   # 2 define
+ros2 run rosetta_ros rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
+lerobot-train --dataset.repo_id=my --policy.type=act                                 # 4 train
+ros2 launch rosetta_ros policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
 ```
 
 New here? [Install](installation.md), then follow

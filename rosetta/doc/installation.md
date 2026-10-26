@@ -77,8 +77,8 @@ Add the `training` extra if you'll run `lerobot-train`.
 ## Check
 
 ```bash
-ros2 launch rosetta episode_recorder_launch.py --show-args
-python -c "from rosetta.contract.schema import load_contract; load_contract('$(ros2 pkg prefix rosetta)/share/rosetta/contracts/so_101.yaml'); print('OK')"
+ros2 launch rosetta_ros episode_recorder_launch.py --show-args
+python -c "from rosetta.contract.schema import load_contract; load_contract('$(ros2 pkg prefix rosetta_ros)/share/rosetta_ros/contracts/so_101.yaml'); print('OK')"
 ```
 
 The second command prints `OK`.

@@ -6,8 +6,8 @@ device ready to take over, an optional reward classifier, and the episode
 recorder, and reports how each episode ended and whether the robot did the
 task.
 
-`rosetta_hil` uses only Rosetta's public Python API and its actions
-(`RecordEpisode`, `RunPolicy`). Its own interfaces live in
+`rosetta_hil` uses only the public Python API of `rosetta` and `rosetta_ros`
+and their actions (`RecordEpisode`, `RunPolicy`). Its own interfaces live in
 [`rosetta_hil_interfaces`](../rosetta_hil_interfaces).
 
 ## Declare the teleop device
@@ -32,7 +32,7 @@ isn't one. With a reward classifier, `reward_remap_from` names the reward
 topic the same way. Run `--show-args` for every argument; `contract_path`
 defaults to this package's `so_101_hil.yaml`.
 
-The launch file includes Rosetta's own `policy_runner_launch.py` (in namespace
+The launch file includes `rosetta_ros`'s `policy_runner_launch.py` (in namespace
 `robot_policy`) and `episode_recorder_launch.py`, and starts the manager next
 to them. With `enable_reward_classifier:=true` it includes the policy runner a
 second time, as a classifier in namespace `reward_classifier`. The runner
@@ -40,7 +40,7 @@ publishes to `/hil/policy<topic>`, and the manager forwards to `<topic>` while
 the policy has control.
 
 Each included node takes a params file from this package's `params/`, layered
-over Rosetta's defaults: `robot_policy.yaml`, `reward_classifier.yaml` (which
+over `rosetta_ros`'s defaults: `robot_policy.yaml`, `reward_classifier.yaml` (which
 sets `is_classifier: true`) and `episode_recorder.yaml`. They hold only what
 HIL changes, such as a 30 Hz feedback rate. Tuning such as `actions_per_chunk`
 goes in your own copy, passed as `robot_policy_params_file:=`,
