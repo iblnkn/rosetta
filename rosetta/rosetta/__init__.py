@@ -40,6 +40,7 @@ each module's ``__all__``; every other module is internal:
 - Frames: ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
+- Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)
 - ROS 2 node toolkit: ``robots.ros2.rosetta_lifecycle_node``,
   ``robots.ros2.node_utils``, ``robots.ros2.child_goals``, ``robots.ros2.topic_bridge``,
   ``robots.ros2.node_host``, ``robots.ros2.rclpy_utils``,

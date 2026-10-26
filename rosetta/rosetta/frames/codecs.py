@@ -225,7 +225,7 @@ CODEC_ENTRY_POINT_GROUP = "rosetta.codecs"
 
 def discover_codecs() -> None:
     """
-    Register the built-in ros2 codecs, then import ``rosetta.codecs`` plugins.
+    Register every robot interface's built-in codecs, then import ``rosetta.codecs`` plugins.
 
     Each entry point's value is a module path. Loading it runs that module's
     ``@register_decoder`` / ``@register_encoder`` decorators, so installed
@@ -241,16 +241,12 @@ def discover_codecs() -> None:
     latched, so every later call re-raises the same error until the process
     restarts with a fixed environment.
     """
-    # Built-in ros2 codecs register exactly like a plugin would: importing the
-    # module runs its @register_* decorators. Imported here, not at module
-    # level, to keep the module graph acyclic (codecs -> decoders -> schema ->
-    # codecs). Both modules import without ROS. rclpy/rosidl are call-time
-    # dependencies of the codec bodies only. Loaded before the entry-point
-    # scan so a plugin can replace a built-in with override=True. Needs no
-    # latch: repeat imports are sys.modules lookups.
-    from rosetta.robots.ros2 import decoders as _decoders  # noqa: F401
-    from rosetta.robots.ros2 import encoders as _encoders  # noqa: F401
+    # Each installed robot interface registers its built-in codecs first, so a
+    # plugin can replace a built-in with override=True. Imported here, not at
+    # module level: an interface's codec modules import this one.
+    from rosetta.robots.registry import register_interface_codecs
 
+    register_interface_codecs()
     load_entry_point_plugins(CODEC_ENTRY_POINT_GROUP, "codec")
 
 

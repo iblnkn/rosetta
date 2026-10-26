@@ -756,14 +756,10 @@ def test_bare_channel_unknown_type_rejected_at_load(extra, tmp_path):
     _expect_error(tmp_path, BASE + extra, "NoSuchThing")
 
 
-def test_interface_checks_defer_without_interface(tmp_path, monkeypatch):
-    """In a non-ROS tooling env the interface can't attest types/timelines;
-    those checks defer to runtime instead of failing the load."""
-    import rosetta.contract.schema as schema_mod
-
-    monkeypatch.setattr(schema_mod, "_ROS_INSTALLED", False)
-    c = _load(tmp_path, BASE + "tasks:\n  task:\n    channel: {topic: /p, type: std_msgs/msg/NoSuchThing}\n")
-    assert c.tasks[0].channel.type == "std_msgs/msg/NoSuchThing"
+def test_uninstalled_interface_error_lists_installed(tmp_path):
+    """A contract for an interface this environment lacks can't be checked, so it
+    doesn't load; the error names what is installed."""
+    _expect_error(tmp_path, BASE.replace("robot_interface: ros2", "robot_interface: mqtt"), r"not installed.*ros2")
 
 
 # ---------------------------------------------------------------------------

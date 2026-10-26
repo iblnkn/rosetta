@@ -24,18 +24,17 @@ runs three checks:
 1. Parse: unknown keys, missing align, malformed scalars, duplicate YAML keys,
    empty-but-present sections and codec paths that don't import are errors.
    Top-level ``x-*`` keys are ignored (they hold YAML anchors).
-2. Interface: each channel's type exists, its chosen timeline is one the
-   type provides, and its qos parses. Skipped when ROS is not installed
-   (see ``_ROS_INSTALLED``).
+2. Interface: the contract's ``robot_interface`` is installed (see
+   :mod:`rosetta.robots.registry`), and that interface accepts each
+   channel's type, the timeline it chose and its qos.
 3. Resolution: every spec is resolved once (see :mod:`.specs`), which runs
    the registry-backed rules (decodability, encoders, image geometry).
 
-This module stays importable without ROS.
+This module imports no robot middleware.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import warnings
 from collections.abc import Hashable
 from enum import StrEnum
@@ -52,6 +51,8 @@ from ..frames.codecs import (
     load_codec,
 )
 from ..frames.naming import IMAGE_KEY_PREFIX
+from ..robots.protocols import RobotInterface
+from ..robots.registry import available_robot_interfaces, load_robot_interface
 from . import builtin_operators  # noqa: F401 - registers built-in operators
 from .errors import ContractValidationError
 
@@ -99,14 +100,6 @@ __all__ = [
     "owning_key",
     "parse_contract",
 ]
-
-SUPPORTED_ROBOT_INTERFACES = frozenset({"ros2"})
-"""Robot interfaces a contract may declare (``robot_interface``)."""
-
-
-#: Interface checks (message types, timelines, qos) need ROS. Without it they
-#: are left to runtime; a present-but-broken install still fails loudly.
-_ROS_INSTALLED = importlib.util.find_spec("rclpy") is not None
 
 # Channel keys each section admits. `safety` is a command concern (actions
 # only); `encoder` exists only where Rosetta publishes. "bare" covers tasks,
@@ -250,19 +243,17 @@ def _validate_codec_path(path: str | None, context: str) -> str | None:
     return path
 
 
-def _validate_interface(contract: Contract) -> None:
-    """Check every channel against the robot interface.
+def _validate_interface(contract: Contract, interface: RobotInterface) -> None:
+    """Check every channel against the contract's robot interface.
 
-    Each ``type`` must be a real message type (bare channels included), each
-    aligned source's ``timeline`` must be one the type provides, and each
-    ``qos`` must parse. Requires ROS (see ``_ROS_INSTALLED``).
+    Each ``type`` must be a type the interface knows (bare channels included),
+    each aligned source's ``timeline`` must be one the type provides, and each
+    ``qos`` must parse.
     """
-    from ..robots.ros2.rclpy_utils import qos_profile_from_dict
-    from ..robots.ros2.timelines import provided_timelines
 
     def check(channel: Channel, align: Align | None, ctx: str) -> None:
         try:
-            provided = provided_timelines(channel.type)
+            provided = interface.provided_timelines(channel.type)
         except ValueError as e:
             raise ContractValidationError(f"{ctx}: {e}") from e
         if align is not None and align.timeline not in provided:
@@ -272,7 +263,7 @@ def _validate_interface(contract: Contract) -> None:
             )
         if channel.qos is not None:
             try:
-                qos_profile_from_dict(channel.qos)
+                interface.validate_qos(channel.qos)
             except ValueError as e:
                 raise ContractValidationError(f"{ctx}.qos: {e}") from e
 
@@ -603,6 +594,11 @@ class _StrictYamlLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep)
 
 
+def _installed() -> str:
+    """Installed robot interface names, for error messages."""
+    return ", ".join(available_robot_interfaces()) or "(none)"
+
+
 def _parse_header(data: dict[str, Any]) -> tuple[str, str, int]:
     """Parse robot_type, robot_interface and fps."""
     if "robot_type" not in data:
@@ -611,11 +607,11 @@ def _parse_header(data: dict[str, Any]) -> tuple[str, str, int]:
 
     robot_interface = data.get("robot_interface")
     if not robot_interface:
-        raise ContractValidationError(f"robot_interface is required. Supported: {sorted(SUPPORTED_ROBOT_INTERFACES)}")
+        raise ContractValidationError(f"robot_interface is required. Installed: {_installed()}")
     robot_interface = _require_str(robot_interface, "robot_interface")
-    if robot_interface not in SUPPORTED_ROBOT_INTERFACES:
+    if robot_interface not in available_robot_interfaces():
         raise ContractValidationError(
-            f"Unsupported robot_interface '{robot_interface}'. Supported: {sorted(SUPPORTED_ROBOT_INTERFACES)}"
+            f"robot_interface '{robot_interface}' is not installed. Installed: {_installed()}"
         )
 
     if "fps" not in data:
@@ -713,8 +709,7 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
         **sections,
     )
 
-    if _ROS_INSTALLED:
-        _validate_interface(contract)
+    _validate_interface(contract, load_robot_interface(robot_interface))
     # Resolve every spec and lay out the frame now, so the registry-backed
     # rules (decodability, encoders, image geometry, shared keys) fail at load.
     # Imported here because specs and layout import this module.

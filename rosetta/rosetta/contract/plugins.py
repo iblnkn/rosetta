@@ -13,17 +13,20 @@
 # limitations under the License.
 
 """
-Entry-point plugin loader shared by the operator and codec registries.
+Entry-point plugin loading shared by Rosetta's registries.
 
-Each entry point names a module; importing it runs its ``@register_*``
-decorators. Imports only :mod:`.errors`, so either registry can use it
-without cycles.
+:func:`load_entry_point_plugins` imports module plugins (operators, codecs):
+each entry point names a module, and importing it runs its ``@register_*``
+decorators. :func:`instantiate_entry_point` resolves one named class plugin
+(frameworks, robot interfaces) and checks it against a protocol. Imports
+only :mod:`.errors`, so every registry can use it without cycles.
 """
 
 from __future__ import annotations
 
 import importlib.metadata as _ilm
 import threading
+from typing import Any
 
 from .errors import ContractValidationError
 
@@ -59,3 +62,66 @@ def load_entry_point_plugins(group: str, noun: str) -> None:
                 _failed_groups[group] = err
                 raise err from e
         _loaded_groups.add(group)
+
+
+def _dist_name(ep: _ilm.EntryPoint) -> str:
+    """Name of the distribution that registered ``ep``, best-effort."""
+    dist = getattr(ep, "dist", None)
+    return dist.name if dist is not None else "(unknown distribution)"
+
+
+def resolve_entry_point(eps: list[_ilm.EntryPoint], group: str, name: str, noun: str) -> _ilm.EntryPoint:
+    """Find the single entry point in ``eps`` (all of ``group``) registered as ``name``.
+
+    ``noun`` names the plugin kind in errors. Each registry fetches ``eps``
+    itself, so its tests can fake ``importlib.metadata`` on that registry alone.
+    """
+    matches = [ep for ep in eps if ep.name == name]
+    if not matches:
+        known = ", ".join(sorted({ep.name for ep in eps})) or "(none installed)"
+        raise ValueError(f"No {noun} '{name}' registered under entry-point group '{group}'. Available: {known}.")
+    # importlib.metadata dedups same-named distributions (first on sys.path
+    # wins), so this guard only catches two DIFFERENTLY-named dists.
+    if len(matches) > 1:
+        dists = ", ".join(sorted(_dist_name(ep) for ep in matches))
+        raise ValueError(
+            f"{noun.capitalize()} '{name}' is registered more than once under entry-point group "
+            f"'{group}' (by: {dists}) — resolution would be arbitrary; remove the stale distribution."
+        )
+    return matches[0]
+
+
+def instantiate_entry_point(eps: list[_ilm.EntryPoint], group: str, name: str, protocol: type, noun: str) -> Any:
+    """Load, instantiate, and structurally validate the ``name`` entry point.
+
+    ``ep.load()`` and the zero-argument construction propagate raw: their
+    tracebacks name the failing plugin module/class directly, which no
+    wrapper improves on. The registry raises only for what it can diagnose
+    better than a traceback: a non-class entry point and a non-conforming
+    instance.
+    """
+    ep = resolve_entry_point(eps, group, name, noun)
+    cls = ep.load()
+    if not isinstance(cls, type):
+        raise TypeError(
+            f"Entry point '{name}' in group '{group}' ({_dist_name(ep)}) must be "
+            f"a class; got {type(cls).__name__} ({cls!r})."
+        )
+    obj = cls()
+    if not isinstance(obj, protocol):
+        # isinstance is the gate; the sweep names the offenders — absent OR
+        # present-but-non-callable (e.g. a member set to None fails isinstance
+        # yet passes hasattr). __protocol_attrs__ is undocumented but the only
+        # runtime member source before Python 3.13's typing.get_protocol_members;
+        # Rosetta's plugin protocols are all-methods, so callability is the right test.
+        problems = sorted(m for m in protocol.__protocol_attrs__ if not callable(getattr(obj, m, None)))
+        detail = (
+            f"missing or non-callable: {', '.join(problems)}"
+            if problems
+            else "all members present and callable; structural check failed on a non-method member"
+        )
+        raise TypeError(
+            f"Entry point '{name}' in group '{group}' ({_dist_name(ep)}) does not "
+            f"implement {protocol.__name__} ({detail})."
+        )
+    return obj

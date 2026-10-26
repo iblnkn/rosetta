@@ -33,6 +33,9 @@ setup(
             "policy_runner_node = rosetta.robots.ros2.nodes.policy_runner_node:main",
             "rosetta_port = rosetta.robots.ros2.offline.port:main",
         ],
+        "rosetta.robot_interfaces": [
+            "ros2 = rosetta.robots.ros2.interface:Ros2Interface",
+        ],
     },
     extras_require={"test": ["pytest"]},
     zip_safe=True,
