@@ -22,7 +22,8 @@ teleop muxing. Exposes a ManageEpisode action for unified episode control.
 The node acts as an orchestrator:
 - Action client to policy_runner_node(s) for policy inference (RunPolicy)
 - Action client to episode_recorder_node for bag recording (RecordEpisode)
-- Muxes between policy output and teleop input for seamless human takeover
+- Hands the action topics to the policy or the human (takeover, see
+  :mod:`rosetta_ros_hil.forwarding`)
 - Muxes between reward classifier output and human reward overrides
 - Monitors episode termination conditions (timeout, human stop, reward threshold)
 
@@ -49,13 +50,6 @@ from std_msgs.msg import Int8
 from std_srvs.srv import SetBool, Trigger
 
 from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import (
-    iter_action_specs,
-    iter_observation_specs,
-    iter_teleop_feedback_specs,
-    iter_teleop_input_specs,
-)
-from rosetta.frames.codecs import decode_value, encode_value
 from rosetta_hil_interfaces.action import ManageEpisode
 from rosetta_hil_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_hil_interfaces.srv import StartHILEpisode
@@ -74,6 +68,7 @@ from rosetta_ros.node_utils import (
 )
 from rosetta_ros.rclpy_utils import qos_profile_from_dict
 from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
+from rosetta_ros_hil.forwarding import CommandForwarder
 from rosetta_ros_hil.hil_episode import (
     HIL_EVENT_NAMES,
     OUTCOME_UNLABELED,
@@ -211,10 +206,9 @@ class HilManagerNode(RosettaLifecycleNode):
         self._edges = EdgeDetector()
         self._bad_selectors: set[str] = set()  # warned about once each
 
-        self._mux_subs: list = []
-        self._command_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
+        self._forwarder: CommandForwarder | None = None
+        self._mux_subs: list = []  # reward relay and teleop events
         self._reward_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
-        self._teleop_feedback_publishers: dict[str, tuple] = {}  # origin topic -> (msg_cls, publisher)
         self._intervention_pub = None
         self._status_pub = None
         self._result_pub = None
@@ -269,77 +263,16 @@ class HilManagerNode(RosettaLifecycleNode):
             reward_action = self.get_parameter("reward_classifier_action_name").value
             self._reward_client = ActionClient(self, RunPolicy, reward_action, callback_group=self._action_cbg)
 
-        # Policy mux: remapped policy output -> real command topic.
-        for entry in self._contract.actions:
-            for src in entry.sources:
-                original_topic = src.channel.topic
-                remapped_topic = policy_remap_prefix + original_topic
-                msg_cls = get_message(src.channel.type)
-                qos = qos_profile_from_dict(src.channel.qos)
-
-                pub = self.create_publisher(msg_cls, original_topic, qos)
-                self._command_publishers[original_topic] = (msg_cls, pub)
-
-                sub = self.create_subscription(
-                    msg_cls,
-                    remapped_topic,
-                    lambda msg, topic=original_topic: self._on_policy_output(msg, topic),
-                    qos,
-                    callback_group=self._sub_cbg,
-                )
-                self._mux_subs.append(sub)
-                self.get_logger().info(f"Action mux: {remapped_topic} -> {original_topic}")
-
-        # Teleop mux: teleop input -> its target action topic (see _on_teleop_input).
-        if self._contract.teleop and self._contract.teleop.input:
-            action_specs_by_topic = {s.source.channel.topic: s for s in iter_action_specs(self._contract)}
-            teleop_input_pairs = zip(self._contract.teleop.input, iter_teleop_input_specs(self._contract), strict=True)
-            for tis, teleop_spec in teleop_input_pairs:
-                action_spec = action_specs_by_topic[tis.target]  # schema.py validated target at load time
-                msg_cls = get_message(teleop_spec.source.channel.type)
-                qos = qos_profile_from_dict(teleop_spec.source.channel.qos)
-                sub = self.create_subscription(
-                    msg_cls,
-                    teleop_spec.source.channel.topic,
-                    lambda msg, t_spec=teleop_spec, a_spec=action_spec, target=tis.target: self._on_teleop_input(
-                        msg, t_spec, a_spec, target
-                    ),
-                    qos,
-                    callback_group=self._sub_cbg,
-                )
-                self._mux_subs.append(sub)
-                self.get_logger().info(f"Teleop input: {teleop_spec.source.channel.topic} -> {tis.target}")
-
-        # Teleop feedback: origin observation -> human device. Runs whatever
-        # the mux state, since it informs whoever holds the device.
-        if self._contract.teleop and self._contract.teleop.feedback:
-            observation_specs_by_topic = {s.source.channel.topic: s for s in iter_observation_specs(self._contract)}
-            for tfs, feedback_spec in zip(
-                self._contract.teleop.feedback, iter_teleop_feedback_specs(self._contract), strict=True
-            ):
-                obs_spec = observation_specs_by_topic[tfs.origin]  # schema.py validated origin at load time
-                fb_msg_cls = get_message(feedback_spec.source.channel.type)
-                fb_qos = qos_profile_from_dict(feedback_spec.source.channel.qos)
-                fb_pub = self.create_publisher(fb_msg_cls, feedback_spec.source.channel.topic, fb_qos)
-                self._teleop_feedback_publishers[tfs.origin] = (fb_msg_cls, fb_pub)
-
-                origin_msg_cls = get_message(obs_spec.source.channel.type)
-                origin_qos = qos_profile_from_dict(obs_spec.source.channel.qos)
-                sub = self.create_subscription(
-                    origin_msg_cls,
-                    tfs.origin,
-                    lambda msg, o_spec=obs_spec, f_spec=feedback_spec, pub=fb_pub: self._on_teleop_feedback_origin(
-                        msg, o_spec, f_spec, pub
-                    ),
-                    origin_qos,
-                    callback_group=self._sub_cbg,
-                )
-                self._mux_subs.append(sub)
-                self.get_logger().info(f"Teleop feedback: {tfs.origin} -> {feedback_spec.source.channel.topic}")
+        # Takeover: the policy's or the human's commands onto the action topics.
+        self._forwarder = CommandForwarder(
+            self, self._contract, policy_remap_prefix, lambda: self._episode.control, self._sub_cbg
+        )
 
         # Reward publishers, created even without a classifier so human
         # reward overrides have somewhere to go.
-        reward_channels = [src.channel for entry in self._contract.rewards for src in entry.sources]
+        # One publisher per reward topic, however many sources share it.
+        reward_channels = {src.channel.topic: src.channel for entry in self._contract.rewards for src in entry.sources}
+        reward_channels = list(reward_channels.values())
         for ch in reward_channels:
             pub = self.create_publisher(get_message(ch.type), ch.topic, qos_profile_from_dict(ch.qos))
             self._reward_publishers[ch.topic] = (get_message(ch.type), pub)
@@ -459,10 +392,12 @@ class HilManagerNode(RosettaLifecycleNode):
             self.destroy_subscription(sub)
         self._mux_subs = []
 
-        for attr in ("_command_publishers", "_reward_publishers", "_teleop_feedback_publishers"):
-            for _, pub in getattr(self, attr).values():
-                self.destroy_publisher(pub)
-            setattr(self, attr, {})
+        if self._forwarder is not None:
+            self._forwarder.destroy()
+            self._forwarder = None
+        for _, pub in self._reward_publishers.values():
+            self.destroy_publisher(pub)
+        self._reward_publishers = {}
 
         for attr in ("_policy_client", "_reward_client", "_recorder_client", "_action_server"):
             entity = getattr(self, attr)
@@ -494,48 +429,6 @@ class HilManagerNode(RosettaLifecycleNode):
                 setattr(self, attr, None)
 
         self._contract = None
-
-    def _on_policy_output(self, msg, original_topic: str) -> None:
-        """Forward policy output to command topic when in policy mode."""
-        if self._episode.control != Control.POLICY:
-            return
-
-        # Publisher exists by construction: sub and publisher come from the
-        # same contract entry.
-        _, pub = self._command_publishers[original_topic]
-        pub.publish(msg)
-
-    def _on_teleop_input(self, msg, teleop_spec, action_spec, target_topic: str) -> None:
-        """Republish a teleop input message as the target action while teleop has control.
-
-        Decodes with the teleop spec and encodes with the action spec rather
-        than republishing raw, because their select/apply can differ (topic,
-        field layout, units).
-        """
-        if self._episode.control != Control.TELEOP:
-            return
-
-        try:
-            decoded = decode_value(msg, teleop_spec)
-            ros_msg = encode_value(decoded, action_spec)
-        except Exception as e:
-            self.get_logger().error(
-                f"Teleop input decode/encode failed for target '{target_topic}': {e}", throttle_duration_sec=1.0
-            )
-            return
-
-        _, pub = self._command_publishers[target_topic]
-        pub.publish(ros_msg)
-
-    def _on_teleop_feedback_origin(self, msg, obs_spec, feedback_spec, pub) -> None:
-        """Decode an observation message and forward it to the human device as feedback."""
-        try:
-            decoded = decode_value(msg, obs_spec)
-            ros_msg = encode_value(decoded, feedback_spec)
-        except Exception as e:
-            self.get_logger().error(f"Teleop feedback encode failed: {e}", throttle_duration_sec=1.0)
-            return
-        pub.publish(ros_msg)
 
     def _on_reward_classifier_output(self, msg, original_topic: str) -> None:
         """Forward reward classifier output when no human override is active."""
