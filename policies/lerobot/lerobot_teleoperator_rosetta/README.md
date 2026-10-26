@@ -45,10 +45,10 @@ rather than filling zeros, because a fabricated zero would command motion.
 
 A contract's `teleop` section declares three roles. `input` entries each name
 the action topic they drive (`target`) and are decoded like observations.
-`events` maps a closed vocabulary of episode events (`is_intervention`,
-`start_episode`, `success`, `failure`, `end_success`, `end_failure`) onto
-message fields, typically `sensor_msgs/msg/Joy` buttons; an unknown event name
-is a load error. `feedback` entries each name the observation topic they
+`events` maps event names onto message fields, typically
+`sensor_msgs/msg/Joy` buttons. Event names are open: this plugin maps
+`is_intervention`, `success`, `failure`, `end_success` and `end_failure`, and
+logs any other name as ignored. `feedback` entries each name the observation topic they
 forward back to the operator (`origin`).
 
 On this LeRobot-native path, `end_success` and `end_failure` assert the
