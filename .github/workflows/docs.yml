@@ -23,11 +23,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install docs toolchain
-        run: pip install -r doc/requirements.txt
+        run: pip install -r rosetta/doc/requirements.txt
       - name: Build (warnings are errors)
-        run: sphinx-build -W -b html doc _site
+        run: sphinx-build -W -b html rosetta/doc _site
       - name: Check external links
-        run: sphinx-build -b linkcheck doc _linkcheck
+        run: sphinx-build -b linkcheck rosetta/doc _linkcheck
         continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -32,11 +32,11 @@ Every action result reports **how** it ended, not whether it "succeeded":
   constants in each `.action`.
 - Apps built on Rosetta declare their own interfaces. The human-in-the-loop
   manager's `ManageEpisode` and `StartHILEpisode` are in
-  [`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta_hil_interfaces).
+  [`rosetta_hil_interfaces`](../rosetta_hil_interfaces).
 
 Field-by-field definitions with example calls:
 **[Actions and services reference](https://iblnkn.github.io/rosetta/reference/nodes.html)**.
-The `.action` and `.srv` files in this repo are the source of truth: they are
+The `.action` and `.srv` files in this package are the source of truth: they are
 commented, and short enough to read directly.
 
 ## Build

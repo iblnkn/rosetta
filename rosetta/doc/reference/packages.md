@@ -1,11 +1,14 @@
 # Packages
 
+The [`rosetta`](https://github.com/iblnkn/rosetta) repository holds the first four
+packages. Each LeRobot package has its own repository.
+
 | Package | Contains |
 |---|---|
-| [`rosetta`](https://github.com/iblnkn/rosetta) | Contract loader, frame pipeline, the recorder, policy runner and keyboard nodes, the Python API for building apps, `rosetta_port`, example contracts. |
-| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | `RecordEpisode`, `RunPolicy` actions. `StartRecording`, `StartPolicy` services. |
-| [`rosetta_hil`](https://github.com/iblnkn/rosetta_hil) | The human-in-the-loop manager, an app built on the recorder, the policy runner and the Python API. |
-| [`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta_hil_interfaces) | `ManageEpisode` action, `StartHILEpisode` service. |
+| [`rosetta`](https://github.com/iblnkn/rosetta/tree/main/rosetta) | Contract loader, frame pipeline, the recorder, policy runner and keyboard nodes, the Python API for building apps, `rosetta_port`, example contracts. |
+| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_interfaces) | `RecordEpisode`, `RunPolicy` actions. `StartRecording`, `StartPolicy` services. |
+| [`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil) | The human-in-the-loop manager, an app built on the recorder, the policy runner and the Python API. |
+| [`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil_interfaces) | `ManageEpisode` action, `StartHILEpisode` service. |
 | [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | The LeRobot adapter. Registers `lerobot` under `rosetta.dataset_writers` and `rosetta.policy_runners`. Executables `rosetta_policy_server`, `rosetta_classifier_server`. |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | A LeRobot `Robot` plugin. `--robot.type=rosetta` in LeRobot's own CLIs. |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | A LeRobot `Teleoperator` plugin. Experimental. |

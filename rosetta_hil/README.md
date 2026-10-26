@@ -8,7 +8,7 @@ task.
 
 `rosetta_hil` uses only Rosetta's public Python API and its actions
 (`RecordEpisode`, `RunPolicy`). Its own interfaces live in
-[`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta_hil_interfaces).
+[`rosetta_hil_interfaces`](../rosetta_hil_interfaces).
 
 ## Declare the teleop device
 

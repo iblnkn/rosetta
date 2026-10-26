@@ -1,6 +1,6 @@
 # rosetta_hil_interfaces
 
-ROS 2 action and service definitions for [`rosetta_hil`](https://github.com/iblnkn/rosetta_hil), the human-in-the-loop manager built on [Rosetta](https://github.com/iblnkn/rosetta).
+ROS 2 action and service definitions for [`rosetta_hil`](../rosetta_hil), the human-in-the-loop manager built on [Rosetta](https://github.com/iblnkn/rosetta).
 
 | Interface | Kind | Server | Purpose |
 |-----------|------|--------|---------|

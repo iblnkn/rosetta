@@ -70,7 +70,7 @@ instance/
 .scrapy
 
 # Sphinx documentation
-doc/_build/
+**/doc/_build/
 _site/
 _linkcheck/
 

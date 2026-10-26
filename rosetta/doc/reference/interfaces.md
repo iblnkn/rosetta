@@ -3,7 +3,7 @@
 The `rosetta_interfaces` package: two actions, two services and four messages. The nodes
 also use `std_srvs/srv/Trigger`. Apps built on rosetta declare their own
 interfaces; the human-in-the-loop manager's are in
-[`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta_hil_interfaces).
+[`rosetta_hil_interfaces`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil_interfaces).
 
 ## Actions
 

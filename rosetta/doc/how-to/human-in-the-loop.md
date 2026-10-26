@@ -1,7 +1,7 @@
 # Run human-in-the-loop episodes
 
 Human-in-the-loop episodes are run by
-[`rosetta_hil`](https://github.com/iblnkn/rosetta_hil), a separate app built on
+[`rosetta_hil`](https://github.com/iblnkn/rosetta/tree/main/rosetta_hil), a separate app built on
 rosetta's recorder, policy runner and public Python API. Its README covers
 launching, running an episode, and its parameters and interfaces.
 
