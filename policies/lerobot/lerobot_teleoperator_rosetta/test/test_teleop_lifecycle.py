@@ -50,14 +50,6 @@ def teleop():
         pass
 
 
-@pytest.fixture
-def ros():
-    """Global context for fixture nodes (the teleop hosts its own private context)."""
-    rclpy.init()
-    yield
-    rclpy.try_shutdown()
-
-
 def test_input_only_teleop_connects(teleop):
     # The regression: feedback: [] used to mean is_connected was never True.
     teleop.connect()

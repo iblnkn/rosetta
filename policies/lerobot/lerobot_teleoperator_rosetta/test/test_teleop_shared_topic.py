@@ -67,14 +67,6 @@ teleop:
 TOPIC = "/leader/joint_states"
 
 
-@pytest.fixture
-def ros():
-    """Global context for fixture nodes (the teleop hosts its own private context)."""
-    rclpy.init()
-    yield
-    rclpy.try_shutdown()
-
-
 def test_two_input_specs_on_one_topic_both_sampled(tmp_path: Path, ros):
     contract = tmp_path / "teleop_shared.yaml"
     contract.write_text(CONTRACT_YAML)

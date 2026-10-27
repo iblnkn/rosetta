@@ -66,7 +66,7 @@ from rosetta_ros.node_utils import (
     positive_rate_descriptor,
     spin_lifecycle_node,
 )
-from rosetta_ros.rclpy_utils import qos_profile_from_dict
+from rosetta_ros.rclpy_utils import prefixed_topic, qos_profile_from_dict
 from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_ros_hil.forwarding import CommandForwarder
 from rosetta_ros_hil.hil_episode import (
@@ -286,7 +286,7 @@ class HilManagerNode(RosettaLifecycleNode):
         # Reward mux: remapped classifier output -> real reward topic.
         if enable_reward:
             for ch in reward_channels:
-                remapped_topic = reward_remap_prefix + ch.topic
+                remapped_topic = prefixed_topic(reward_remap_prefix, ch.topic)
                 sub = self.create_subscription(
                     get_message(ch.type),
                     remapped_topic,

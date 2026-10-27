@@ -41,7 +41,7 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 from rosetta.frames.codecs import decode_value, encode_value
-from rosetta_ros.rclpy_utils import qos_profile_from_dict
+from rosetta_ros.rclpy_utils import prefixed_topic, qos_profile_from_dict
 from rosetta_ros_hil.hil_episode import Control
 
 
@@ -78,7 +78,6 @@ class CommandForwarder:
         self._publishers: dict[str, object] = {}  # real action topic -> publisher
         self._feedback_publishers: list = []
         self._subscriptions: list = []
-        prefix = policy_prefix.rstrip("/")
 
         try:
             # One publisher and one subscription per action topic, however many
@@ -88,8 +87,9 @@ class CommandForwarder:
                 msg_cls = get_message(channel.type)
                 qos = qos_profile_from_dict(channel.qos)
                 self._publishers[topic] = node.create_publisher(msg_cls, topic, qos)
-                self._subscribe(msg_cls, f"{prefix}{topic}", qos, lambda msg, t=topic: self._on_policy(msg, t))
-                node.get_logger().info(f"Policy output: {prefix}{topic} -> {topic}")
+                policy_topic = prefixed_topic(policy_prefix, topic)
+                self._subscribe(msg_cls, policy_topic, qos, lambda msg, t=topic: self._on_policy(msg, t))
+                node.get_logger().info(f"Policy output: {policy_topic} -> {topic}")
 
             teleop = contract.teleop
             if teleop is not None and teleop.input:

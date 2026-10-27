@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from rosetta_ros.launch_utils import contract_output_remaps
+from rosetta_ros.rclpy_utils import prefixed_topic
 
 STONE = str(Path(__file__).resolve().parent.parent / "contracts" / "stone.yaml")
 
@@ -34,3 +35,10 @@ def test_every_action_and_reward_topic_moves_under_the_prefix(prefix):
 
 def test_no_prefix_means_no_remaps():
     assert contract_output_remaps(STONE, "") == []
+
+
+@pytest.mark.parametrize("prefix", ["/hil/policy", "/hil/policy/"])
+@pytest.mark.parametrize("topic", ["/cmd_vel", "cmd_vel"])
+def test_prefixed_topic_joins_with_exactly_one_slash(prefix, topic):
+    """The runner's remap, the forwarder and the reward mux all name the moved topic this way."""
+    assert prefixed_topic(prefix, topic) == "/hil/policy/cmd_vel"

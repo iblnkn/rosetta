@@ -39,7 +39,7 @@ setup(
     install_requires=[
         "setuptools",
         "numpy",
-        "lerobot",
+        "lerobot<0.6.2",  # 0.6.2 removes async_inference, which the policy runner uses
         "rclpy",
         "rosetta",  # Depends on rosetta.contract/frames/policies
         "lerobot_robot_rosetta",  # RosettaConfig; Robot plugin discovered by lerobot at runtime

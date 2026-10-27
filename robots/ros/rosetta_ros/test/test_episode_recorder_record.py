@@ -115,12 +115,15 @@ class FakeRecorder:
     unblock_stop = RosettaLifecycleNode.unblock_stop
     stop_reason = RosettaLifecycleNode.stop_reason
     stop_detail = RosettaLifecycleNode.stop_detail
+    busy = RosettaLifecycleNode.busy
+    try_claim_work = EpisodeRecorderNode.try_claim_work
     # Real, not stubbed: the goal id it derives lands in bag metadata, so a
     # broken conversion would silently ship bags with no provenance.
     _goal_id_str = staticmethod(EpisodeRecorderNode._goal_id_str)
 
     def __init__(self, tmp_path, *, feedback_rate=50.0, max_duration=0.0, open_error=None, metadata_error=False):
         self._busy = True  # claim held, as try_claim_work leaves it at accept time
+        self._accepting_work = True
         self._work_gate = threading.Lock()
         self._active_goal = None
         self._stop_event = threading.Event()
@@ -414,9 +417,38 @@ def test_delete_when_idle_removes_the_last_bag(tmp_path):
 
 
 def test_delete_with_no_bag_fails(tmp_path):
-    response = _delete_last_bag(FakeRecorder(tmp_path))
+    fake = FakeRecorder(tmp_path)
+    fake._busy = False
+    response = _delete_last_bag(fake)
     assert response.success is False
     assert response.message == "No bag to delete"
+
+
+def _claimed_after(tmp_path, **kwargs):
+    """An idle recorder with a finished bag on disk, then a new recording claimed."""
+    fake = FakeRecorder(tmp_path, **kwargs)
+    fake._busy = False
+    previous = tmp_path / "previous"
+    previous.mkdir()
+    fake._last_bag_dir = previous
+    assert fake.try_claim_work() is None
+    return fake, previous
+
+
+def test_delete_between_accept_and_start_keeps_the_previous_bag(tmp_path):
+    fake, previous = _claimed_after(tmp_path)
+    response = _delete_last_bag(fake)
+    assert response.success is False
+    assert "starting" in response.message
+    assert previous.exists()
+
+
+def test_delete_after_a_recording_with_no_bag_keeps_the_previous_bag(tmp_path):
+    fake, previous = _claimed_after(tmp_path, open_error=RuntimeError("disk full"))
+    _record(fake, "p", FakeGoalHandle())
+    response = _delete_last_bag(fake)
+    assert response.success is False
+    assert previous.exists()
 
 
 def test_service_start_publishes_status_and_its_result(tmp_path):

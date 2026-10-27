@@ -22,8 +22,15 @@ unittest.TestCase) needing to request it explicitly; unittest-style tests
 can't take fixture parameters.
 """
 
+import os
+
 import pytest
 import rclpy
+
+# This package's tests run on their own domain, so a robot or sim on this
+# machine, or another package's tests run in parallel by colcon, never shares
+# their topics. Set at import, before any test creates a context.
+os.environ["ROS_DOMAIN_ID"] = "81"
 
 
 @pytest.fixture(scope="session", autouse=True)

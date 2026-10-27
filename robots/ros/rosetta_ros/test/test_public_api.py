@@ -43,7 +43,7 @@ PUBLIC_API = {
         "spin_lifecycle_node",
         "wait_until",
     },
-    "rosetta_ros.rclpy_utils": {"lifecycle_state_label", "qos_profile_from_dict", "require_transition_success"},
+    "rosetta_ros.rclpy_utils": {"lifecycle_state_label", "prefixed_topic", "qos_profile_from_dict", "require_transition_success"},
     "rosetta_ros.rosetta_lifecycle_node": {"BridgeLifecycleNode", "RosettaLifecycleNode"},
     "rosetta_ros.runner_host": {"RosParameterHost"},
     "rosetta_ros.topic_bridge": {"TopicBridge"},

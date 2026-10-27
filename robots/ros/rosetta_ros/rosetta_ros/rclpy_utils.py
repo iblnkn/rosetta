@@ -40,12 +40,25 @@ from rclpy.qos import (
 
 __all__ = [
     "lifecycle_state_label",
+    "prefixed_topic",
     "qos_profile_from_dict",
     "require_transition_success",
 ]
 
 if TYPE_CHECKING:
     from rclpy.lifecycle import LifecycleNode
+
+
+def prefixed_topic(prefix: str, topic: str) -> str:
+    """``topic`` moved under ``prefix``: the one rule every remap and mux side shares.
+
+    ``("/hil/policy", "/cmd_vel")`` and ``("/hil/policy/", "cmd_vel")`` both give
+    ``/hil/policy/cmd_vel``. An empty ``prefix`` leaves ``topic`` unchanged.
+    """
+    if not prefix:
+        return topic
+    return f"{prefix.rstrip('/')}/{topic.lstrip('/')}"
+
 
 # =============================================================================
 # QoS Utilities

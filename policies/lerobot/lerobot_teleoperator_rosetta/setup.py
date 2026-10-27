@@ -38,7 +38,7 @@ setup(
     install_requires=[
         "setuptools",
         "numpy",
-        "lerobot",
+        "lerobot<0.6.2",  # the version lerobot_rosetta supports (0.6.2 removes async_inference)
         "rclpy",
         "rosetta",  # Depends on rosetta.contract/frames + rosetta_ros
     ],

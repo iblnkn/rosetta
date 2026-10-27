@@ -444,6 +444,14 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         """Start a recording on a background thread, without the action protocol."""
         return self.handle_start_service(response, self._record, (request.prompt or "",), what="recording")
 
+    def try_claim_work(self) -> str | None:
+        """Claim the slot; the claimed recording becomes the last one, so no older bag stays deletable."""
+        reason = RosettaLifecycleNode.try_claim_work(self)
+        if reason is None:
+            with self._bag_lock:
+                self._last_bag_dir = None
+        return reason
+
     def _on_delete_last_bag_service(self, _request, response: Trigger.Response) -> Trigger.Response:
         """Delete the recording in progress when it ends, or else the last finished bag.
 
@@ -458,10 +466,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 response.message = f"Will delete {self._active_bag.name} when the recording ends"
                 return response
             bag_path, self._last_bag_dir = self._last_bag_dir, None
+            starting = bag_path is None and self.busy
 
         if bag_path is None:
             response.success = False
-            response.message = "No bag to delete"
+            response.message = "A recording is starting; it has no bag yet" if starting else "No bag to delete"
             return response
         try:
             shutil.rmtree(bag_path)
@@ -571,12 +580,10 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                     error = error or e
             with self._bag_lock:
                 discard, self._discard_active, self._active_bag = self._discard_active, False, None
-                if discard:
-                    # The discarded bag was the last one; never fall back to an older bag.
-                    self._last_bag_dir = None
-                elif bag_dir.exists():
-                    # Failed partials stay deletable via ~/delete_last_bag.
-                    self._last_bag_dir = bag_dir
+                # This take is now the last one. A discarded take, or one whose
+                # writer never created its directory, leaves nothing to delete:
+                # never fall back to an older bag. Failed partials stay deletable.
+                self._last_bag_dir = bag_dir if not discard and bag_dir.exists() else None
             if discard:
                 shutil.rmtree(bag_dir, ignore_errors=True)
                 self.get_logger().info(f"Deleted bag: {bag_dir}")

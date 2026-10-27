@@ -33,6 +33,8 @@ from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
+from rosetta_ros.rclpy_utils import prefixed_topic
+
 __all__ = [
     "autostart_handlers",
     "contract_output_remaps",
@@ -71,8 +73,7 @@ def contract_output_remaps(contract_path: str, prefix: str) -> list[tuple[str, s
     topics = dict.fromkeys(
         src.channel.topic for entry in (*contract.actions, *contract.rewards) for src in entry.sources
     )
-    base = prefix.rstrip("/")
-    return [(topic, f"{base}{topic}" if topic.startswith("/") else f"{base}/{topic}") for topic in topics]
+    return [(topic, prefixed_topic(prefix, topic)) for topic in topics]
 
 
 def yaml_params(path: str, node_name: str) -> dict:
@@ -83,10 +84,31 @@ def yaml_params(path: str, node_name: str) -> dict:
     file path. A params file's bare top-level node key only matches the
     root-namespace node name, so the file is silently inert for a namespaced
     node. A dict applies unconditionally.
+
+    Sections keyed ``/**``, ``/**/node_name``, ``node_name`` (or
+    ``/node_name``) and ``/<namespace>/node_name`` all apply, merged in that
+    order so the more specific key wins. A file with sections, none of which names this node,
+    raises: ignoring it would silently run the node on defaults.
     """
     with open(path) as f:
         data = yaml.safe_load(f) or {}
-    return (data.get(node_name) or {}).get("ros__parameters") or {}
+
+    def rank(key: str) -> int | None:
+        if key == "/**":
+            return 0
+        if key.lstrip("/") == node_name:
+            return 2
+        if key.startswith("/") and key.rsplit("/", 1)[-1] == node_name:
+            return 1 if key == f"/**/{node_name}" else 3
+        return None
+
+    matched = sorted((r, key) for key in data if (r := rank(str(key))) is not None)
+    if data and not matched:
+        raise ValueError(f"{path}: no section applies to node '{node_name}' (sections: {sorted(map(str, data))})")
+    params: dict = {}
+    for _, key in matched:
+        params.update((data[key] or {}).get("ros__parameters") or {})
+    return params
 
 
 def _flag_condition(name: str, context) -> IfCondition:
