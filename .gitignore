@@ -74,6 +74,7 @@ instance/
 
 # Sphinx documentation
 **/doc/_build/
+docs/_build/
 _site/
 _linkcheck/
 
