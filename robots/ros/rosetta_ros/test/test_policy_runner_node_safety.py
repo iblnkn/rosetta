@@ -12,20 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Client node deactivate ordering and goal-accept exclusion.
+"""PolicyRunnerNode's own stop hooks, feedback thread and runner teardown.
 
-- on_deactivate must stop the runner before sending the safety action, so the
-  safety action is the robot's last command on the wire, not a stale policy
-  action.
-- on_goal must claim the node at accept time. Under the MultiThreadedExecutor
-  a check that _execute satisfies only later lets two goals both be accepted,
-  running two policy loops against one runner/bridge.
+Base work-gate semantics (claims, cancel routing, safety-after-stop) are tested
+on RosettaLifecycleNode in test_lifecycle_node.py. These cover what this node
+plugs into them: on deactivate the runner is asked to stop before the safety
+action goes out, so the safety action is the robot's last command on the wire.
 """
 
 import threading
 
 import pytest
-from rclpy.action import CancelResponse, GoalResponse
+from node_helpers import FakeGoalHandle
+from rclpy.parameter import Parameter
 
 from rosetta_ros.nodes.policy_runner_node import PolicyRunnerNode
 
@@ -78,84 +77,9 @@ def test_safety_action_sent_last_after_runner_stops(node):
     assert fakes.calls == ["request_stop", "safety"]
 
 
-def test_safety_action_still_sent_when_goal_hangs(node):
-    fakes = _OrderedFakes()
-    node._bridge = fakes.make_bridge()
-    node._runner = fakes.make_runner()
-    node._busy = True  # goal never ends
-
-    node._stop_and_secure(wait_timeout=0.2)
-
-    assert fakes.calls == ["request_stop", "safety"]  # safety is last-best-effort
-    node._busy = False
-
-
-def test_goal_accept_is_mutually_exclusive(node):
-    node._accepting_work = True
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    assert node.on_goal(None) == GoalResponse.REJECT  # busy until release
-    node._busy = False
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    node._busy = False
-
-
-def test_goal_rejected_before_activation(node):
-    assert node.on_goal(None) == GoalResponse.REJECT  # initial state: not accepting
-    assert not node.busy  # a rejected goal claims nothing
-
-
-def test_cancel_in_accept_to_execute_window_is_not_lost(node):
-    # The stop event must exist from the moment a goal is accepted, and a
-    # cancel landing before _execute binds the goal must still take effect:
-    # the cancel callback skips signaling (no bound goal to route to), and
-    # goal_work honors it by re-checking is_cancel_requested after binding.
-    fakes = _OrderedFakes()
-    node._runner = fakes.make_runner()
-    node._accepting_work = True
-
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    assert node._stop_event is not None and not node._stop_event.is_set()
-
-    class Handle:
-        goal_id = object()
-        is_cancel_requested = True  # cancel accepted in the accept->bind window
-
-    assert node.on_cancel(Handle()) == CancelResponse.ACCEPT  # unrouted: no bound goal yet
-    assert not node._stop_event.is_set()  # ...so the callback signals nothing
-
-    with node.goal_work(Handle()) as stop_event:
-        assert stop_event.is_set()  # the bind-time re-check honored the cancel
-    assert fakes.calls == ["request_stop"]
-    assert not node.busy  # released by goal_work
-
-
-def test_stale_cancel_does_not_stop_next_goal(node):
-    # A late cancel callback for finished goal A must not set goal B's stop
-    # event: cancels route by goal id against the bound goal.
-    node._accepting_work = True
-
-    class Handle:
-        def __init__(self):
-            self.goal_id = object()
-            self.is_cancel_requested = False
-
-    goal_a, goal_b = Handle(), Handle()
-
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    with node.goal_work(goal_a):
-        pass  # goal A runs and finishes
-
-    assert node.on_goal(None) == GoalResponse.ACCEPT  # goal B claims the slot
-    with node.goal_work(goal_b) as stop_b:
-        node.on_cancel(goal_a)  # stale cancel for A arrives late
-        assert not stop_b.is_set()  # B unaffected
-        node.on_cancel(goal_b)  # a cancel for the bound goal still works
-        assert stop_b.is_set()
-
-
 def test_feedback_loop_logs_and_stops_on_adapter_error(rclpy_ctx):
-    from rclpy.parameter import Parameter
-
+    """An adapter whose feedback() raises ends the status thread (logged) rather
+    than spinning on the error or publishing anything."""
     node = PolicyRunnerNode(parameter_overrides=[Parameter("feedback_rate_hz", value=50.0)])
     try:
 
@@ -163,15 +87,13 @@ def test_feedback_loop_logs_and_stops_on_adapter_error(rclpy_ctx):
             def feedback(self):
                 raise RuntimeError("adapter bug")
 
-        class Handle:
-            is_cancel_requested = False
-
-            def publish_feedback(self, msg):
-                raise AssertionError("must not publish after a feedback() error")
-
         node._runner = Runner()
-        # Returns (via break) instead of propagating and killing the thread.
-        node._feedback_loop(Handle(), threading.Event())
+        handle = FakeGoalHandle()
+        loop = threading.Thread(target=node._feedback_loop, args=(handle, threading.Event()), daemon=True)
+        loop.start()
+        loop.join(timeout=2.0)
+        assert not loop.is_alive(), "feedback loop kept running after feedback() raised"
+        assert handle.feedback == []
     finally:
         node.destroy_node()
 

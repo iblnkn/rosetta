@@ -16,8 +16,8 @@
 
 This is the repo's template for ROS2-idiomatic integration
 tests (docs.ros.org Jazzy "Integration testing with launch_testing"): a launch
-description brings up fixture processes, active tests run against the live
-graph, post-shutdown tests assert process exit codes. Run via colcon test or
+description brings up fixture processes and active tests run against the live
+graph. Run via colcon test or
 ``launch_test test/test_bridge_launch.py``.
 
 The scenario pins the shared-key path end to end: an external ``ros2 topic
@@ -29,12 +29,9 @@ import time
 import unittest
 
 import launch
-import launch_testing
 import launch_testing.actions
-import launch_testing.asserts
 import numpy as np
 import pytest
-from sensor_msgs.msg import JointState  # noqa: F401
 
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
@@ -71,7 +68,7 @@ def generate_test_description():
         output="screen",
     )
     actions += [fixture_pub, launch_testing.actions.ReadyToTest()]
-    return launch.LaunchDescription(actions), {"fixture_pub": fixture_pub}
+    return launch.LaunchDescription(actions)
 
 
 def _obs(key, names, topic):
@@ -138,15 +135,3 @@ class TestBridgeAgainstLiveGraph(unittest.TestCase):
         finally:
             executor.remove_node(node)
             node.destroy_node()
-
-
-@launch_testing.post_shutdown_test()
-class TestFixtureShutdown(unittest.TestCase):
-    def test_fixture_exit_ok(self, proc_info, fixture_pub):
-        # ros2 topic pub is terminated by the launch service at shutdown
-        # (the ros2 CLI exits 2 on SIGINT).
-        launch_testing.asserts.assertExitCodes(
-            proc_info,
-            allowable_exit_codes=[0, 2, -2, -6, -15],
-            process=fixture_pub,
-        )

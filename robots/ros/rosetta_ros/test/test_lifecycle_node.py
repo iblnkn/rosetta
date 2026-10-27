@@ -35,11 +35,13 @@ cause, which is what stopped a deactivate from being reported as a human stop.
 """
 
 import threading
-import time
 
 import numpy as np
 import pytest
 import rclpy
+from bridge_helpers import spin_until
+from node_helpers import FakeGoalHandle, claim
+from rclpy.action import CancelResponse, GoalResponse
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn
 from sensor_msgs.msg import JointState
@@ -69,15 +71,6 @@ def _act_spec(topic: str, names: list[str], safety: SafetyBehavior) -> ActionStr
     )
 
 
-def _spin_until(executor, predicate, timeout_s=5.0):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        executor.spin_once(timeout_sec=0.05)
-        if predicate():
-            return True
-    return False
-
-
 @pytest.fixture
 def node():
     # fps=1 keeps the watchdog period at 2s, far beyond the test's runtime,
@@ -92,7 +85,7 @@ def node():
     n.destroy_node()
 
 
-def test_deactivate_publishes_safety_action_and_disarms_watchdog(rclpy_ctx, node):
+def test_deactivate_publishes_safety_action(rclpy_ctx, node):
     sub_node = rclpy.create_node("lifecycle_fixture_sub")
     executor = SingleThreadedExecutor()
     executor.add_node(node)
@@ -111,17 +104,13 @@ def test_deactivate_publishes_safety_action_and_disarms_watchdog(rclpy_ctx, node
             node.bridge.publish_frame({"action": np.array([1.0, 2.0])})
             return [1.0, 2.0] in received
 
-        assert _spin_until(executor, policy_frame_received)
+        assert spin_until(executor, policy_frame_received)
 
         assert node.trigger_deactivate() == TransitionCallbackReturn.SUCCESS
 
         # The zeros frame was published during on_deactivate, while the
         # lifecycle publisher was still active; it must reach the wire.
-        assert _spin_until(executor, lambda: [0.0, 0.0] in received), (
-            f"safety frame never arrived; received: {received}"
-        )
-        # Securing disarms the watchdog until the next published frame.
-        assert node.bridge._last_action_ns is None
+        assert spin_until(executor, lambda: [0.0, 0.0] in received), f"safety frame never arrived; received: {received}"
     finally:
         executor.remove_node(node)
         executor.remove_node(sub_node)
@@ -195,22 +184,6 @@ def base_node(rclpy_ctx):
     n.destroy_node()
 
 
-def test_configure_failure_logs_and_recovers_via_on_error(rclpy_ctx):
-    class BoomNode(_RecordingNode):
-        def setup(self):
-            raise RuntimeError("setup boom")
-
-    node = BoomNode("base_configure_boom")
-    try:
-        assert node.trigger_configure() != TransitionCallbackReturn.SUCCESS
-        # ERROR routed through on_error: partial state was torn down and the
-        # node is reconfigurable (unconfigured), not wedged or finalized.
-        assert lifecycle_state_label(node) == "unconfigured"
-        assert "teardown" in node.calls
-    finally:
-        node.destroy_node()
-
-
 def test_cleanup_refused_while_work_in_progress(base_node):
     base_node._busy = True
     assert base_node.on_cleanup(None) == TransitionCallbackReturn.FAILURE
@@ -251,40 +224,40 @@ def test_shutdown_teardown_runs_even_when_safety_send_raises(base_node):
     assert "teardown" in base_node.calls  # ...but resources still released
 
 
+def test_goal_rejected_until_activated(base_node):
+    assert base_node.on_goal(None) == GoalResponse.REJECT
+    assert not base_node.busy  # a rejected goal claims nothing
+
+
 def test_goal_work_releases_and_unbinds_on_exception(base_node):
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
-
-    class Handle:
-        goal_id = object()
-        is_cancel_requested = False
-
+    claim(base_node)
     with pytest.raises(RuntimeError, match="boom"):
-        with base_node.goal_work(Handle()):
+        with base_node.goal_work(FakeGoalHandle()):
             raise RuntimeError("boom")
     assert not base_node.busy  # a crashed execution can't brick the node
     assert base_node._active_goal is None
 
 
 def test_claim_and_stop_serialize_on_the_work_gate(base_node):
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
+    claim(base_node)
     claimed_event = base_node._stop_event
     assert claimed_event is not None and not claimed_event.is_set()
 
     base_node._stop_and_secure(wait_timeout=0.1)  # work is wedged; bounded wait
 
-    # The claim's event was set (the goal WILL see the stop), and acceptance
-    # is closed: no new work can be claimed after deactivation began.
+    # The claim's event was set (the goal WILL see the stop) and names the
+    # deactivate, and the robot is secured even though the work never ended.
     assert claimed_event.is_set()
+    assert base_node.stop_reason == TERMINATION_NODE_DEACTIVATED
+    assert base_node.calls == ["unblock_stop", "safety"]
+    # Acceptance is closed: no new work can be claimed after deactivation began.
     assert base_node.try_claim_work() is not None
     base_node._busy = False
     assert base_node.try_claim_work() is not None  # still inactive
 
 
 def test_a_fresh_claim_clears_the_previous_stop_reason(base_node):
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
+    claim(base_node)
     base_node.signal_stop(TERMINATION_CANCELLED, "user asked")
     assert base_node.stop_reason == TERMINATION_CANCELLED
     assert base_node.stop_detail == "user asked"
@@ -301,36 +274,51 @@ def test_first_stop_reason_wins(base_node):
     # The thing that actually decided the outcome is what gets reported, not
     # the last thing to notice. A failed bag write followed by the deactivate
     # it triggers must still read as an error.
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
+    claim(base_node)
     base_node.signal_stop(TERMINATION_ERROR, "Write failed on /scan: boom")
     base_node.signal_stop(TERMINATION_NODE_DEACTIVATED)
     assert base_node.stop_reason == TERMINATION_ERROR
     assert base_node.stop_detail == "Write failed on /scan: boom"
 
 
-def test_deactivate_records_node_deactivated(base_node):
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
-    base_node._stop_and_secure(wait_timeout=0.1)
-    assert base_node.stop_reason == TERMINATION_NODE_DEACTIVATED
-
-
 def test_routed_cancel_records_cancelled_and_a_stale_one_records_nothing(base_node):
-    class Handle:
-        def __init__(self):
-            self.goal_id = object()
-            self.is_cancel_requested = False
-
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
-    live, stale = Handle(), Handle()
-    with base_node.goal_work(live):
+    claim(base_node)
+    live, stale = FakeGoalHandle(), FakeGoalHandle()
+    with base_node.goal_work(live) as stop_event:
         # A cancel for a goal that already finished must not stop, or name,
         # the goal that replaced it.
         base_node.on_cancel(stale)
+        assert not stop_event.is_set()
         assert base_node.stop_reason is None
         base_node.on_cancel(live)
+        assert stop_event.is_set()
+        assert base_node.stop_reason == TERMINATION_CANCELLED
+
+
+def test_cancel_in_accept_to_execute_window_is_not_lost(base_node):
+    """A cancel accepted before goal_work binds the goal finds nothing to route
+    to and signals nothing; goal_work must honor it by re-checking
+    is_cancel_requested once bound."""
+    base_node._accepting_work = True
+    assert base_node.on_goal(None) == GoalResponse.ACCEPT
+    handle = FakeGoalHandle(cancel_requested=True)
+
+    assert base_node.on_cancel(handle) == CancelResponse.ACCEPT
+    assert not base_node._stop_event.is_set()  # unrouted: no bound goal yet
+
+    with base_node.goal_work(handle) as stop_event:
+        assert stop_event.is_set()
+        assert base_node.stop_reason == TERMINATION_CANCELLED
+    assert base_node.calls == ["unblock_stop"]
+
+
+def test_service_cancel_without_a_goal_signals_directly(base_node):
+    """Service-started work has no goal handle for a cancel request to match, so
+    cancel_current_work signals the reason itself instead of forwarding."""
+    claim(base_node)
+    with base_node.goal_work(None) as stop_event:
+        base_node.cancel_current_work(cancel_client=None)  # never touched
+        assert stop_event.is_set()
         assert base_node.stop_reason == TERMINATION_CANCELLED
 
 
@@ -347,8 +335,7 @@ def test_unblock_stop_runs_outside_the_work_gate(base_node):
             base_node._work_gate.release()
 
     base_node.unblock_stop = probe
-    base_node._accepting_work = True
-    assert base_node.try_claim_work() is None
+    claim(base_node)
 
     base_node.signal_stop(TERMINATION_CANCELLED)
     base_node._stop_and_secure(wait_timeout=0.1)

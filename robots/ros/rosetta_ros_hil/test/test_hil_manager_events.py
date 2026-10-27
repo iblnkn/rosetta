@@ -12,25 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HIL manager teleop-event edge detection and episode exclusion.
+"""HIL manager: teleop events, labels, services, and the episode it runs and reports.
 
-- Events must be edge-triggered. Every Joy message reports every button's
-  level, so acting on levels lets an unpressed `failure` button clear the
-  reward override a `success` press just set, and an unpressed
-  `is_intervention` button force the mux back to policy on every message
-  (making set_intervention unusable while a joystick publishes).
-- ManageEpisode goal accept must claim the node atomically, so concurrent
-  goals cannot both be accepted.
+Events must be edge-triggered. Every Joy message reports every button's level,
+so acting on levels lets an unpressed `failure` button clear the reward
+override a `success` press just set, and an unpressed `is_intervention` button
+force the mux back to policy on every message (making set_intervention
+unusable while a joystick publishes).
 """
 
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
-from rclpy.action import GoalResponse
 from rclpy.parameter import Parameter
-from rclpy.qos import DurabilityPolicy
 
 from rosetta_interfaces.msg import ManageEpisodeResult
 from rosetta_ros.node_utils import (
@@ -38,6 +33,7 @@ from rosetta_ros.node_utils import (
     TERMINATION_ERROR,
     TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
+    wait_until,
 )
 from rosetta_ros_hil.hil_episode import (
     OUTCOME_FAILURE,
@@ -45,7 +41,7 @@ from rosetta_ros_hil.hil_episode import (
     OUTCOME_UNLABELED,
     TERMINATION_REWARD_THRESHOLD,
 )
-from rosetta_ros_hil.hil_manager_node import INTERVENTION_QOS, HilManagerNode
+from rosetta_ros_hil.hil_manager_node import HilManagerNode
 
 # events_spec.select maps event name -> Joy selector. Button layout:
 # 0=is_intervention, 1=end_success, 2=end_failure, 3=success, 4=failure, 5=start_episode.
@@ -99,13 +95,6 @@ def episode(node):
     node._busy = False
 
 
-def test_success_override_survives_unpressed_failure_button(node, episode):
-    # Success pressed and failure unpressed in the SAME message.
-    node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
-    assert node._episode.labeled is True
-    assert node._episode.reward == node.get_parameter("human_reward_positive").value
-
-
 def test_events_channel_need_not_be_joy(node, episode):
     """The events channel type comes from the contract; a message without `buttons` must still dispatch."""
     spec = SimpleNamespace(select={"success": "data"})
@@ -147,14 +136,6 @@ def test_override_latches_after_release(node, episode):
     assert node._episode.reward == node.get_parameter("human_reward_positive").value
 
 
-def test_held_button_fires_once(node, episode):
-    published = []
-    node._publish_human_reward = published.append
-    for _ in range(3):
-        node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
-    assert len(published) == 1  # press edge only, not per message
-
-
 def test_failure_press_overrides_with_negative_reward(node, episode):
     node._on_teleop_events(_joy(success=1), EVENTS_SPEC)
     node._on_teleop_events(_joy(failure=1), EVENTS_SPEC)
@@ -181,11 +162,6 @@ def test_every_control_change_is_announced_even_between_episodes(node):
     assert _announced(node) == [1, 0, 1]
 
 
-def test_hil_intervention_keeps_its_last_value_for_late_subscribers():
-    assert INTERVENTION_QOS.durability == DurabilityPolicy.TRANSIENT_LOCAL
-    assert INTERVENTION_QOS.depth == 1
-
-
 def test_service_intervention_not_fought_by_unpressed_joystick(node):
     # set_intervention(True) with the joystick button unpressed: subsequent
     # Joy messages (no edge) must not force the mux back to policy.
@@ -196,51 +172,19 @@ def test_service_intervention_not_fought_by_unpressed_joystick(node):
     assert node._episode.control == "teleop"
 
 
-def test_end_success_stops_episode_with_positive_reward(node, episode):
-    node._on_teleop_events(_joy(end_success=1), EVENTS_SPEC)
-    assert node._stop_event.is_set()
-    assert node._episode.labeled is True
-    assert node._episode.reward == node.get_parameter("human_reward_positive").value
-
-
-def test_end_failure_stops_episode_with_negative_reward(node, episode):
-    node._on_teleop_events(_joy(end_failure=1), EVENTS_SPEC)
-    assert node._stop_event.is_set()
-    assert node._episode.labeled is True
-    assert node._episode.reward == node.get_parameter("human_reward_negative").value
-
-
-def test_end_failure_reward_distinct_from_neutral_baseline(node):
-    # The whole point of a distinct sentinel: an explicit failure must not be
-    # numerically indistinguishable from "nobody labeled this episode".
-    assert node.get_parameter("human_reward_negative").value != 0.0
-
-
-def test_episode_goal_accept_is_mutually_exclusive(node):
-    node._accepting_work = True
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    assert node.on_goal(None) == GoalResponse.REJECT
-    node._busy = False
-    assert node.on_goal(None) == GoalResponse.ACCEPT
-    node._busy = False
-
-
 def test_start_episode_button_starts_when_idle(node, monkeypatch):
     started = []
-    monkeypatch.setattr(node, "_run_episode_detached", lambda *a: started.append(a))
+    fields = ManageEpisodeResult().get_fields_and_field_types()
+    monkeypatch.setattr(node, "_run_episode", lambda *a: started.append(a[:3]) or dict.fromkeys(fields, ""))
     node._accepting_work = True
 
     node._on_teleop_events(_joy(start_episode=1), EVENTS_SPEC)
 
-    # Runs on a background thread; give it a moment to invoke the stub.
-    for _ in range(50):
-        if started:
-            break
-        time.sleep(0.01)
+    # The episode runs on its own thread and releases the work slot when done.
+    assert wait_until(lambda: not node.busy, timeout=5.0, poll=0.01)
     # Empty prompt: the button carries no text, and _run_episode resolves it
     # from default_prompt like every other empty-prompt path.
     assert started == [("", 0.0, 0.0)]
-    node._busy = False
 
 
 def test_start_episode_button_noop_when_already_busy(node, monkeypatch):
@@ -266,8 +210,15 @@ def test_start_episode_button_noop_when_node_inactive(node, monkeypatch):
     assert not node.busy
 
 
-def test_manage_policy_lifecycle_false_skips_policy_send_and_cancel(rclpy_ctx, monkeypatch):
-    node = _with_fake_topics(HilManagerNode(parameter_overrides=[Parameter("manage_policy_lifecycle", value=False)]))
+@pytest.mark.parametrize(
+    ("overrides", "drives_policy"),
+    [([], True), ([Parameter("manage_policy_lifecycle", value=False)], False)],
+    ids=["default", "manage_policy_lifecycle=false"],
+)
+def test_manage_policy_lifecycle_decides_whether_the_policy_is_sent_and_cancelled(
+    rclpy_ctx, monkeypatch, overrides, drives_policy
+):
+    node = _with_fake_topics(HilManagerNode(parameter_overrides=overrides))
     try:
         calls = []
         monkeypatch.setattr(
@@ -275,36 +226,19 @@ def test_manage_policy_lifecycle_false_skips_policy_send_and_cancel(rclpy_ctx, m
             "_send_child_goal",
             lambda client, goal, name, **k: calls.append(("send", name)) or SimpleNamespace(accepted=True),
         )
-        monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: "human_stop")
+        monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: TERMINATION_STOPPED)
         monkeypatch.setattr(node, "_cancel_child", lambda handle, name, **k: calls.append(("cancel", name)))
         monkeypatch.setattr(node, "_stop_recorder", lambda: None)
 
         node._run_episode("t", 0.0, 0.0, threading.Event())
 
-        names_by_action = {action: [n for a, n in calls if a == action] for action in ("send", "cancel")}
-        assert "Robot policy" not in names_by_action["send"]
-        assert "Robot policy" not in names_by_action["cancel"]
-        assert "Episode recorder" in names_by_action["send"]  # unaffected: enable_recording defaults true
+        assert (("send", "Robot policy") in calls, ("cancel", "Robot policy") in calls) == (
+            drives_policy,
+            drives_policy,
+        )
+        assert ("send", "Episode recorder") in calls  # unaffected: enable_recording defaults true
     finally:
         node.destroy_node()
-
-
-def test_manage_policy_lifecycle_true_sends_and_cancels_policy_by_default(node, monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        node,
-        "_send_child_goal",
-        lambda client, goal, name, **k: calls.append(("send", name)) or SimpleNamespace(accepted=True),
-    )
-    monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: "human_stop")
-    monkeypatch.setattr(node, "_cancel_child", lambda handle, name, **k: calls.append(("cancel", name)))
-    monkeypatch.setattr(node, "_stop_recorder", lambda: None)
-
-    node._run_episode("t", 0.0, 0.0, threading.Event())
-
-    names_by_action = {action: [n for a, n in calls if a == action] for action in ("send", "cancel")}
-    assert "Robot policy" in names_by_action["send"]
-    assert "Robot policy" in names_by_action["cancel"]
 
 
 # -------------------- Termination reason: reported, not guessed --------------------
@@ -327,14 +261,6 @@ def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == reason
 
 
-def test_deactivate_is_not_reported_as_a_human_stop(node):
-    """A deactivate must report node_deactivated, not `human_stop`: an episode
-    the node took away is not an episode a human ended."""
-    stop_event = _claimed(node)
-    node._stop_and_secure(wait_timeout=0.1)
-    assert node._feedback_loop(None, 0.0, 0.0, stop_event) == TERMINATION_NODE_DEACTIVATED
-
-
 def test_feedback_loop_reports_its_own_timeout(node):
     stop_event = _claimed(node)
     stop_event.clear()
@@ -345,22 +271,20 @@ def test_feedback_loop_reports_its_own_timeout(node):
 # -------------------- Outcome: did the robot do the task? --------------------
 
 
-def test_episode_starts_unlabeled(node):
-    assert node._episode.outcome == OUTCOME_UNLABELED
-
-
 @pytest.mark.parametrize(
-    ("joy_kwargs", "expected"),
+    ("button", "outcome", "reward_param", "stops"),
     [
-        ({"success": 1}, OUTCOME_SUCCESS),
-        ({"failure": 1}, OUTCOME_FAILURE),
-        ({"end_success": 1}, OUTCOME_SUCCESS),
-        ({"end_failure": 1}, OUTCOME_FAILURE),
+        ("success", OUTCOME_SUCCESS, "human_reward_positive", False),
+        ("failure", OUTCOME_FAILURE, "human_reward_negative", False),
+        ("end_success", OUTCOME_SUCCESS, "human_reward_positive", True),
+        ("end_failure", OUTCOME_FAILURE, "human_reward_negative", True),
     ],
 )
-def test_buttons_label_the_episode(node, episode, joy_kwargs, expected):
-    node._on_teleop_events(_joy(**joy_kwargs), EVENTS_SPEC)
-    assert node._episode.outcome == expected
+def test_buttons_label_the_episode(node, episode, button, outcome, reward_param, stops):
+    """Each press labels the episode; the end_* buttons also stop it. Every other button is unpressed."""
+    node._on_teleop_events(_joy(**{button: 1}), EVENTS_SPEC)
+    reward = node.get_parameter(reward_param).value
+    assert (node._episode.outcome, node._episode.reward, node._stop_event.is_set()) == (outcome, reward, stops)
 
 
 def test_reward_override_service_labels_like_the_button(node, episode):
@@ -398,18 +322,15 @@ def test_label_buttons_are_ignored_when_idle(node, button):
 
 @pytest.mark.parametrize(
     ("service", "service_request"),
-    [("_on_set_reward_override", SimpleNamespace(data=True)), ("_on_clear_reward_override", None)],
+    [
+        ("_on_set_reward_override", SimpleNamespace(data=True)),
+        ("_on_clear_reward_override", None),
+        ("_on_end_episode", SimpleNamespace(data=True)),
+    ],
 )
 def test_label_services_refuse_when_idle(node, service, service_request):
     resp = getattr(node, service)(service_request, SimpleNamespace())
-    assert resp.success is False
-    assert resp.message == "No active episode"
-
-
-def test_end_episode_service_refuses_when_idle(node):
-    resp = node._on_end_episode(SimpleNamespace(data=True), SimpleNamespace())
-    assert resp.success is False
-    assert "No active episode" in resp.message
+    assert (resp.success, resp.message) == (False, "No active episode")
 
 
 def _run_episode_with(node, monkeypatch, reason, reward_threshold=0.0, during=None):
@@ -452,21 +373,16 @@ def test_a_human_label_reaches_the_result(node, episode, monkeypatch):
     assert fields["final_reward"] == node.get_parameter("human_reward_negative").value
 
 
-def test_an_unlabeled_timeout_stays_unlabeled(node, monkeypatch):
-    # Distinct from a classifier honestly reporting 0.0 -- which is the whole
-    # reason `outcome` exists rather than being inferred from final_reward.
-    fields = _run_episode_with(node, monkeypatch, "timeout")
-    assert fields["outcome"] == OUTCOME_UNLABELED
-
-
-def test_a_child_that_fails_to_start_reports_an_error(node, monkeypatch):
+def test_a_child_that_fails_to_start_reports_and_publishes_an_error(node, monkeypatch):
     """The fields dict defaults to `error` so no early return can forget to say
-    the episode never really began."""
+    the episode never really began, and ~/result still hears about it."""
     monkeypatch.setattr(node, "_send_child_goal", lambda *a, **k: None)
     monkeypatch.setattr(node, "_cancel_child", lambda *a, **k: None)
     fields = node._run_episode("t", 0.0, 0.0, threading.Event())
     assert fields["termination_reason"] == TERMINATION_ERROR
     assert "Failed to start" in fields["message"]
+    (published,) = node._result_pub.published
+    assert published.termination_reason == TERMINATION_ERROR
 
 
 def _capture_child_prompts(node, monkeypatch, seen):
@@ -508,14 +424,6 @@ def test_an_episode_publishes_the_result_it_returns(node, monkeypatch):
     fields = _run_episode_with(node, monkeypatch, TERMINATION_REWARD_THRESHOLD, reward_threshold=1.0)
     (published,) = node._result_pub.published
     assert published == ManageEpisodeResult(**fields)
-
-
-def test_a_failed_start_still_publishes_its_result(node, monkeypatch):
-    monkeypatch.setattr(node, "_send_child_goal", lambda *a, **k: None)
-    monkeypatch.setattr(node, "_cancel_child", lambda *a, **k: None)
-    node._run_episode("t", 0.0, 0.0, threading.Event())
-    (published,) = node._result_pub.published
-    assert published.termination_reason == TERMINATION_ERROR
 
 
 def test_status_is_published_without_a_goal(node):

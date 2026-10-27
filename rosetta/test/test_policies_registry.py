@@ -15,8 +15,7 @@
 """The policy-framework registry: entry-point resolution and fail-fast validation.
 
 Everything here fakes ``importlib.metadata`` (the registry's ``_ilm`` handle),
-so no real distribution metadata is involved — same trick as
-test_codec_registry.py uses for the codec plugin loader.
+so no real distribution metadata is involved.
 """
 
 import types
@@ -113,14 +112,14 @@ def _install(monkeypatch, eps_by_group):
     )
 
 
-def test_load_dataset_writer_happy_path(monkeypatch):
-    _install(monkeypatch, {DATASET_WRITER_GROUP: [_fake_ep("good", GoodWriter)]})
-    assert isinstance(load_dataset_writer("good"), GoodWriter)
-
-
-def test_load_policy_runner_happy_path(monkeypatch):
-    _install(monkeypatch, {POLICY_RUNNER_GROUP: [_fake_ep("good", GoodRunner)]})
-    assert isinstance(load_policy_runner("good"), GoodRunner)
+@pytest.mark.parametrize(
+    ("group", "cls", "load"),
+    [(DATASET_WRITER_GROUP, GoodWriter, load_dataset_writer), (POLICY_RUNNER_GROUP, GoodRunner, load_policy_runner)],
+    ids=["writer", "runner"],
+)
+def test_load_happy_path(monkeypatch, group, cls, load):
+    _install(monkeypatch, {group: [_fake_ep("good", cls, group=group)]})
+    assert isinstance(load("good"), cls)
 
 
 def test_unknown_name_error_lists_available(monkeypatch):
@@ -144,27 +143,26 @@ def test_non_conforming_impl_raises_naming_missing_members(monkeypatch):
         load_dataset_writer("partial")
 
 
-def test_non_zero_arg_constructor_propagates_raw(monkeypatch):
-    """Constructor failures propagate unwrapped: the raw traceback names the
-    adapter class directly (NeedsArgs.__init__ missing 'required'), which no
-    registry wrapper improves on."""
-    _install(monkeypatch, {POLICY_RUNNER_GROUP: [_fake_ep("needy", NeedsArgs, dist_name="needy-dist")]})
-    with pytest.raises(TypeError, match=r"required"):
-        load_policy_runner("needy")
+def _raise_import_error():
+    raise ImportError("adapter deps missing")
 
 
-def test_load_failure_propagates_raw(monkeypatch):
-    """A broken adapter import chain escapes unwrapped — the traceback already
-    names the failing module; callers (node, port CLI) log it in full."""
-
-    def _boom():
-        raise ImportError("adapter deps missing")
-
+@pytest.mark.parametrize(
+    ("load", "error", "match"),
+    [
+        (lambda: NeedsArgs, TypeError, "required"),  # constructor needs arguments
+        (_raise_import_error, ImportError, "adapter deps missing"),  # adapter import chain broken
+    ],
+    ids=["constructor", "import"],
+)
+def test_adapter_failures_propagate_raw(monkeypatch, load, error, match):
+    """Load and construction errors escape unwrapped: their tracebacks already
+    name the failing module or class, which no registry wrapper improves on."""
     ep = types.SimpleNamespace(
-        name="broken", group=POLICY_RUNNER_GROUP, dist=types.SimpleNamespace(name="d"), load=_boom
+        name="broken", group=POLICY_RUNNER_GROUP, dist=types.SimpleNamespace(name="d"), load=load
     )
     _install(monkeypatch, {POLICY_RUNNER_GROUP: [ep]})
-    with pytest.raises(ImportError, match="adapter deps missing"):
+    with pytest.raises(error, match=match):
         load_policy_runner("broken")
 
 
@@ -181,9 +179,7 @@ def test_non_class_entry_point_rejected(monkeypatch):
 
 
 def test_none_member_named_in_error(monkeypatch):
-    """A member set to None fails isinstance but passes hasattr — the old
-    diagnostic printed 'missing: ' with an empty list; the callable sweep
-    names it."""
+    """A member set to None fails isinstance but passes hasattr; the error still names it."""
 
     class NoneFinalizeWriter(GoodWriter):
         finalize = None

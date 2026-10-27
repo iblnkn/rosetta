@@ -14,12 +14,8 @@
 
 """CommandForwarder: whoever has control drives every action topic, once per message."""
 
-from collections import defaultdict
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
-from ament_index_python.packages import get_package_share_directory
+from forwarder_fakes import STAMP_NS, STONE, Controls, FakeNode, forwarder
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
@@ -28,62 +24,12 @@ from rosetta.contract.schema import load_contract
 from rosetta_ros_hil.forwarding import CommandForwarder
 from rosetta_ros_hil.hil_episode import Control
 
-STONE = Path(get_package_share_directory("rosetta_ros")) / "contracts" / "stone.yaml"
 ARM = ["shoulder_pan", "shoulder_lift", "elbow", "wrist_pitch", "wrist_roll", "wrist_yaw"]
-STAMP_NS = 1_500_000_123
-
-
-class FakeNode:
-    """Records publishers and subscription callbacks by topic; the clock reads STAMP_NS."""
-
-    def __init__(self):
-        self.published = defaultdict(list)
-        self.callbacks = defaultdict(list)
-        self.destroyed = 0
-
-    def create_publisher(self, msg_cls, topic, qos):
-        return SimpleNamespace(publish=self.published[topic].append)
-
-    def create_subscription(self, msg_cls, topic, callback, qos, callback_group=None):
-        self.callbacks[topic].append(callback)
-        return topic
-
-    def destroy_publisher(self, pub):
-        self.destroyed += 1
-
-    def destroy_subscription(self, sub):
-        self.destroyed += 1
-
-    def get_clock(self):
-        return SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=STAMP_NS))
-
-    def get_logger(self):
-        return SimpleNamespace(info=lambda *_, **__: None, error=lambda *_, **__: None)
-
-    def deliver(self, topic, msg):
-        for callback in self.callbacks[topic]:
-            callback(msg)
-
-
-class Controls:
-    """Who has control, switchable from the test."""
-
-    def __init__(self):
-        self.now = Control.POLICY
-
-    def __call__(self):
-        return self.now
-
-
-def _forwarder(contract):
-    node, control = FakeNode(), Controls()
-    CommandForwarder(node, contract, "/hil/policy", control, callback_group=None)
-    return node, control
 
 
 @pytest.fixture
 def stone():
-    return _forwarder(load_contract(STONE))
+    return forwarder(load_contract(STONE))
 
 
 def _arm(positions):
@@ -168,7 +114,7 @@ def _load(tmp_path, text):
 
 
 def test_a_topic_shared_by_two_sources_is_forwarded_once(tmp_path):
-    node, _ = _forwarder(_load(tmp_path, SHARED_TOPIC))
+    node, _ = forwarder(_load(tmp_path, SHARED_TOPIC))
     assert len(node.callbacks["/hil/policy/cmd"]) == 1
     node.deliver("/hil/policy/cmd", JointState(name=["a", "b"], position=[1.0, 2.0]))
     assert len(node.published["/cmd"]) == 1

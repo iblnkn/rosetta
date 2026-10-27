@@ -12,26 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TopicBridge.clock exposes the host node's (sim-time aware) clock.
+"""TopicBridge's public surface: the FrameIO protocol and the host clock.
 
-Consumers that pace on robot time (the LeRobot adapter's tick gates) reach
-the node clock only through this accessor, so it must be the node's own clock
-object and must fail loudly before setup() binds a node.
+PolicyRunner.run() is typed against FrameIO, so a renamed or dropped bridge
+method must fail here rather than hide behind adapter test doubles. Consumers
+that pace on robot time (the LeRobot adapter's tick gates) reach the node
+clock only through ``clock``, so it must be the node's own (sim-time aware)
+clock object and must fail loudly before setup() binds a node.
 """
 
-from types import SimpleNamespace
-
 import pytest
+from bridge_helpers import FakeNode
 
+from rosetta.frames.protocols import FrameIO
 from rosetta_ros.topic_bridge import TopicBridge
 
 
-class _FakeNode:
-    def __init__(self):
-        self._clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0))
-
-    def get_clock(self):
-        return self._clock
+def test_topic_bridge_satisfies_frame_io():
+    assert isinstance(TopicBridge([], [], fps=10), FrameIO)
 
 
 def test_clock_raises_before_setup():
@@ -42,6 +40,6 @@ def test_clock_raises_before_setup():
 
 def test_clock_is_host_node_clock():
     bridge = TopicBridge([], [], fps=10)
-    node = _FakeNode()
+    node = FakeNode()
     bridge._node = node
     assert bridge.clock is node.get_clock()

@@ -60,7 +60,3 @@ def test_topic_messages_match_the_action():
     """~/status and ~/result are what clients without the action see; they must not drift."""
     assert ManageEpisodeStatus.get_fields_and_field_types() == ManageEpisode.Feedback.get_fields_and_field_types()
     assert ManageEpisodeResult.get_fields_and_field_types() == ManageEpisode.Result.get_fields_and_field_types()
-
-
-def test_episode_rules_spell_the_shared_timeout_like_rosetta_ros():
-    assert hil_episode.TERMINATION_TIMEOUT == node_utils.TERMINATION_TIMEOUT

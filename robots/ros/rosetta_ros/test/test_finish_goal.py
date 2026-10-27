@@ -98,12 +98,6 @@ def test_server_initiated_stop_aborts(reason):
     assert handle.calls == ["abort"]
 
 
-def test_action_protocol_cancel_finishes_canceled():
-    handle = FakeGoalHandle(cancel_requested=True)
-    finish_goal(handle, _result(TERMINATION_CANCELLED))
-    assert handle.calls == ["canceled"]
-
-
 def test_cancelled_reason_without_canceling_state_aborts():
     # The original brick, in its current form: a "cancelled" reason recorded
     # against a goal that never entered CANCELING must NOT call canceled().
@@ -112,14 +106,14 @@ def test_cancelled_reason_without_canceling_state_aborts():
     handle = FakeGoalHandle(cancel_requested=False)
     finish_goal(handle, _result(TERMINATION_CANCELLED))
     assert handle.calls == ["abort"]
-    assert "canceled" not in handle.calls
 
 
-def test_cancel_state_wins_over_the_recorded_reason():
+@pytest.mark.parametrize("reason", [TERMINATION_CANCELLED, TERMINATION_ERROR])
+def test_cancel_state_wins_over_the_recorded_reason(reason):
     # The goal IS in CANCELING, so canceled() is the only legal terminal
     # transition regardless of what the loop recorded.
     handle = FakeGoalHandle(cancel_requested=True)
-    finish_goal(handle, _result(TERMINATION_ERROR))
+    finish_goal(handle, _result(reason))
     assert handle.calls == ["canceled"]
 
 

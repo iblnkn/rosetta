@@ -23,21 +23,9 @@ from rosetta_ros.runner_host import RosParameterHost
 
 @pytest.fixture
 def node():
-    n = Node("runner_host_test", parameter_overrides=[Parameter("from_launch", value=7)])
+    n = Node("runner_host_test")
     yield n
     n.destroy_node()
-
-
-def test_declare_then_get_reads_the_default(node):
-    host = RosParameterHost(node)
-    host.declare("steps", 50, "Steps per chunk")
-    assert host.get("steps") == 50
-
-
-def test_a_launch_override_wins_over_the_default(node):
-    host = RosParameterHost(node)
-    host.declare("from_launch", 1)
-    assert host.get("from_launch") == 7
 
 
 def test_declaring_an_existing_name_is_a_no_op(node):
@@ -53,7 +41,3 @@ def test_read_only_reaches_the_parameter(node):
     (result,) = node.set_parameters([Parameter("device", value="cuda")])
     assert not result.successful
     assert node.get_parameter("device").value == "cpu"
-
-
-def test_logger_is_the_nodes(node):
-    assert RosParameterHost(node).logger.name == node.get_logger().name

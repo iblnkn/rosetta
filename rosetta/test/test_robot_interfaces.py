@@ -14,9 +14,6 @@
 
 """Core works with any robot interface: a contract for the fake one loads, decodes and encodes."""
 
-import importlib.metadata as ilm
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 from fake_interface import FakeVector
@@ -25,7 +22,6 @@ from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 from rosetta.frames.codecs import decode_value, encode_value
-from rosetta.robots import registry
 
 CONTRACT = """\
 robot_type: fake_bot
@@ -42,15 +38,6 @@ actions:
     align: {strategy: hold, timeline: arrival}
     select: [a, b]
 """
-
-
-@pytest.fixture
-def fake_interface(monkeypatch):
-    """Make ``fake`` the only installed robot interface for one test."""
-    ep = ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=registry.ROBOT_INTERFACE_GROUP)
-    monkeypatch.setattr(registry, "_ilm", SimpleNamespace(entry_points=lambda group: [ep]))
-    monkeypatch.setattr(registry, "_instances", {})
-    monkeypatch.setattr(registry, "_codec_state", {"done": False, "failure": None})
 
 
 def _load(tmp_path, text):

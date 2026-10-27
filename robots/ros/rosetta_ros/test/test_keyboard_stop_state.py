@@ -21,6 +21,8 @@ keyboard claims idle.
 
 from types import SimpleNamespace
 
+import pytest
+
 from rosetta_ros.nodes.episode_keyboard_node import EpisodeKeyboardNode
 
 
@@ -51,15 +53,16 @@ def test_stop_success_clears_recording():
     assert node._service_pending is False
 
 
-def test_stop_failure_keeps_recording():
+@pytest.mark.parametrize(
+    "future",
+    [
+        _Future(SimpleNamespace(success=False, message="writer busy")),
+        _Future(error=RuntimeError("service died")),
+    ],
+    ids=["refused", "raised"],
+)
+def test_stop_failure_keeps_recording(future):
     node = _bare_node(recording=True)
-    node._on_stop_done(_Future(SimpleNamespace(success=False, message="writer busy")))
+    node._on_stop_done(future)
     assert node._recording is True  # recorder is still recording; stay in sync
     assert node._service_pending is False  # but allow a retry
-
-
-def test_stop_exception_keeps_recording():
-    node = _bare_node(recording=True)
-    node._on_stop_done(_Future(error=RuntimeError("service died")))
-    assert node._recording is True
-    assert node._service_pending is False

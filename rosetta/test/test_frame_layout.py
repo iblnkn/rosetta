@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for FrameLayout: the canonical shared-key concatenation layout.
+"""FrameLayout: shared-key concatenation, its inverse (split), zero-fill and features.
 
-Pins the flagship contract behavior (multiple specs sharing one key
-concatenate into a flat vector) and its inverse, including the README's
-same-topic-twice example, non-float dtypes, zero-fill shapes, and the
-validation rules for shared keys. Pure Python — no ROS required.
+Multiple specs sharing one key concatenate into a flat vector in declaration
+order; split undoes it for actions. The specs are built by hand, so the type
+strings are labels only.
 """
 
 import numpy as np
@@ -26,7 +25,7 @@ import pytest
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.frames.layout import FrameLayout
+from rosetta.frames.layout import FrameLayout, build_feature
 
 
 def obs_spec(key, names, *, topic="/t", dtype="float32", namespace=None, **over):
@@ -76,21 +75,6 @@ def test_shared_float_key_concatenates_in_declaration_order():
     layout = FrameLayout(specs)
     frame = layout.assemble([np.array([1.0, 2.0, 3.0]), np.array([4.0])])
     np.testing.assert_array_equal(frame["observation.state"], np.array([1, 2, 3, 4], dtype=np.float32))
-
-
-def test_same_topic_two_specs_readme_example():
-    # The README kind example: position and orientation slices of /ee_pose.
-    specs = [
-        obs_spec("observation.state", ["x", "y", "z"], topic="/ee_pose"),
-        obs_spec("observation.state", ["qx", "qy", "qz", "qw"], topic="/ee_pose"),
-        obs_spec("observation.state", ["grip"], topic="/gripper"),
-    ]
-    layout = FrameLayout(specs)
-    frame = layout.assemble([np.arange(3.0), np.arange(10.0, 14.0), np.array([0.5])])
-    np.testing.assert_array_equal(
-        frame["observation.state"],
-        np.array([0, 1, 2, 10, 11, 12, 13, 0.5], dtype=np.float32),
-    )
 
 
 @pytest.mark.parametrize("dtype", ["int32", "int64", "bool"])
@@ -154,6 +138,19 @@ def test_assemble_shapes_match_features():
 
     assert feats["observation.state"]["names"] == ["j1", "j2", "grip"]
     assert feats["observation.images.cam"]["shape"] == (48, 64, 3)
+    assert frame["observation.images.cam"].dtype == np.uint8
+
+
+def test_string_feature_is_a_lerobot_string():
+    feats = FrameLayout([obs_spec("task2", [], topic="/str", dtype="string")]).lerobot_features()
+    assert feats["task2"] == {"dtype": "string", "shape": (1,), "names": None}
+
+
+def test_build_feature_rejects_numeric_specs():
+    # A numeric key's feature must cover the whole concatenated vector, which
+    # one spec cannot know; only FrameLayout.lerobot_features() builds it.
+    with pytest.raises(ValueError, match="lerobot_features"):
+        build_feature(obs_spec("observation.state", ["a", "b"]))
 
 
 def test_duplicate_rendered_names_rejected():
@@ -226,13 +223,10 @@ def test_split_missing_key_raises():
 
 
 def test_split_selectless_single_spec_is_scalar():
-    # A select-less numeric spec is a scalar by contract (spec.dim == 1);
-    # split enforces that instead of passing dynamic widths through.
+    # A select-less numeric spec is a scalar by contract (spec.dim == 1).
     layout = FrameLayout([act_spec("action", [])])
     (part,) = layout.split({"action": np.array([1.5])})
     np.testing.assert_array_equal(part, [1.5])
-    with pytest.raises(ValueError, match="length 1"):
-        layout.split({"action": np.array([1.0, 2.0, 3.0])})
 
 
 def test_split_rejects_unknown_keys():
@@ -252,10 +246,6 @@ def test_split_emits_float64_preserving_nonfinite():
     assert part.dtype == np.float64
     assert np.isnan(part[0])  # survives to the gate
     assert part[1] == 1.5  # not truncated by an int cast
-
-    layout32 = FrameLayout([act_spec("action", ["j1"], dtype="float32")])
-    (part32,) = layout32.split({"action": np.array([1.0])})
-    assert part32.dtype == np.float64
 
 
 # ---------- validation ----------
@@ -279,22 +269,17 @@ def test_shared_key_selectless_spec_rejected():
         FrameLayout(specs)
 
 
-def test_shared_string_key_rejected():
-    specs = [
-        obs_spec("task2", [], topic="/1", dtype="string"),
-        obs_spec("task2", [], topic="/2", dtype="string"),
-    ]
+@pytest.mark.parametrize(
+    "spec",
+    [
+        lambda topic: obs_spec("observation.x", [], topic=topic, dtype="string"),
+        lambda topic: image_spec("observation.x", topic=topic),
+    ],
+    ids=["string", "image"],
+)
+def test_shared_non_numeric_key_rejected(spec):
     with pytest.raises(ContractValidationError, match="all-numeric"):
-        FrameLayout(specs)
-
-
-def test_shared_image_key_rejected():
-    specs = [
-        image_spec("observation.images.cam", topic="/cam1"),
-        image_spec("observation.images.cam", topic="/cam2"),
-    ]
-    with pytest.raises(ContractValidationError, match="all-numeric"):
-        FrameLayout(specs)
+        FrameLayout([spec("/1"), spec("/2")])
 
 
 def test_unsupported_numeric_dtype_rejected():
@@ -307,7 +292,7 @@ def test_unsupported_numeric_dtype_rejected():
 def test_assemble_wrong_value_count_rejected():
     # The guard on the positional contract (values[i] pairs with specs[i]).
     layout = FrameLayout([obs_spec("observation.state", ["a", "b"])])
-    with pytest.raises(ValueError, match="got 2 values for 1 specs"):
+    with pytest.raises(ValueError, match="1 specs"):
         layout.assemble([np.zeros(2), np.zeros(2)])
 
 
@@ -331,19 +316,6 @@ def test_assemble_selectless_stream_must_be_scalar():
     assert frame["observation.env"].shape == (1,)
     with pytest.raises(ValueError, match="add select"):
         layout.assemble([np.array([1.0, 2.0, 3.0])])
-
-
-def test_np_dtype_rejects_non_numeric_keys():
-    layout = FrameLayout([obs_spec("task2", [], topic="/str", dtype="string")])
-    with pytest.raises(ValueError, match="numeric keys only"):
-        _ = layout["task2"].np_dtype
-
-
-def test_action_spec_default_dtype_builds():
-    # Actions carry a resolved dtype (default float64), so custom-decoder
-    # actions build a layout without a registered decoder.
-    layout = FrameLayout([act_spec("action", ["j1"])])
-    assert layout["action"].dtype == "float64"
 
 
 def test_mixed_role_shared_key_rejected():

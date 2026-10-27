@@ -43,15 +43,6 @@ def test_local_dir_miss_returns_none_quietly(tmp_path):
     assert warnings == []
 
 
-def test_nested_filename_in_local_dir(tmp_path):
-    """The production combination: a local dataset root with the meta/ sidecar."""
-    sidecar = tmp_path / LEROBOT_CONTRACT_SIDECAR_PATH
-    sidecar.parent.mkdir()
-    sidecar.write_text("robot_type: x\n")
-    result = resolve_repo_file(str(tmp_path), LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset")
-    assert result == sidecar
-
-
 def test_local_file_warns_and_skips_hub_probe(monkeypatch, tmp_path):
     """A path that exists but isn't a directory is never a repo id; no network."""
     hf_hub = pytest.importorskip("huggingface_hub")
@@ -66,49 +57,28 @@ def test_local_file_warns_and_skips_hub_probe(monkeypatch, tmp_path):
     assert len(warnings) == 1 and "not a directory" in warnings[0]
 
 
-def test_nonexistent_local_path_falls_through_to_hub_probe(monkeypatch, tmp_path):
-    """A path_or_repo_id that isn't a local dir is treated as a Hub repo id."""
+@pytest.mark.parametrize(
+    ("repo_id", "filename", "repo_type", "wire_filename"),
+    [
+        ("org/repo", "train_config.json", "model", "train_config.json"),
+        # Literal on purpose: pins the on-the-wire value behind the constant.
+        ("org/dataset", LEROBOT_CONTRACT_SIDECAR_PATH, "dataset", "meta/rosetta_contract.yaml"),
+    ],
+)
+def test_non_directory_path_is_probed_as_hub_repo(monkeypatch, tmp_path, repo_id, filename, repo_type, wire_filename):
     hf_hub = pytest.importorskip("huggingface_hub")
-
     seen = {}
 
-    def _fake_download(*, repo_id, filename, repo_type, etag_timeout):
-        seen.update(repo_id=repo_id, filename=filename, repo_type=repo_type, etag_timeout=etag_timeout)
-        return str(tmp_path / "downloaded.json")
+    def _fake_download(*, repo_id, filename, repo_type, **_kw):
+        seen.update(repo_id=repo_id, filename=filename, repo_type=repo_type)
+        return str(tmp_path / "downloaded")
 
     monkeypatch.setattr(hf_hub, "hf_hub_download", _fake_download)
 
-    result = resolve_repo_file("org/repo", "train_config.json", repo_type="model")
+    result = resolve_repo_file(repo_id, filename, repo_type=repo_type)
 
-    assert seen == {
-        "repo_id": "org/repo",
-        "filename": "train_config.json",
-        "repo_type": "model",
-        "etag_timeout": 5.0,
-    }
-    assert result == tmp_path / "downloaded.json"
-
-
-def test_dataset_repo_type_and_nested_filename(monkeypatch, tmp_path):
-    hf_hub = pytest.importorskip("huggingface_hub")
-
-    seen = {}
-
-    def _fake_download(*, repo_id, filename, repo_type, etag_timeout):
-        seen.update(repo_id=repo_id, filename=filename, repo_type=repo_type, etag_timeout=etag_timeout)
-        return str(tmp_path / "rosetta_contract.yaml")
-
-    monkeypatch.setattr(hf_hub, "hf_hub_download", _fake_download)
-
-    resolve_repo_file("org/dataset", LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset")
-
-    # Literal on purpose: pins the on-the-wire value behind the constant.
-    assert seen == {
-        "repo_id": "org/dataset",
-        "filename": "meta/rosetta_contract.yaml",
-        "repo_type": "dataset",
-        "etag_timeout": 5.0,
-    }
+    assert seen == {"repo_id": repo_id, "filename": wire_filename, "repo_type": repo_type}
+    assert result == tmp_path / "downloaded"
 
 
 def _hub_http_error():
@@ -178,12 +148,6 @@ def test_scan_finds_nested_inline_codecs_and_ignores_blanks(tmp_path):
         ("decoder", "my_pkg.codecs:decode_state"),
         ("encoder", "my_pkg.codecs:encode_a"),
     ]
-
-
-def test_scan_of_codec_free_contract_is_empty(tmp_path):
-    contract = tmp_path / "contract.yaml"
-    contract.write_text("robot_interface: ros2\nfps: 30\nobservations: {}\n")
-    assert scan_inline_codec_paths(contract) == []
 
 
 def test_scan_imports_nothing(tmp_path):

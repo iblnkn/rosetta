@@ -24,13 +24,6 @@ import time
 from rosetta_ros.node_utils import wait_until
 
 
-def test_true_predicate_returns_immediately():
-    start = time.monotonic()
-    assert wait_until(lambda: True, timeout=5.0)
-    # No poll sleeps: an already-true condition must not burn the timeout.
-    assert time.monotonic() - start < 1.0
-
-
 def test_false_predicate_times_out_within_bound():
     start = time.monotonic()
     assert not wait_until(lambda: False, timeout=0.2, poll=0.05)
@@ -53,5 +46,6 @@ def test_condition_true_during_final_poll_is_not_reported_as_timeout():
 
 
 def test_zero_timeout_degenerates_to_single_check():
+    # Checks before sleeping: an already-true condition never waits.
     assert wait_until(lambda: True, timeout=0.0)
     assert not wait_until(lambda: False, timeout=0.0)

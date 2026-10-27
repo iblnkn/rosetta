@@ -26,14 +26,13 @@ import pytest
 pytest.importorskip("rosbag2_py")
 
 import rosbag2_py
-import yaml
-from rclpy.serialization import serialize_message
+from bridge_helpers import write_bag
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from rosetta_ros.bag_metadata import BAG_METADATA_KEY, BAG_PROMPT_KEY
+from rosetta_ros.bag_metadata import BAG_PROMPT_KEY, update_custom_data
 from rosetta_ros.offline import bag_frames
 from rosetta_ros.offline.bag_frames import iter_bag_frames
 
@@ -77,30 +76,9 @@ def _task(text):
 
 def _write_bag(bag_dir, events, prompt=""):
     """Write (topic, type, ns, msg) events to a bag, plus prompt metadata."""
-    writer = rosbag2_py.SequentialWriter()
-    writer.open(
-        rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id="mcap"),
-        rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
-    )
-    topic_types = {t: ty for t, ty, _, _ in events}
-    for tid, (topic, type_str) in enumerate(sorted(topic_types.items())):
-        try:
-            meta = rosbag2_py.TopicMetadata(id=tid, name=topic, type=type_str, serialization_format="cdr")
-        except TypeError:  # pre-Jazzy signature without id
-            meta = rosbag2_py.TopicMetadata(topic, type_str, "cdr")
-        writer.create_topic(meta)
-    for topic, _, ns, msg in sorted(events, key=lambda e: e[2]):
-        writer.write(topic, serialize_message(msg), ns)
-    del writer  # flush + write metadata.yaml
-
+    write_bag(bag_dir, [(topic, ns, msg) for topic, _, ns, msg in events])
     if prompt:
-        meta_path = bag_dir / "metadata.yaml"
-        meta = yaml.safe_load(meta_path.read_text())
-        info = meta[BAG_METADATA_KEY]
-        if not info.get("custom_data"):
-            info["custom_data"] = {}
-        info["custom_data"][BAG_PROMPT_KEY] = prompt
-        meta_path.write_text(yaml.safe_dump(meta))
+        update_custom_data(bag_dir / "metadata.yaml", {BAG_PROMPT_KEY: prompt})
 
 
 def _frames(bag_dir):
@@ -147,7 +125,7 @@ def test_task_changes_mid_episode(tmp_path):
 
 
 def test_without_task_topics_prompt_only(tmp_path):
-    # A contract with no tasks section behaves exactly as before.
+    # A contract with no tasks section ignores task messages in the bag.
     bag = tmp_path / "ep0"
     events = [
         *_obs_events(2),
@@ -193,13 +171,6 @@ def spy_reader(monkeypatch):
     _SpyReader.closed = []
     monkeypatch.setattr(bag_frames.rosbag2_py, "SequentialReader", _SpyReader)
     return _SpyReader
-
-
-def test_draining_the_iterator_closes_the_bag(tmp_path, spy_reader):
-    bag = tmp_path / "ep0"
-    _write_bag(bag, _obs_events(4))
-    _frames(bag)
-    assert spy_reader.closed
 
 
 def test_abandoning_the_iterator_closes_the_bag(tmp_path, spy_reader):

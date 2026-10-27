@@ -12,14 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""start_episode is start-and-return: the service must never hold an
-executor thread for the episode.
-
-The old synchronous handler ran the whole episode inside the callback
-(unbounded with max_duration_s=0) on a 4-thread executor — one concurrent
-call from starvation. Now the handler claims the busy guard, spawns the
-episode thread, and returns; the thread releases the guard on every exit.
-"""
+"""start_episode claims the busy guard and returns; the episode thread releases it on every exit."""
 
 import threading
 

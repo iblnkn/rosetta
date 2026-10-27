@@ -42,21 +42,22 @@ def test_prefers_compressed_when_nothing_pinned():
     assert _kept(_cam()) == {f"{RAW}/compressed"}
 
 
-def test_contract_raw_covers_family():
-    assert _kept(_cam(), recorded={RAW}) == {RAW}
-
-
-def test_contract_compressed_covers_family():
-    # The contract-declared form is the ONLY family member recorded — raw
-    # included. Adjunct or include_topics are the ways to pin a second form.
-    assert _kept(_cam(), recorded={f"{RAW}/compressed"}) == {f"{RAW}/compressed"}
-
-
-def test_adjunct_pins_a_second_stream():
-    # Contract observation records /compressed; adjunct additionally declares
-    # raw (adjunct channels land in the recorded set): both record.
-    kept = _kept(_cam(), recorded={f"{RAW}/compressed", RAW})
-    assert kept == {f"{RAW}/compressed", RAW}
+@pytest.mark.parametrize(
+    ("recorded", "include", "expect"),
+    [
+        ({RAW}, None, {RAW}),  # the contract records raw: the family is covered
+        # The contract-declared form is the ONLY member recorded, raw included.
+        ({f"{RAW}/compressed"}, None, {f"{RAW}/compressed"}),
+        # An adjunct channel lands in the recorded set too, pinning a second form.
+        ({f"{RAW}/compressed", RAW}, None, {f"{RAW}/compressed", RAW}),
+        (set(), {RAW}, {RAW}),  # include_topics pins raw over the preference
+        (set(), {RAW, f"{RAW}/compressed"}, {RAW, f"{RAW}/compressed"}),
+    ],
+    ids=["contract-raw", "contract-compressed", "adjunct", "include-raw", "include-two"],
+)
+def test_pinned_members_record_and_the_rest_skip(recorded, include, expect):
+    kw = {"include": lambda t: t in include} if include else {}
+    assert _kept(_cam(), recorded=recorded, **kw) == expect
 
 
 @pytest.mark.parametrize(
@@ -78,21 +79,6 @@ def test_excluded_best_falls_to_next_candidate():
 
 def test_fully_excluded_family_records_nothing():
     assert _kept(_cam(), exclude=lambda t: True) == set()
-
-
-def test_raw_recorded_unless_blacklisted():
-    # Only raw advertised and it is excluded: nothing to record.
-    assert _kept(_cam(RAW, ()), exclude=lambda t: t == RAW) == set()
-
-
-def test_include_pins_raw_over_preference():
-    kept = _kept(_cam(), include=lambda t: t == RAW)
-    assert kept == {RAW}
-
-
-def test_include_pins_multiple_members():
-    kept = _kept(_cam(), include=lambda t: t in (RAW, f"{RAW}/compressed"))
-    assert kept == {RAW, f"{RAW}/compressed"}
 
 
 def test_compressed_only_camera_is_not_a_family():

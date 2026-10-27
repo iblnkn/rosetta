@@ -22,11 +22,10 @@ FrameLayout.assemble) driven with those semantics directly; the porter's output
 must match frame-for-frame.
 
 Pinned behaviors:
-- frame 0 must not be zero-filled (messages are pushed before the first tick
-  is emitted);
 - a message received exactly at tick t belongs to frame t;
-- warmup: ticks before every routed observation stream has data are skipped;
-  late action streams do NOT gate warmup;
+- warmup: ticks before every routed observation stream has data are skipped,
+  and the first emitted frame carries real data, not zeros; late action
+  streams do NOT gate warmup;
 - a routed observation topic with zero messages -> RuntimeError;
 - a spec whose type is encode-only (no decoder) -> RuntimeError before any
   message is read (porting it could only record zeros);
@@ -38,12 +37,10 @@ import logging
 
 import numpy as np
 import pytest
-import rosbag2_py
-from rclpy.serialization import serialize_message
-from sensor_msgs.msg import JointState
+from bridge_helpers import act_spec, joint_state, obs_spec, write_bag
 
 from rosetta.contract.schema import Align, Channel, Source
-from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+from rosetta.contract.specs import ActionStreamSpec
 from rosetta.frames.codecs import decode_value
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer
@@ -54,83 +51,25 @@ STEP_NS = int(1e9 / FPS)
 T0 = 1_000_000_000  # arbitrary bag epoch
 
 
-def _obs(key, names, topic):
-    return ObservationStreamSpec(
-        key=key,
-        names=list(names),
-        fps=FPS,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        is_image=False,
-        image_resize=None,
-        dtype="float64",
-    )
-
-
-def _act(key, names, topic):
-    return ActionStreamSpec(
-        key=key,
-        names=list(names),
-        fps=FPS,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        dtype="float64",
-    )
-
-
 SPECS = [
-    _obs("observation.state", ["position.j1", "position.j2"], "/obs_a"),
-    _obs("observation.env", ["position.e1"], "/obs_b"),
-    _act("action", ["position.a1"], "/cmd"),
+    obs_spec("observation.state", ["position.j1", "position.j2"], "/obs_a", fps=FPS),
+    obs_spec("observation.env", ["position.e1"], "/obs_b", fps=FPS),
+    act_spec("action", ["position.a1"], "/cmd", fps=FPS),
 ]
 WARMUP_KEYS = {"observation.state", "observation.env"}
-
-
-def _js(names, positions):
-    msg = JointState()
-    msg.name = list(names)
-    msg.position = [float(p) for p in positions]
-    return msg
 
 
 # (topic, receive_ns, msg). /obs_b starts late (warmup skips ticks 0 and 1);
 # /obs_a has a message at EXACTLY tick 3 (T0 + 300ms); /cmd starts even later
 # and must not gate warmup.
 EVENTS = [
-    ("/obs_a", T0, _js(["j1", "j2"], [1.0, 2.0])),
-    ("/obs_a", T0 + 95_000_000, _js(["j1", "j2"], [3.0, 4.0])),
-    ("/obs_b", T0 + 150_000_000, _js(["e1"], [7.0])),
-    ("/obs_a", T0 + 300_000_000, _js(["j1", "j2"], [5.0, 6.0])),  # exact tick boundary
-    ("/obs_b", T0 + 400_000_000, _js(["e1"], [8.0])),
-    ("/cmd", T0 + 450_000_000, _js(["a1"], [9.0])),
+    ("/obs_a", T0, joint_state(["j1", "j2"], [1.0, 2.0])),
+    ("/obs_a", T0 + 95_000_000, joint_state(["j1", "j2"], [3.0, 4.0])),
+    ("/obs_b", T0 + 150_000_000, joint_state(["e1"], [7.0])),
+    ("/obs_a", T0 + 300_000_000, joint_state(["j1", "j2"], [5.0, 6.0])),  # exact tick boundary
+    ("/obs_b", T0 + 400_000_000, joint_state(["e1"], [8.0])),
+    ("/cmd", T0 + 450_000_000, joint_state(["a1"], [9.0])),
 ]
-
-
-def _write_bag(bag_dir, events, extra_topics=()):
-    """Write events to a bag; extra_topics registers topics with no messages."""
-    writer = rosbag2_py.SequentialWriter()
-    writer.open(
-        rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id="mcap"),
-        rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
-    )
-    for tid, topic in enumerate(sorted({t for t, _, _ in events} | set(extra_topics))):
-        try:
-            meta = rosbag2_py.TopicMetadata(
-                id=tid,
-                name=topic,
-                type="sensor_msgs/msg/JointState",
-                serialization_format="cdr",
-            )
-        except TypeError:  # pre-Jazzy signature without id
-            meta = rosbag2_py.TopicMetadata(topic, "sensor_msgs/msg/JointState", "cdr")
-        writer.create_topic(meta)
-    for topic, ns, msg in sorted(events, key=lambda e: e[1]):
-        writer.write(topic, serialize_message(msg), ns)
-    del writer  # flush + write metadata.yaml
 
 
 def _oracle_frames(specs, events, warmup_keys):
@@ -139,12 +78,7 @@ def _oracle_frames(specs, events, warmup_keys):
     and assemble through the same FrameLayout. Ticks before all warmup buffers
     have data are skipped."""
     layout = FrameLayout(specs)
-    buffers = []
-    for spec in specs:
-        if isinstance(spec, ObservationStreamSpec):
-            buffers.append(StreamBuffer.from_spec(spec))
-        else:
-            buffers.append(StreamBuffer(policy="hold", step_ns=STEP_NS, tol_ns=0))
+    buffers = [StreamBuffer.from_spec(spec) for spec in specs]
 
     events = sorted(events, key=lambda e: e[1])
     start_ns = events[0][1]
@@ -178,7 +112,7 @@ def _oracle_frames(specs, events, warmup_keys):
 @pytest.fixture
 def bag_dir(tmp_path):
     d = tmp_path / "bag"
-    _write_bag(d, EVENTS)
+    write_bag(d, EVENTS)
     return d
 
 
@@ -215,18 +149,12 @@ def test_message_at_exact_tick_is_included(bag_dir):
     np.testing.assert_array_equal(frame_at_300["observation.state"], [5.0, 6.0])
 
 
-def test_no_zero_filled_first_frame(bag_dir):
-    ported = list(iter_bag_frames(bag_dir, SPECS, warmup_keys=WARMUP_KEYS))
-    for key in ("observation.state", "observation.env"):
-        assert not np.allclose(ported[0][key], 0), key
-
-
 def test_observation_stream_with_no_messages_raises(tmp_path):
     # /obs_b topic exists in the bag but never publishes: warmup cannot
     # complete and the porter must fail loudly instead of emitting zeros.
     events = [e for e in EVENTS if e[0] != "/obs_b"]
     d = tmp_path / "bag_stale"
-    _write_bag(d, events, extra_topics=("/obs_b",))
+    write_bag(d, events, extra_topics={"/obs_b": "sensor_msgs/msg/JointState"})
     with pytest.raises(RuntimeError, match="observation.env"):
         list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
 
@@ -237,7 +165,7 @@ def test_observation_topic_absent_from_bag_raises(tmp_path):
     # 100% fabricated zeros for that stream.
     events = [e for e in EVENTS if e[0] != "/obs_b"]
     d = tmp_path / "bag_absent"
-    _write_bag(d, events)
+    write_bag(d, events)
     with pytest.raises(RuntimeError, match="missing from bag.*observation.env"):
         list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
 
@@ -246,16 +174,16 @@ def test_absent_action_topic_still_ports(tmp_path):
     # Non-warmup streams (actions) may legitimately be absent: warn + zero-fill.
     events = [e for e in EVENTS if e[0] != "/cmd"]
     d = tmp_path / "bag_no_cmd"
-    _write_bag(d, events)
+    write_bag(d, events)
     ported = list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
     assert ported
     for frame in ported:
         np.testing.assert_array_equal(frame["action"], [0.0])
 
 
-def test_encode_only_spec_fails_fast(bag_dir):
-    # Encode-only channel types are valid live (actions are never decoded
-    # there) but unportable: the porter records every spec, so it must refuse
+def test_undecodable_spec_fails_fast(bag_dir):
+    # A channel type with no registered decoder is valid live (actions are
+    # never decoded there) but unportable: the porter records every spec, so it must refuse
     # up front rather than silently record an all-zero column.
     encode_only = ActionStreamSpec(
         key="action.aux",
@@ -271,36 +199,18 @@ def test_encode_only_spec_fails_fast(bag_dir):
         next(iter_bag_frames(bag_dir, [*SPECS, encode_only], warmup_keys=WARMUP_KEYS))
 
 
-def _js_stamped(names, positions, stamp_ns):
-    msg = _js(names, positions)
-    msg.header.stamp.sec = stamp_ns // 1_000_000_000
-    msg.header.stamp.nanosec = stamp_ns % 1_000_000_000
-    return msg
-
-
 def test_header_timeline_drop_and_recovery_offline(tmp_path, caplog):
     # Offline twin of the live ingest guard: an unstamped message on a
     # header-timeline stream is dropped (warn-once), a stamped one recovers,
     # and porting continues instead of dying or fabricating a timestamp.
-    spec = ObservationStreamSpec(
-        key="observation.h",
-        names=["position.j1"],
-        fps=FPS,
-        source=Source(
-            channel=Channel(topic="/obs_h", type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "header"),
-        ),
-        is_image=False,
-        image_resize=None,
-        dtype="float64",
-    )
+    spec = obs_spec("observation.h", ["position.j1"], "/obs_h", fps=FPS, align=Align("hold", "header"))
     events = [
-        ("/obs_h", T0, _js(["j1"], [1.0])),  # zero stamp -> dropped
-        ("/obs_h", T0 + 50_000_000, _js_stamped(["j1"], [2.0], T0 + 50_000_000)),
-        ("/obs_h", T0 + 150_000_000, _js_stamped(["j1"], [3.0], T0 + 150_000_000)),
+        ("/obs_h", T0, joint_state(["j1"], [1.0])),  # zero stamp -> dropped
+        ("/obs_h", T0 + 50_000_000, joint_state(["j1"], [2.0], stamp_ns=T0 + 50_000_000)),
+        ("/obs_h", T0 + 150_000_000, joint_state(["j1"], [3.0], stamp_ns=T0 + 150_000_000)),
     ]
     d = tmp_path / "bag_header"
-    _write_bag(d, events)
+    write_bag(d, events)
 
     with caplog.at_level(logging.WARNING):
         frames = list(iter_bag_frames(d, [spec], warmup_keys={"observation.h"}))

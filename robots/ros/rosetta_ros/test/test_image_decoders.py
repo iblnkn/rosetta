@@ -89,13 +89,6 @@ def test_raw_image_row_padding_is_stripped():
     np.testing.assert_array_equal(out, rgb)
 
 
-def test_raw_image_step_zero_means_tightly_packed():
-    h, w = 2, 3
-    rgb = _rgb_pixels(h, w)
-    out = decode_ros_image(_image(h, w, "rgb8", rgb.tobytes(), step=0))
-    np.testing.assert_array_equal(out, rgb)
-
-
 # --- raw Image: rejections ----------------------------------------------------
 
 
@@ -129,26 +122,17 @@ def _decode_compressed(msg):
     return DECODERS["sensor_msgs/msg/CompressedImage"](msg, spec=None)
 
 
-def test_compressed_png_default_bgr_order():
+@pytest.mark.parametrize("fmt", ["bgr8; png compressed bgr8", "png", ""])
+def test_compressed_defaults_to_bgr_order(fmt):
     cv2 = pytest.importorskip("cv2")
-    # A publisher that imencodes a BGR matrix (the cv_bridge convention):
-    # decode must return it as RGB.
+    # A publisher that imencodes a BGR matrix (the cv_bridge convention), or
+    # names no order at all: decode must return it as RGB.
     rgb = _rgb_pixels(6, 8)
     ok, buf = cv2.imencode(".png", rgb[..., ::-1])  # PNG: lossless round-trip
     assert ok
-    out = _decode_compressed(_compressed(buf.tobytes(), "bgr8; png compressed bgr8"))
+    out = _decode_compressed(_compressed(buf.tobytes(), fmt))
     np.testing.assert_array_equal(out, rgb)
     assert out.flags.writeable
-
-
-def test_compressed_bare_format_defaults_to_bgr():
-    cv2 = pytest.importorskip("cv2")
-    rgb = _rgb_pixels(6, 8)
-    ok, buf = cv2.imencode(".png", rgb[..., ::-1])
-    assert ok
-    for fmt in ("png", ""):
-        out = _decode_compressed(_compressed(buf.tobytes(), fmt))
-        np.testing.assert_array_equal(out, rgb)
 
 
 def test_compressed_rgb_order_skips_swap():

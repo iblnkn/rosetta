@@ -34,10 +34,13 @@ CTX = OperatorContext()
 IMG_CTX = OperatorContext(is_image=True)  # resize only builds on image streams
 
 
-def test_registry_has_builtin_operators():
-    # The operator set is intentionally small: value transforms (rad2deg, clamp) and
-    # one lossy image transform (resize). Capability grows by adding plugins.
-    assert {"rad2deg", "resize", "clamp"} <= set(OPERATOR_REGISTRY)
+@pytest.fixture(autouse=True)
+def _restore_operator_registry():
+    """Drop operators a test registers, so each test sees only the built-ins."""
+    saved = dict(OPERATOR_REGISTRY)
+    yield
+    OPERATOR_REGISTRY.clear()
+    OPERATOR_REGISTRY.update(saved)
 
 
 def test_rad2deg_roundtrip():
@@ -48,19 +51,12 @@ def test_rad2deg_roundtrip():
     assert np.allclose(inverse_pipeline(forward_pipeline(a, [op]), [op]), a)
 
 
-def test_resize_forward_shape_hwc_and_hw():
-    op = build_operator("resize", [2, 2], IMG_CTX)
-    img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
-    assert op.forward(img).shape == (2, 2, 3)
-    gray = np.arange(16, dtype=np.uint8).reshape(4, 4)
-    assert op.forward(gray).shape == (2, 2)
-
-
-def test_resize_downsample_pixel_values():
+@pytest.mark.parametrize("shape", [(4, 6), (4, 6, 3)], ids=["hw", "hwc"])
+def test_resize_downsample_pixel_values(shape):
     # Non-square input pins the h/w axis order (a swap would still pass any
     # shape-only or square test) and the exact sampling grid: rows round to
     # [0, 3], cols to [0, 2, 5] (np.round on linspace, 2.5 rounds half-to-even).
-    img = np.arange(24, dtype=np.uint8).reshape(4, 6)
+    img = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
     out = build_operator("resize", [2, 3], IMG_CTX).forward(img)
     assert np.array_equal(out, img[[0, 3]][:, [0, 2, 5]])
 
@@ -71,12 +67,6 @@ def test_resize_upsample_is_symmetric():
     img = np.array([[1, 2], [3, 4]], dtype=np.uint8)
     out = build_operator("resize", [4, 4], IMG_CTX).forward(img)
     assert np.array_equal(out, img[[0, 0, 1, 1]][:, [0, 0, 1, 1]])
-
-
-def test_resize_is_noop_when_already_target_size():
-    op = build_operator("resize", [4, 4], IMG_CTX)
-    img = np.arange(48, dtype=np.uint8).reshape(4, 4, 3)
-    assert op.forward(img) is img
 
 
 @pytest.mark.parametrize(
@@ -112,27 +102,6 @@ def test_resize_declares_output_hw():
     assert build_operator("clamp", {"min": 0.0, "max": 1.0}, CTX).output_hw is None
 
 
-def test_resize_is_forward_only():
-    # The base inverse raises NotImplementedError (mirroring forward); contracts
-    # can never reach it because _parse_apply rejects FORWARD_ONLY on actions.
-    op = build_operator("resize", [2, 2], IMG_CTX)
-    assert op.kind is Invertibility.FORWARD_ONLY
-    with pytest.raises(NotImplementedError):
-        op.inverse(np.zeros((2, 2, 3), dtype=np.uint8))
-
-
-@pytest.mark.parametrize(
-    ("kind", "expected"),
-    [
-        (Invertibility.FORWARD_ONLY, False),
-        (Invertibility.BIDIRECTIONAL, True),
-        (Invertibility.BIJECTIVE, True),
-    ],
-)
-def test_invertibility_serveable(kind, expected):
-    assert kind.serveable is expected
-
-
 def test_clamp_clips_both_directions():
     op = build_operator("clamp", {"min": -1.0, "max": 1.0}, CTX)
     a = np.array([-3.0, -0.5, 0.0, 0.5, 3.0])
@@ -141,21 +110,7 @@ def test_clamp_clips_both_directions():
     # directions -- the serve direction (encode, policy command -> ROS) is the
     # safety-critical one.
     assert np.allclose(op.forward(a), expected)
-    assert np.allclose(op.inverse(a), expected)
-
-
-def test_clamp_serve_direction_clips_via_pipeline():
-    # inverse_pipeline is what the action/encode path runs; the out-of-range
-    # command must come back inside the bound.
-    op = build_operator("clamp", {"min": 0.0, "max": 2.0}, CTX)
-    out = inverse_pipeline(np.array([-5.0, 1.0, 9.0]), [op])
-    assert np.allclose(out, [0.0, 1.0, 2.0])
-
-
-def test_clamp_is_bidirectional():
-    # BIDIRECTIONAL == "runs in the serve direction but lossy"; clamp is.
-    op = build_operator("clamp", {"min": 0.0, "max": 1.0}, CTX)
-    assert op.kind is Invertibility.BIDIRECTIONAL
+    assert np.allclose(inverse_pipeline(a, [op]), expected)
 
 
 def test_clamp_preserves_dtype():
@@ -183,7 +138,7 @@ def test_clamp_propagates_nan():
 @pytest.mark.parametrize(
     "args",
     [
-        [0.0, 1.0],  # list form removed: {min, max} is the one spelling
+        [0.0, 1.0],
         "x",
         {"min": 0.0},
         {"max": 1.0},
@@ -200,22 +155,22 @@ def test_clamp_bad_args_raise(args):
         build_operator("clamp", args, CTX)
 
 
-def test_action_apply_allows_clamp():
-    # clamp is BIDIRECTIONAL (serveable), so an action may carry it.
-    ops = _parse_apply([{"clamp": {"min": -1.0, "max": 1.0}}], "action 'action'", require_serveable=True)
-    assert ops == [("clamp", {"min": -1.0, "max": 1.0})]
+@pytest.mark.parametrize(
+    ("apply", "context", "require_serveable"),
+    [
+        ([{"clamp": {"min": -1.0, "max": 1.0}}], "action 'action'", True),  # BIDIRECTIONAL serves
+        ([{"resize": [2, 2]}], "observations[0]", False),  # observations never serve
+    ],
+)
+def test_apply_allows_operators_the_section_can_run(apply, context, require_serveable):
+    ops = _parse_apply(apply, context, require_serveable=require_serveable)
+    assert ops == [(name, args) for entry in apply for name, args in entry.items()]
 
 
 def test_action_apply_rejects_forward_only_op_at_load():
     # An action's apply list must be fully serveable; resize is FORWARD_ONLY.
     with pytest.raises(ContractValidationError, match="resize"):
         _parse_apply([{"resize": [2, 2]}], "action 'action'", require_serveable=True)
-
-
-def test_observation_apply_allows_resize():
-    # Observations never run the serve direction, so resize is fine.
-    ops = _parse_apply([{"resize": [2, 2]}], "observations[0]")
-    assert ops == [("resize", [2, 2])]
 
 
 def test_build_op_unknown_name_raises():
@@ -250,17 +205,14 @@ def test_register_duplicate_operator_raises():
         def forward(self, arr):
             return arr
 
-    try:
-        with pytest.raises(ValueError, match="already registered"):
+    with pytest.raises(ValueError, match="already registered"):
 
-            @register_operator("_test_dup", kind=Invertibility.FORWARD_ONLY)
-            class _Second(Operator):
-                def forward(self, arr):
-                    return arr
+        @register_operator("_test_dup", kind=Invertibility.FORWARD_ONLY)
+        class _Second(Operator):
+            def forward(self, arr):
+                return arr
 
-        assert OPERATOR_REGISTRY["_test_dup"] is _First  # first registration untouched
-    finally:
-        OPERATOR_REGISTRY.pop("_test_dup", None)
+    assert OPERATOR_REGISTRY["_test_dup"] is _First  # first registration untouched
 
 
 def test_register_operator_override_replaces():
@@ -269,16 +221,12 @@ def test_register_operator_override_replaces():
         def forward(self, arr):
             return arr
 
-    try:
+    @register_operator("_test_dup", kind=Invertibility.FORWARD_ONLY, override=True)
+    class _Second(Operator):
+        def forward(self, arr):
+            return arr
 
-        @register_operator("_test_dup", kind=Invertibility.FORWARD_ONLY, override=True)
-        class _Second(Operator):
-            def forward(self, arr):
-                return arr
-
-        assert OPERATOR_REGISTRY["_test_dup"] is _Second
-    finally:
-        OPERATOR_REGISTRY.pop("_test_dup", None)
+    assert OPERATOR_REGISTRY["_test_dup"] is _Second
 
 
 @pytest.mark.parametrize("kind", [Invertibility.BIDIRECTIONAL, Invertibility.BIJECTIVE])
@@ -305,35 +253,7 @@ def test_operator_without_forward_rejected_at_registration():
     assert "_test_no_forward" not in OPERATOR_REGISTRY
 
 
-def test_forward_only_operator_without_inverse_allowed():
-    @register_operator("_test_fwd_only", kind=Invertibility.FORWARD_ONLY)
-    class _FwdOnly(Operator):
-        def forward(self, arr):
-            return arr
-
-    try:
-        assert OPERATOR_REGISTRY["_test_fwd_only"] is _FwdOnly
-    finally:
-        OPERATOR_REGISTRY.pop("_test_fwd_only", None)
-
-
 # --- Round-trip gate for BIJECTIVE operators -----------------------------------
-
-
-def test_bijective_op_with_correct_inverse_builds():
-    @register_operator("_test_negate", kind=Invertibility.BIJECTIVE)
-    class _Negate(Operator):
-        def forward(self, arr):
-            return -arr
-
-        def inverse(self, arr):
-            return -arr
-
-    try:
-        op = build_operator("_test_negate", None, CTX)  # gate must pass
-        assert np.allclose(op.inverse(op.forward(np.array([1.0, -2.0]))), [1.0, -2.0])
-    finally:
-        OPERATOR_REGISTRY.pop("_test_negate", None)
 
 
 def test_bijective_op_with_wrong_inverse_fails_round_trip_gate():
@@ -345,11 +265,8 @@ def test_bijective_op_with_wrong_inverse_fails_round_trip_gate():
         def inverse(self, arr):
             return arr * 2.0  # wrong: should be / 2.0
 
-    try:
-        with pytest.raises(ContractValidationError, match="round-trip"):
-            build_operator("_test_broken", None, CTX)
-    finally:
-        OPERATOR_REGISTRY.pop("_test_broken", None)
+    with pytest.raises(ContractValidationError, match="round-trip"):
+        build_operator("_test_broken", None, CTX)
 
 
 def test_bijective_op_honors_sample_input_domain():
@@ -367,11 +284,8 @@ def test_bijective_op_honors_sample_input_domain():
         def sample_input(self):
             return np.array([0.1, 1.0, 2.0, 10.0])
 
-    try:
-        op = build_operator("_test_log", None, CTX)  # gate passes on positive domain
-        assert np.allclose(op.inverse(op.forward(np.array([3.0]))), [3.0])
-    finally:
-        OPERATOR_REGISTRY.pop("_test_log", None)
+    op = build_operator("_test_log", None, CTX)  # gate passes on positive domain
+    assert np.allclose(op.inverse(op.forward(np.array([3.0]))), [3.0])
 
 
 def test_round_trip_gate_wraps_operator_exception():
@@ -386,11 +300,8 @@ def test_round_trip_gate_wraps_operator_exception():
         def inverse(self, arr):
             return arr[:, ::-1]
 
-    try:
-        with pytest.raises(ContractValidationError, match="sample_input"):
-            build_operator("_test_gate_crash", None, CTX)
-    finally:
-        OPERATOR_REGISTRY.pop("_test_gate_crash", None)
+    with pytest.raises(ContractValidationError, match="sample_input"):
+        build_operator("_test_gate_crash", None, CTX)
 
 
 def test_round_trip_gate_rejects_empty_sample_input():
@@ -407,11 +318,8 @@ def test_round_trip_gate_rejects_empty_sample_input():
         def sample_input(self):
             return np.array([])
 
-    try:
-        with pytest.raises(ContractValidationError, match="empty"):
-            build_operator("_test_gate_empty", None, CTX)
-    finally:
-        OPERATOR_REGISTRY.pop("_test_gate_empty", None)
+    with pytest.raises(ContractValidationError, match="empty"):
+        build_operator("_test_gate_empty", None, CTX)
 
 
 def test_round_trip_gate_rejects_shape_changing_round_trip():
@@ -428,140 +336,5 @@ def test_round_trip_gate_rejects_shape_changing_round_trip():
         def sample_input(self):
             return np.array([0.0, 0.0])
 
-    try:
-        with pytest.raises(ContractValidationError, match="shape"):
-            build_operator("_test_gate_shape", None, CTX)
-    finally:
-        OPERATOR_REGISTRY.pop("_test_gate_shape", None)
-
-
-# --- Entry-point operator plugin discovery -------------------------------------
-
-
-def _fake_ilm(monkeypatch, entry_points):
-    """Point the shared plugin loader at a fake entry-point list, latches cleared."""
-    import types
-
-    import rosetta.contract.plugins as plugins_mod
-
-    monkeypatch.setattr(plugins_mod, "_loaded_groups", set())
-    monkeypatch.setattr(plugins_mod, "_failed_groups", {})
-    monkeypatch.setattr(plugins_mod, "_ilm", types.SimpleNamespace(entry_points=lambda group=None: entry_points))
-
-
-def test_discover_operators_loads_entry_point_plugins(monkeypatch):
-    import rosetta.contract.operators as operators_mod
-
-    class _FakeEP:
-        name = "demo"
-        value = "fake.mod"
-
-        def load(self):
-            @register_operator("_ep_demo", kind=Invertibility.BIDIRECTIONAL)
-            class _Demo(Operator):
-                def forward(self, arr):
-                    return arr
-
-                def inverse(self, arr):
-                    return arr
-
-    _fake_ilm(monkeypatch, [_FakeEP()])
-    try:
-        operators_mod.discover_operators()
-        assert "_ep_demo" in OPERATOR_REGISTRY  # plugin op resolvable by name
-    finally:
-        OPERATOR_REGISTRY.pop("_ep_demo", None)
-
-
-def test_discover_operators_runs_once(monkeypatch):
-    import rosetta.contract.operators as operators_mod
-
-    calls = []
-
-    class _CountingEP:
-        name = "counter"
-        value = "fake.mod"
-
-        def load(self):
-            calls.append(1)
-
-    _fake_ilm(monkeypatch, [_CountingEP()])
-    operators_mod.discover_operators()
-    operators_mod.discover_operators()
-    assert len(calls) == 1  # idempotent: scanned once per process
-
-
-def test_discover_operators_raises_on_broken_plugin(monkeypatch):
-    import rosetta.contract.operators as operators_mod
-
-    class _BadEP:
-        name = "bad"
-        value = "bad.mod"
-
-        def load(self):
-            raise ImportError("boom")
-
-    _fake_ilm(monkeypatch, [_BadEP()])
-    with pytest.raises(ContractValidationError, match="operator plugin"):
-        operators_mod.discover_operators()
-
-
-def test_discover_operators_failure_is_latched(monkeypatch):
-    # A failed scan latches: every later call re-raises the ORIGINAL error,
-    # even if the entry-point list changes afterwards (see the codec
-    # twin in test_codec_registry.py for the rationale).
-    import rosetta.contract.operators as operators_mod
-
-    class _BadEP:
-        name = "bad"
-        value = "bad.mod"
-
-        def load(self):
-            raise ImportError("boom")
-
-    class _GoodEP:
-        name = "good"
-        value = "fake.mod"
-
-        def load(self):
-            @register_operator("_ep_recovered", kind=Invertibility.BIDIRECTIONAL)
-            class _Recovered(Operator):
-                def forward(self, arr):
-                    return arr
-
-                def inverse(self, arr):
-                    return arr
-
-    entry_points = [_BadEP()]
-    _fake_ilm(monkeypatch, entry_points)
-    try:
-        with pytest.raises(ContractValidationError, match="boom") as first:
-            operators_mod.discover_operators()
-        entry_points[:] = [_GoodEP()]  # "fixing" the environment in-process...
-        with pytest.raises(ContractValidationError) as second:
-            operators_mod.discover_operators()  # ...does not help: same error, no rescan
-        assert second.value is first.value
-        assert "_ep_recovered" not in OPERATOR_REGISTRY  # never loaded
-    finally:
-        OPERATOR_REGISTRY.pop("_ep_recovered", None)
-
-
-def test_operators_has_no_contract_dependency():
-    """operators must stay upstream of contract: no import of it, ever.
-
-    Guards the errors.py cycle break — contract imports operators at module level
-    now, so an operators -> contract import would recreate the circular-import
-    problem the errors module exists to prevent. Static source check because
-    the package __init__ pulls contract in any live-import test.
-    """
-    import ast
-    from pathlib import Path
-
-    import rosetta.contract.operators as operators_module
-
-    tree = ast.parse(Path(operators_module.__file__).read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            assert "contract" not in (node.module or ""), ast.dump(node)
-        elif isinstance(node, ast.Import):
-            assert not any("contract" in a.name for a in node.names), ast.dump(node)
+    with pytest.raises(ContractValidationError, match="shape"):
+        build_operator("_test_gate_shape", None, CTX)

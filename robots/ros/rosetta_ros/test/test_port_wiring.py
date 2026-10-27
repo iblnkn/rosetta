@@ -21,6 +21,8 @@ real port, even though iter_bag_frames handles it correctly on its own.
 
 from pathlib import Path
 
+from bridge_helpers import StubWriter
+
 import rosetta_ros.offline.port as port_mod
 from rosetta_ros.offline.port import port
 
@@ -44,23 +46,6 @@ tasks:
 """
 
 
-class _StubWriter:
-    def open(self, **_kw):
-        pass
-
-    def add_frame(self, _frame):
-        pass
-
-    def save_episode(self):
-        pass
-
-    def discard_episode(self):
-        pass
-
-    def finalize(self):
-        pass
-
-
 def test_port_passes_task_topics_and_warmup_keys(tmp_path, monkeypatch):
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text(CONTRACT)
@@ -73,7 +58,7 @@ def test_port_passes_task_topics_and_warmup_keys(tmp_path, monkeypatch):
 
     monkeypatch.setattr(port_mod, "find_bag_dirs", lambda raw_dir, **_kw: [Path("ep1")])
     monkeypatch.setattr(port_mod, "iter_bag_frames", _fake_iter)
-    monkeypatch.setattr(port_mod, "load_dataset_writer", lambda _fw: _StubWriter())
+    monkeypatch.setattr(port_mod, "load_dataset_writer", lambda _fw: StubWriter())
 
     port(raw_dir=tmp_path, repo_id="r", contract_path=contract_path)
 

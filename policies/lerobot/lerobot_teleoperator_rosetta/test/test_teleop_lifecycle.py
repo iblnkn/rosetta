@@ -12,14 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Input-only teleop lifecycle end-to-end (the so_101_teleop.yaml fixture).
+"""Input-only teleop lifecycle end-to-end (the so_101_teleop.yaml fixture, feedback: []).
 
-Regression guard: is_active used to read the first feedback publisher's
-is_activated — an input-only teleop (feedback: [], like this fixture)
-therefore never reported connected, get_action() returned {}
-forever, and disconnect() raised on an invalid ACTIVE->cleanup transition,
-leaking the spin thread. Also pins the _on_input timestamp fix (the helper
-returns a (ts, used_fallback) tuple).
+An input-only teleop must report connected, return sampled inputs from
+get_action(), see the contract's events, and disconnect cleanly enough to reconnect.
 """
 
 import time
@@ -27,8 +23,9 @@ from pathlib import Path
 
 import pytest
 import rclpy
+from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.errors import DeviceAlreadyConnectedError
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Joy
 
 from lerobot_teleoperator_rosetta.config_rosetta_teleop import RosettaTeleopConfig
 from lerobot_teleoperator_rosetta.rosetta_teleop import RosettaTeleop
@@ -51,16 +48,25 @@ def teleop():
 
 
 def test_input_only_teleop_connects(teleop):
-    # The regression: feedback: [] used to mean is_connected was never True.
     teleop.connect()
     assert teleop.is_connected
     assert not teleop._node.bridge._act_publishers  # genuinely input-only
 
 
-def test_connect_subscribes_to_the_contract_events(teleop):
-    # The fixture declares Joy events; the node's setup() override must run.
+def test_connect_subscribes_to_the_contract_events(teleop, ros):
     teleop.connect()
-    assert teleop._node._events_sub is not None
+    pub_node = rclpy.create_node("teleop_events_fixture_pub")
+    pub = pub_node.create_publisher(Joy, "/joy", 10)
+    try:
+        deadline = time.monotonic() + 5.0
+        events = teleop.get_teleop_events()
+        while time.monotonic() < deadline and not events[TeleopEvents.TERMINATE_EPISODE]:
+            pub.publish(Joy(buttons=[0, 0, 1, 0]))  # buttons.2 is end_success in the fixture
+            time.sleep(0.05)  # teleop spins on its own thread
+            events = teleop.get_teleop_events()
+        assert (events[TeleopEvents.SUCCESS], events[TeleopEvents.TERMINATE_EPISODE]) == (True, True)
+    finally:
+        pub_node.destroy_node()
 
 
 def test_double_connect_raises(teleop):
@@ -90,8 +96,6 @@ def test_get_action_returns_sampled_inputs(teleop, ros):
             time.sleep(0.05)  # teleop spins on its own thread
             action = teleop.get_action()
 
-        # Pins both the is_active fix (would be {} forever) and the tuple
-        # timestamp fix (would raise TypeError in StreamBuffer.sample).
         assert action, "get_action() never returned data"
         assert all(isinstance(v, float) for v in action.values())
         assert len(action) == len(JOINTS)
@@ -101,7 +105,7 @@ def test_get_action_returns_sampled_inputs(teleop, ros):
 
 def test_disconnect_clean_and_reconnectable(teleop):
     teleop.connect()
-    teleop.disconnect()  # used to raise ACTIVE -> cleanup
+    teleop.disconnect()  # must not raise on the ACTIVE -> cleanup path
     assert teleop._node is None
     assert teleop._host._spin_thread is None
     # Full cycle: reconnect works.

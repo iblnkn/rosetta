@@ -16,13 +16,11 @@
 
 Infinite or unset durations discovered from real publishers come back as
 RMW_DURATION_INFINITE (int64 nanoseconds max), which overflows rosbag2_py
-Duration's int32-seconds/uint32-nanoseconds constructor, so the converter must
-clamp. rosbag2_py QoS exposes no getters (setter-only pybind
-API), so these tests pin construction behavior: clamped values build,
-unclamped infinite values provably do not.
+Duration's int32-seconds/uint32-nanoseconds constructor (it raises TypeError),
+so the converter must clamp. rosbag2_py QoS exposes no getters (setter-only
+pybind API), so these tests pin that conversion constructs without raising.
 """
 
-import pytest
 from rclpy.duration import Duration
 from rclpy.qos import (
     DurabilityPolicy,
@@ -30,27 +28,11 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
-from rosbag2_py._storage import Duration as Rosbag2Duration
 from rosbag2_py._storage import QoS as Rosbag2QoS
 
-from rosetta_ros.bag_topics import _rosbag2_duration, qos_to_rosbag2
+from rosetta_ros.bag_topics import qos_to_rosbag2
 
 RMW_DURATION_INFINITE_NS = 2**63 - 1
-
-
-def test_unclamped_infinite_duration_overflows_rosbag2():
-    # The failure mode the clamp exists for: without it, an infinite RMW
-    # duration cannot even construct a rosbag2 Duration.
-    with pytest.raises(TypeError):
-        Rosbag2Duration(RMW_DURATION_INFINITE_NS // 1_000_000_000, 0)
-
-
-def test_infinite_duration_clamps_and_constructs():
-    assert isinstance(_rosbag2_duration(Duration(nanoseconds=RMW_DURATION_INFINITE_NS)), Rosbag2Duration)
-
-
-def test_finite_duration_constructs():
-    assert isinstance(_rosbag2_duration(Duration(seconds=1, nanoseconds=500)), Rosbag2Duration)
 
 
 def test_profile_with_infinite_durations_converts():

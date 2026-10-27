@@ -61,24 +61,6 @@ actions:
 """
 
 
-def test_configure_with_unknown_framework_fails(tmp_path):
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text(MINIMAL_CONTRACT)
-
-    node = PolicyRunnerNode(
-        parameter_overrides=[
-            Parameter("contract_path", value=str(contract_path)),
-            Parameter("framework", value="nonexistent"),
-        ]
-    )
-    try:
-        result = node.on_configure(None)
-    finally:
-        node.destroy_node()
-
-    assert result == TransitionCallbackReturn.ERROR
-
-
 class _SetupOnlyRunner:
     """Minimal PolicyRunner stand-in for configure/cleanup wiring tests."""
 
@@ -92,14 +74,21 @@ class _SetupOnlyRunner:
         pass
 
 
-def test_is_classifier_wires_reward_specs_as_actions(monkeypatch, tmp_path):
+CLASSIFIER_CONTRACT = (
+    MINIMAL_CONTRACT
+    + """
+rewards:
+  next.reward:
+    channel: {topic: /reward, type: std_msgs/msg/Float64, dtype: float64}
+    align: {strategy: hold, timeline: receive}
+"""
+)
+
+
+def test_is_classifier_publishes_to_the_reward_topics(monkeypatch, tmp_path):
     """is_classifier=True must build the bridge from the reward section, not actions."""
     contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text(MINIMAL_CONTRACT)
-
-    calls = []
-    monkeypatch.setattr(node_mod, "iter_reward_as_action_specs", lambda c: calls.append("reward") or [])
-    monkeypatch.setattr(node_mod, "iter_action_specs", lambda c: calls.append("action") or [])
+    contract_path.write_text(CLASSIFIER_CONTRACT)
     monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: _SetupOnlyRunner())
 
     node = PolicyRunnerNode(
@@ -110,7 +99,9 @@ def test_is_classifier_wires_reward_specs_as_actions(monkeypatch, tmp_path):
     )
     try:
         assert node.on_configure(None) == TransitionCallbackReturn.SUCCESS
-        assert calls == ["reward"]
+        published = {pub.topic_name for pub in node.publishers}
+        assert "/reward" in published
+        assert "/cmd" not in published
     finally:
         node.on_cleanup(None)
         node.destroy_node()

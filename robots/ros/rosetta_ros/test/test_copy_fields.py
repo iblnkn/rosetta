@@ -12,20 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""copy_fields carries every field between message types that share them."""
+"""Each feedback/result message the nodes fill with copy_fields mirrors its source.
 
-from rosetta_interfaces.action import RecordEpisode
-from rosetta_interfaces.msg import RecordEpisodeResult, RecordEpisodeStatus
+A field added to a ``*.Feedback`` but not to the matching status message (or
+with a different type) would break feedback at runtime; this catches the
+interface drift at test time.
+"""
+
+import pytest
+
+from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
+from rosetta_interfaces.msg import (
+    ManageEpisodeStatus,
+    RecordEpisodeResult,
+    RecordEpisodeStatus,
+    RunPolicyResult,
+    RunPolicyStatus,
+)
 from rosetta_ros.node_utils import copy_fields
 
 
-def test_status_becomes_feedback():
-    status = RecordEpisodeStatus(elapsed_s=2.5, messages_written=7)
-    feedback = copy_fields(status, RecordEpisode.Feedback())
-    assert (feedback.elapsed_s, feedback.messages_written) == (2.5, 7)
-
-
-def test_action_result_becomes_result_message():
-    result = RecordEpisode.Result(termination_reason="timeout", message="", bag_path="/b", messages_written=3)
-    msg = copy_fields(result, RecordEpisodeResult())
-    assert msg == RecordEpisodeResult(termination_reason="timeout", message="", bag_path="/b", messages_written=3)
+@pytest.mark.parametrize(
+    ("src", "dst"),
+    [
+        (RecordEpisodeStatus, RecordEpisode.Feedback),
+        (RunPolicyStatus, RunPolicy.Feedback),
+        (ManageEpisodeStatus, ManageEpisode.Feedback),
+        (RecordEpisode.Result, RecordEpisodeResult),
+        (RunPolicy.Result, RunPolicyResult),
+    ],
+    ids=lambda cls: cls.__qualname__,
+)
+def test_copy_fields_fills_every_destination_field(src, dst):
+    assert set(dst.get_fields_and_field_types()) <= set(src.get_fields_and_field_types())
+    copy_fields(src(), dst())  # rosidl setters reject a type mismatch

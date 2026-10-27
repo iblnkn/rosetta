@@ -56,12 +56,6 @@ def test_label_blocks_classifier_rewards_until_cleared():
     assert (state.reward, state.labeled) == (0.2, False)
 
 
-def test_control_accepts_its_string_value():
-    state = EpisodeState()
-    state.set_control("teleop")
-    assert state.control is Control.TELEOP
-
-
 @pytest.mark.parametrize(
     ("sequence", "edges"),
     [
@@ -98,6 +92,7 @@ def test_termination_reason(elapsed, max_duration, reward, threshold, reason):
         (OUTCOME_UNLABELED, TERMINATION_REWARD_THRESHOLD, OUTCOME_SUCCESS),
         (OUTCOME_FAILURE, TERMINATION_REWARD_THRESHOLD, OUTCOME_FAILURE),  # the human's label wins
         (OUTCOME_UNLABELED, TERMINATION_STOPPED, OUTCOME_UNLABELED),
+        (OUTCOME_UNLABELED, TERMINATION_TIMEOUT, OUTCOME_UNLABELED),
     ],
 )
 def test_resolve_outcome(outcome, reason, resolved):

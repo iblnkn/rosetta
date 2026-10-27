@@ -24,61 +24,29 @@ warn_if_contract_mismatch takes the bag's embedded contract as a value.
 
 import logging
 
+import pytest
+from bridge_helpers import StubWriter
+
 from rosetta_ros.offline.port import warn_if_contract_mismatch, write_dataset
-
-
-class _StubWriter:
-    def __init__(self):
-        self.open_kwargs: dict = {}
-
-    def open(self, **kw):
-        self.open_kwargs = kw
-
-    def add_frame(self, _frame):
-        pass
-
-    def save_episode(self):
-        pass
-
-    def discard_episode(self):
-        pass
-
-    def finalize(self):
-        pass
 
 
 def _one_episode():
     return [("ep0", iter([{"observation.state": [0.0]}]))]
 
 
-# ---------------------------------------------------------------------------
-# open-kwargs threading
-# ---------------------------------------------------------------------------
-
-
-def test_writer_receives_contract_path_and_embed_flag(tmp_path):
-    writer = _StubWriter()
+@pytest.mark.parametrize(
+    ("embed_kwargs", "expected"),
+    [({}, True), ({"embed_contract": False}, False)],
+    ids=["default", "no-embed-contract"],
+)
+def test_writer_receives_contract_path_and_embed_flag(tmp_path, embed_kwargs, expected):
+    writer = StubWriter()
     contract_path = tmp_path / "contract.yaml"
 
-    write_dataset(writer, _one_episode(), contract=None, repo_id="repo", contract_path=contract_path)
+    write_dataset(writer, _one_episode(), contract=None, repo_id="repo", contract_path=contract_path, **embed_kwargs)
 
     assert writer.open_kwargs["contract_path"] == contract_path
-    assert writer.open_kwargs["embed_contract"] is True  # default
-
-
-def test_no_embed_contract_flag_propagates(tmp_path):
-    writer = _StubWriter()
-
-    write_dataset(
-        writer,
-        _one_episode(),
-        contract=None,
-        repo_id="repo",
-        contract_path=tmp_path / "contract.yaml",
-        embed_contract=False,
-    )
-
-    assert writer.open_kwargs["embed_contract"] is False
+    assert writer.open_kwargs["embed_contract"] is expected
 
 
 # ---------------------------------------------------------------------------
@@ -96,43 +64,20 @@ def test_different_contract_warns(tmp_path, caplog):
     assert any("different contract" in rec.message for rec in caplog.records)
 
 
-def test_matching_contract_does_not_warn(tmp_path, caplog):
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
+@pytest.mark.parametrize(
+    ("contract_file", "embedded"),
+    [
+        ("contract.yaml", "robot_type: x\n"),  # identical
+        ("contract.yaml", "robot_type:   x\n\n"),  # compared as parsed YAML, not text
+        ("contract.yaml", ""),  # plain `ros2 bag record` or embed_contract:=false: nothing to compare
+        ("missing.yaml", "robot_type: x\n"),  # unreadable --contract: skip, never fail the port
+    ],
+    ids=["matching", "whitespace", "no-embedded", "unreadable-path"],
+)
+def test_no_warning_or_error(tmp_path, caplog, contract_file, embedded):
+    (tmp_path / "contract.yaml").write_text("robot_type: x\n")
 
     with caplog.at_level(logging.WARNING):
-        warn_if_contract_mismatch(contract_path, "robot_type: x\n")
-
-    assert not any("different contract" in rec.message for rec in caplog.records)
-
-
-def test_whitespace_only_difference_does_not_warn(tmp_path, caplog):
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
-
-    with caplog.at_level(logging.WARNING):
-        warn_if_contract_mismatch(contract_path, "robot_type:   x\n\n")
-
-    assert not any("different contract" in rec.message for rec in caplog.records)
-
-
-def test_bag_without_embedded_contract_does_not_warn(tmp_path, caplog):
-    """A bag with no embedded contract (plain `ros2 bag record`, or
-    embed_contract:=false) skips the comparison; embedding is driven by
-    --contract itself, not by anything read back from the bag."""
-    contract_path = tmp_path / "contract.yaml"
-    contract_path.write_text("robot_type: x\n")
-
-    with caplog.at_level(logging.WARNING):
-        warn_if_contract_mismatch(contract_path, "")
-
-    assert not caplog.records
-
-
-def test_unreadable_contract_path_does_not_warn_or_raise(tmp_path, caplog):
-    """The check must never be why a port fails: --contract already loaded
-    fine upstream, so a raw re-read failing here silently skips."""
-    with caplog.at_level(logging.WARNING):
-        warn_if_contract_mismatch(tmp_path / "missing.yaml", "robot_type: x\n")
+        warn_if_contract_mismatch(tmp_path / contract_file, embedded)
 
     assert not caplog.records

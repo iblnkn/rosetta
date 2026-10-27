@@ -59,10 +59,9 @@ from rosetta_ros.node_utils import (
 )
 from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
 
-# Distinctive on purpose. This workspace has no ROS_DOMAIN_ID isolation, so a
-# probe named `record_episode` would match a recorder running on the developer's
-# machine. Relative, so it exercises the same name expansion the cancel client
-# relies on.
+# Distinctive on purpose, so a probe never matches a real recorder that shares
+# the test domain. Relative, so it exercises the same name expansion the cancel
+# client relies on.
 ACTION_NAME = "rosetta_cancel_probe_action"
 
 
@@ -139,6 +138,9 @@ def graph(rclpy_ctx):
     node.trigger_activate()
     client = ActionClient(client_node, RecordEpisode, ACTION_NAME)
     assert client.wait_for_server(timeout_sec=10.0), "probe action server never appeared"
+    # A separate client with its own discovery: until it sees the service,
+    # cancel_current_work drops the cancel and the goal runs to its timeout.
+    assert node._cancel_client.wait_for_service(timeout_sec=10.0), "cancel service never appeared"
     try:
         yield node, client
     finally:
@@ -197,22 +199,17 @@ def test_action_protocol_cancel_ends_canceled(graph):
     assert _terminal(goal_handle) == GoalStatus.STATUS_CANCELED
 
 
-def test_work_reaching_its_own_end_succeeds(graph):
+@pytest.mark.parametrize(
+    ("mode", "status"),
+    [("timeout", GoalStatus.STATUS_SUCCEEDED), ("error", GoalStatus.STATUS_ABORTED)],
+)
+def test_work_ending_on_its_own_is_not_a_cancel(graph, mode, status):
     """Guards the over-correction where every stop becomes a cancel."""
     node, client = graph
-    node.mode = "timeout"
+    node.mode = mode
     goal_handle = _send_goal(client)
 
-    assert _terminal(goal_handle) == GoalStatus.STATUS_SUCCEEDED
-
-
-def test_error_ends_aborted(graph):
-    """ABORTED must keep meaning 'something went wrong'."""
-    node, client = graph
-    node.mode = "error"
-    goal_handle = _send_goal(client)
-
-    assert _terminal(goal_handle) == GoalStatus.STATUS_ABORTED
+    assert _terminal(goal_handle) == status
 
 
 def test_deactivate_ends_aborted_naming_the_deactivate(graph):
@@ -228,16 +225,3 @@ def test_deactivate_ends_aborted_naming_the_deactivate(graph):
     wrapped = _result_of(goal_handle.get_result_async())
     assert wrapped.status == GoalStatus.STATUS_ABORTED
     assert wrapped.result.termination_reason == "node_deactivated"
-
-
-def test_cancel_with_no_goal_in_flight_is_harmless(graph):
-    """The service-start path has no goal handle for a cancel request to match,
-    so cancel_current_work signals the reason directly instead."""
-    node, _client = graph
-    node._accepting_work = True
-    assert node.try_claim_work() is None
-    try:
-        node.cancel_current_work(node._cancel_client)
-        assert node.stop_reason == "cancelled"
-    finally:
-        node._busy = False

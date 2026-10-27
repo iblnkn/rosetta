@@ -12,29 +12,62 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""lifecycle_state_label: the single sanctioned reach into rclpy's private
-state machine, shared by TopicBridge and the teleop node."""
+"""lifecycle_state_label reads rclpy's private lifecycle state machine.
 
-from types import SimpleNamespace
+Against a real rclpy LifecycleNode on purpose: rclpy exposes no public
+synchronous state accessor, so the helper reaches into ``_state_machine``, and
+only a real node notices when a ROS release reshapes it. The labels it returns
+feed ``is_active``/``is_configured``, which the LeRobot adapters gate on.
+"""
 
-from rosetta_ros.rclpy_utils import (
-    LIFECYCLE_CONFIGURED_LABELS,
-    lifecycle_state_label,
-)
+import pytest
+from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 
-
-def _node(label):
-    return SimpleNamespace(_state_machine=SimpleNamespace(current_state=(3, label)))
-
-
-def test_reads_current_state_label():
-    assert lifecycle_state_label(_node("active")) == "active"
-    assert lifecycle_state_label(_node("inactive")) == "inactive"
-    assert lifecycle_state_label(_node("unconfigured")) == "unconfigured"
+from rosetta_ros.rclpy_utils import LIFECYCLE_CONFIGURED_LABELS, lifecycle_state_label
 
 
-def test_configured_labels_cover_transitional_states():
-    for label in ("inactive", "active", "activating", "deactivating"):
-        assert label in LIFECYCLE_CONFIGURED_LABELS
-    assert "unconfigured" not in LIFECYCLE_CONFIGURED_LABELS
-    assert "finalized" not in LIFECYCLE_CONFIGURED_LABELS
+class _ObservingNode(LifecycleNode):
+    """Records the label seen from inside each transition callback."""
+
+    def __init__(self):
+        super().__init__("lifecycle_label_probe")
+        self.seen: dict[str, str] = {}
+
+    def on_activate(self, state):
+        self.seen["activate"] = lifecycle_state_label(self)
+        return super().on_activate(state)
+
+    def on_deactivate(self, state):
+        self.seen["deactivate"] = lifecycle_state_label(self)
+        return super().on_deactivate(state)
+
+
+@pytest.fixture
+def node(rclpy_ctx):
+    n = _ObservingNode()
+    yield n
+    n.destroy_node()
+
+
+def test_labels_follow_the_transitions(node):
+    labels = [lifecycle_state_label(node)]
+    for trigger in (
+        node.trigger_configure,
+        node.trigger_activate,
+        node.trigger_deactivate,
+        node.trigger_cleanup,
+        node.trigger_shutdown,
+    ):
+        assert trigger() == TransitionCallbackReturn.SUCCESS
+        labels.append(lifecycle_state_label(node))
+    assert labels == ["unconfigured", "inactive", "active", "inactive", "unconfigured", "finalized"]
+
+
+def test_a_node_mid_transition_still_counts_as_configured(node):
+    """Code running inside activate/deactivate sees a transitional label, and
+    is_configured must not read that as "not configured"."""
+    node.trigger_configure()
+    node.trigger_activate()
+    node.trigger_deactivate()
+    assert node.seen == {"activate": "activating", "deactivate": "deactivating"}
+    assert set(node.seen.values()) <= LIFECYCLE_CONFIGURED_LABELS

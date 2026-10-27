@@ -25,7 +25,7 @@ empty LaunchContext.
 import pytest
 from launch import LaunchContext
 
-from rosetta_ros.launch_utils import _flag_condition, typed_config
+from rosetta_ros.launch_utils import _flag_condition
 
 
 def _context_with(**flags: str) -> LaunchContext:
@@ -34,23 +34,15 @@ def _context_with(**flags: str) -> LaunchContext:
     return context
 
 
-@pytest.mark.parametrize("value", ["true", "True", "1"])
-def test_frozen_condition_true_survives_foreign_scope(value):
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("true", True), ("True", True), ("1", True), ("false", False), ("False", False), ("0", False)],
+)
+def test_frozen_condition_survives_foreign_scope(value, expected):
     condition = _flag_condition("configure", _context_with(configure=value))
-    assert condition.evaluate(LaunchContext()) is True
-
-
-@pytest.mark.parametrize("value", ["false", "False", "0"])
-def test_frozen_condition_false_survives_foreign_scope(value):
-    condition = _flag_condition("configure", _context_with(configure=value))
-    assert condition.evaluate(LaunchContext()) is False
+    assert condition.evaluate(LaunchContext()) is expected
 
 
 def test_unparseable_flag_raises_at_setup_not_silently_false():
     with pytest.raises(Exception, match="[Cc]annot|[Ii]nvalid|convert"):
         _flag_condition("configure", _context_with(configure="banana"))
-
-
-def test_typed_config_coerces_bool():
-    assert typed_config(_context_with(activate="true"), "activate", bool) is True
-    assert typed_config(_context_with(activate="0"), "activate", bool) is False

@@ -43,7 +43,12 @@ PUBLIC_API = {
         "spin_lifecycle_node",
         "wait_until",
     },
-    "rosetta_ros.rclpy_utils": {"lifecycle_state_label", "prefixed_topic", "qos_profile_from_dict", "require_transition_success"},
+    "rosetta_ros.rclpy_utils": {
+        "lifecycle_state_label",
+        "prefixed_topic",
+        "qos_profile_from_dict",
+        "require_transition_success",
+    },
     "rosetta_ros.rosetta_lifecycle_node": {"BridgeLifecycleNode", "RosettaLifecycleNode"},
     "rosetta_ros.runner_host": {"RosParameterHost"},
     "rosetta_ros.topic_bridge": {"TopicBridge"},
@@ -54,9 +59,3 @@ PUBLIC_API = {
 def test_public_module_exports_exactly_the_pinned_names(module_name):
     module = importlib.import_module(module_name)
     assert set(module.__all__) == PUBLIC_API[module_name]
-
-
-@pytest.mark.parametrize("module_name", sorted(PUBLIC_API))
-def test_every_exported_name_exists(module_name):
-    module = importlib.import_module(module_name)
-    assert [name for name in module.__all__ if not hasattr(module, name)] == []

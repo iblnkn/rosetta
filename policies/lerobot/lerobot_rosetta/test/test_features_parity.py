@@ -18,15 +18,14 @@ lerobot's hw_to_dataset_features collapses every numeric leaf into one
 observation.state (and every action leaf into one action). rosetta's offline
 writer keeps one feature per contract key — the layout policies actually
 train on. For EVERY bundled contract (glob — new contracts are auto-covered)
-this test asserts one of:
+the live layout must be EQUIVALENT to the offline dataset layout (same keys,
+same shapes, names in the same order), unless the contract is listed in
+LIVE_REFUSED: then the connect/setup gate (ensure_live_observation_layout)
+must reject it, naming the keys the live stack would lump. A contract that
+gates without being listed fails here, as does any contract or lerobot upgrade
+that re-introduces silent lumping.
 
-  1. the live layout is EQUIVALENT to the offline dataset layout
-     (same keys, same shapes, names in the same order), or
-  2. the connect/setup gate (ensure_live_observation_layout) rejects the
-     contract, so the mismatch can never silently reach a robot.
-
-Any future contract or lerobot upgrade that re-introduces silent lumping
-fails here.
+The gate tests below pin what ensure_live_observation_layout rejects.
 """
 
 from pathlib import Path
@@ -38,7 +37,6 @@ from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
 from lerobot_rosetta.dataset_writer import build_lerobot_features
-from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import Align, Channel, Source, load_contract
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec, iter_action_specs, iter_observation_specs
 from rosetta.frames.codecs import discover_codecs
@@ -47,6 +45,8 @@ discover_codecs()  # register the built-in codecs
 
 CONTRACTS = sorted((Path(get_package_share_directory("rosetta_ros")) / "contracts").glob("*.yaml"))
 BOUNDARY_MARKERS = {"is_first", "is_last", "is_terminal"}
+# Bundled contracts that keep per-key layouts the live stack would lump -> the keys the gate must name.
+LIVE_REFUSED = {"stone.yaml": ["observation.imu", "observation.battery", "action.base"]}
 
 
 def _dtype_family(dtype: str) -> str:
@@ -59,47 +59,18 @@ def _dtype_family(dtype: str) -> str:
     return "numeric"
 
 
-SELECTLESS_CONTRACT = """
-robot_type: test
-robot_interface: ros2
-fps: 30
-observations:
-  observation.state:
-    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: receive}
-actions:
-  action:
-    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
-    align: {strategy: hold, timeline: receive}
-    select: [position.j1]
-"""
-
-
-def test_selectless_numeric_stream_rejected(tmp_path):
-    """The live stack derives motor names from selector names, so a numeric
-    stream without select: must never reach it. Contract validation now
-    rejects it at load time (before that it was ensure_live_observation_layout's
-    gate) — either way, loading a selectless numeric stream must fail."""
-    p = tmp_path / "c.yaml"
-    p.write_text(SELECTLESS_CONTRACT)
-    with pytest.raises(ContractValidationError, match="select"):
-        load_contract(p)
-
-
 @pytest.mark.parametrize("contract_path", CONTRACTS, ids=lambda p: p.name)
 def test_live_features_match_offline_or_gate_fires(contract_path):
     contract = load_contract(contract_path)
     obs_specs = list(iter_observation_specs(contract))
     act_specs = list(iter_action_specs(contract))
 
-    try:
-        ensure_live_observation_layout(obs_specs, act_specs)
-    except ValueError as e:
-        # Gate fires in lieu of parity: the error must name the keys so the
-        # user can act on it.
-        assert "observation" in str(e) or "action" in str(e)
+    if contract_path.name in LIVE_REFUSED:
+        with pytest.raises(ValueError) as refused:
+            ensure_live_observation_layout(obs_specs, act_specs)
+        assert [key for key in LIVE_REFUSED[contract_path.name] if key not in str(refused.value)] == []
         return
-
+    ensure_live_observation_layout(obs_specs, act_specs)
     robot = Rosetta(RosettaConfig(id="parity", config_path=str(contract_path)))
     live = hw_to_dataset_features(robot.observation_features, "observation")
     live.update(hw_to_dataset_features(robot.action_features, "action"))

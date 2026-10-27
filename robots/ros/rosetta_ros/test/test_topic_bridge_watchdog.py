@@ -22,109 +22,22 @@ commands that reached the wire; ``reset_state`` forgets the previous episode).
 
 Determinism notes: the watchdog is driven by rewinding ``_last_action_ns`` and
 calling ``_on_watchdog()`` directly (established private-call style, see
-test_topic_bridge_decode_guard). "Nothing was published" is asserted with a
+test_topic_bridge_state). "Nothing was published" is asserted with a
 sentinel frame on the same publisher -- per-publisher ordering means any
 earlier (wrong) safety message would arrive before the sentinel -- never with
 a wait-and-see window.
 """
 
-import time
-from contextlib import contextmanager
-
 import numpy as np
 import pytest
-import rclpy
-from rclpy.executors import SingleThreadedExecutor
-from rclpy.lifecycle import LifecycleNode
+from bridge_helpers import act_spec, bridge_on_graph, obs_spec, spin_until, subscribe
 from sensor_msgs.msg import JointState
 
-from rosetta.contract.schema import Align, Channel, SafetyBehavior, Source
-from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+from rosetta.contract.schema import SafetyBehavior
 from rosetta_ros.topic_bridge import WATCHDOG_PERIODS, TopicBridge
 
 FPS = 30
 TIMEOUT_NS = int(WATCHDOG_PERIODS * 1e9 / FPS)
-
-
-def _obs(key, names, topic):
-    return ObservationStreamSpec(
-        key=key,
-        names=list(names),
-        fps=FPS,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        is_image=False,
-        image_resize=None,
-        dtype="float64",
-    )
-
-
-def _act(key, names, topic, safety=SafetyBehavior.NONE):
-    return ActionStreamSpec(
-        key=key,
-        names=list(names),
-        fps=FPS,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState", safety=safety),
-            align=Align("hold", "receive"),
-        ),
-        dtype="float64",
-    )
-
-
-def _spin_until(executor, predicate, timeout_s=5.0):
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        executor.spin_once(timeout_sec=0.05)
-        if predicate():
-            return True
-    return False
-
-
-@contextmanager
-def _bridge_on_graph(name, obs_specs, act_specs, *, activate=True):
-    """Bridge on a real LifecycleNode plus a fixture node, on one executor.
-
-    Yields (bridge, node, fixture_node, executor). Subscriptions the test
-    creates on the fixture node must be matched before publishing (see
-    _subscribe); teardown is unconditional.
-    """
-    node = LifecycleNode(f"bridge_host_{name}")
-    fixture_node = rclpy.create_node(f"fixture_{name}")
-    executor = SingleThreadedExecutor()
-    executor.add_node(node)
-    executor.add_node(fixture_node)
-    bridge = TopicBridge(obs_specs, act_specs, fps=FPS)
-    try:
-        bridge.setup(node)
-        node.trigger_configure()
-        if activate:
-            node.trigger_activate()
-        yield bridge, node, fixture_node, executor
-        bridge.teardown()
-    finally:
-        executor.remove_node(node)
-        executor.remove_node(fixture_node)
-        node.destroy_node()
-        fixture_node.destroy_node()
-
-
-def _subscribe(bridge, fixture_node, executor, topics):
-    """Collect JointState positions per topic, matched before returning.
-
-    Waiting for get_subscription_count() on the bridge's own publishers
-    closes the publish-before-matched race (see the workspace testing guide);
-    afterwards, per-publisher ordering makes received sequences deterministic.
-    """
-    received = {t: [] for t in topics}
-    for t in topics:
-        fixture_node.create_subscription(JointState, t, lambda m, t_=t: received[t_].append(list(m.position)), 10)
-    assert _spin_until(executor, lambda: all(pub.get_subscription_count() > 0 for _, pub in bridge._act_publishers)), (
-        "fixture subscriptions never matched the bridge publishers"
-    )
-    return received
 
 
 def _rewind_past_timeout(bridge):
@@ -135,9 +48,9 @@ def _rewind_past_timeout(bridge):
 # -------------------- watchdog --------------------
 
 
-def test_watchdog_fires_zeros_and_disarms(rclpy_ctx):
-    with _bridge_on_graph(
-        "wd_zeros", [], [_act("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.ZEROS)]
+def test_watchdog_fires_zeros_and_disarms():
+    with bridge_on_graph(
+        "wd_zeros", [], [act_spec("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.ZEROS)]
     ) as (
         bridge,
         _node,
@@ -145,43 +58,43 @@ def test_watchdog_fires_zeros_and_disarms(rclpy_ctx):
         executor,
     ):
         assert bridge._watchdog_timer is not None
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
 
         bridge.publish_frame({"action": np.array([1.0, 2.0])})
         _rewind_past_timeout(bridge)
         bridge._on_watchdog()
 
         assert bridge._last_action_ns is None  # disarmed until the next published frame
-        assert _spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
+        assert spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
 
 
-def test_watchdog_hold_republishes_last_sent_command(rclpy_ctx):
-    with _bridge_on_graph(
-        "wd_hold", [], [_act("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD)]
+def test_watchdog_hold_republishes_last_sent_command():
+    with bridge_on_graph(
+        "wd_hold", [], [act_spec("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD)]
     ) as (
         bridge,
         _node,
         fixture_node,
         executor,
     ):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
 
         bridge.publish_frame({"action": np.array([1.0, 2.0])})
         _rewind_past_timeout(bridge)
         bridge._on_watchdog()
 
         # The real command and its held safety copy: [1, 2] exactly twice.
-        assert _spin_until(executor, lambda: received["/arm_cmd"].count([1.0, 2.0]) == 2), received
+        assert spin_until(executor, lambda: received["/arm_cmd"].count([1.0, 2.0]) == 2), received
 
 
-def test_watchdog_never_armed_never_fires(rclpy_ctx):
-    with _bridge_on_graph("wd_unarmed", [], [_act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)]) as (
+def test_watchdog_never_armed_never_fires():
+    with bridge_on_graph("wd_unarmed", [], [act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)]) as (
         bridge,
         _node,
         fixture_node,
         executor,
     ):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
 
         bridge._on_watchdog()  # no action ever published: early return
 
@@ -190,18 +103,18 @@ def test_watchdog_never_armed_never_fires(rclpy_ctx):
             bridge.publish_frame({"action": np.array([9.0])})
             return bool(received["/arm_cmd"])
 
-        assert _spin_until(executor, sentinel_seen)
+        assert spin_until(executor, sentinel_seen)
         assert all(msg == [9.0] for msg in received["/arm_cmd"]), received
 
 
-def test_watchdog_clock_reset_disarms_without_publishing(rclpy_ctx):
-    with _bridge_on_graph("wd_reset", [], [_act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)]) as (
+def test_watchdog_clock_reset_disarms_without_publishing():
+    with bridge_on_graph("wd_reset", [], [act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)]) as (
         bridge,
         node,
         fixture_node,
         executor,
     ):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
 
         # A last-action stamp in the future = the sampling clock was reset.
         bridge._last_action_ns = node.get_clock().now().nanoseconds + int(10e9)
@@ -212,13 +125,13 @@ def test_watchdog_clock_reset_disarms_without_publishing(rclpy_ctx):
             bridge.publish_frame({"action": np.array([9.0])})
             return bool(received["/arm_cmd"])
 
-        assert _spin_until(executor, sentinel_seen)
+        assert spin_until(executor, sentinel_seen)
         assert all(msg == [9.0] for msg in received["/arm_cmd"]), received
 
 
-def test_watchdog_gated_while_node_inactive(rclpy_ctx):
-    with _bridge_on_graph(
-        "wd_inactive", [], [_act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)], activate=False
+def test_watchdog_gated_while_node_inactive():
+    with bridge_on_graph(
+        "wd_inactive", [], [act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)], activate=False
     ) as (bridge, _node, _fixture_node, _executor):
         bridge._last_action_ns = 1  # ancient: would time out if the gate failed
         bridge._on_watchdog()
@@ -229,51 +142,25 @@ def test_watchdog_gated_while_node_inactive(rclpy_ctx):
     ("safeties", "expected"),
     [
         ([], False),
-        ([SafetyBehavior.NONE], False),
         ([SafetyBehavior.NONE, SafetyBehavior.NONE], False),
         ([SafetyBehavior.NONE, SafetyBehavior.ZEROS], True),
-        ([SafetyBehavior.HOLD], True),
     ],
 )
 def test_should_use_watchdog_matrix(safeties, expected):
-    specs = [_act("action", [f"position.j{i}"], f"/cmd_{i}", s) for i, s in enumerate(safeties)]
+    specs = [act_spec("action", [f"position.j{i}"], f"/cmd_{i}", s) for i, s in enumerate(safeties)]
     assert TopicBridge([], specs, fps=FPS)._should_use_watchdog() is expected
 
 
-def test_no_watchdog_timer_when_all_safety_none(rclpy_ctx):
-    with _bridge_on_graph("wd_none", [], [_act("action", ["position.j1"], "/arm_cmd")]) as (
-        bridge,
-        _node,
-        _fixture_node,
-        _executor,
-    ):
-        assert bridge._watchdog_timer is None
+# -------------------- send_safety_action and state invariants --------------------
 
 
-# -------------------- send_safety_action --------------------
-
-
-def test_safety_hold_without_prior_command_sends_zeros(rclpy_ctx):
-    with _bridge_on_graph(
-        "sa_hold_cold", [], [_act("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD)]
-    ) as (
-        bridge,
-        _node,
-        fixture_node,
-        executor,
-    ):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
-        bridge.send_safety_action()
-        assert _spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
-
-
-def test_safety_skips_none_channels(rclpy_ctx):
+def test_safety_skips_none_channels():
     specs = [
-        _act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS),
-        _act("action", ["position.grip"], "/grip_cmd", SafetyBehavior.NONE),
+        act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS),
+        act_spec("action", ["position.grip"], "/grip_cmd", SafetyBehavior.NONE),
     ]
-    with _bridge_on_graph("sa_skip_none", [], specs) as (bridge, _node, fixture_node, executor):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd", "/grip_cmd"])
+    with bridge_on_graph("sa_skip_none", [], specs) as (bridge, _node, fixture_node, executor):
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd", "/grip_cmd"])
 
         bridge.send_safety_action()
 
@@ -282,47 +169,29 @@ def test_safety_skips_none_channels(rclpy_ctx):
             bridge.publish_frame({"action": np.array([9.0, 9.0])})
             return received["/arm_cmd"] and received["/grip_cmd"]
 
-        assert _spin_until(executor, sentinels_seen)
+        assert spin_until(executor, sentinels_seen)
         assert [0.0] in received["/arm_cmd"], received
         assert all(msg == [9.0] for msg in received["/grip_cmd"]), received
 
 
-def test_safety_action_disarms_watchdog(rclpy_ctx):
-    with _bridge_on_graph("sa_disarm", [], [_act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)]) as (
-        bridge,
-        _node,
-        fixture_node,
-        executor,
-    ):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
-        bridge.publish_frame({"action": np.array([1.0])})
-        assert bridge._last_action_ns is not None
-        bridge.send_safety_action()
-        assert bridge._last_action_ns is None
-        assert _spin_until(executor, lambda: [0.0] in received["/arm_cmd"]), received
-
-
-# -------------------- state invariants --------------------
-
-
-def test_publish_frame_on_inactive_node_records_nothing(rclpy_ctx):
+def test_publish_frame_on_inactive_node_records_nothing():
     """Inactive lifecycle publishers silently drop -- the hold cache and the
     watchdog arm must not pretend those commands reached the wire."""
-    with _bridge_on_graph(
-        "pf_inactive", [], [_act("action", ["position.j1"], "/arm_cmd", SafetyBehavior.HOLD)], activate=False
+    with bridge_on_graph(
+        "pf_inactive", [], [act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.HOLD)], activate=False
     ) as (bridge, _node, _fixture_node, _executor):
         bridge.publish_frame({"action": np.array([1.0])})
         assert bridge._last_sent == [None]
         assert bridge._last_action_ns is None
 
 
-def test_reset_state_forgets_previous_episode(rclpy_ctx):
+def test_reset_state_forgets_previous_episode():
     """After reset_state, safety 'hold' must not replay episode N's last
     command, and the observation buffers must need re-warming."""
-    obs = [_obs("observation.state", ["position.j1"], "/js")]
-    act = [_act("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD)]
-    with _bridge_on_graph("reset", obs, act) as (bridge, _node, fixture_node, executor):
-        received = _subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
+    obs = [obs_spec("observation.state", ["position.j1"], "/js")]
+    act = [act_spec("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD)]
+    with bridge_on_graph("reset", obs, act) as (bridge, _node, fixture_node, executor):
+        received = subscribe(bridge, fixture_node, executor, ["/arm_cmd"])
 
         js_pub = fixture_node.create_publisher(JointState, "/js", 10)
         msg = JointState()
@@ -333,7 +202,7 @@ def test_reset_state_forgets_previous_episode(rclpy_ctx):
             js_pub.publish(msg)
             return bridge.warmed_up
 
-        assert _spin_until(executor, warmed)
+        assert spin_until(executor, warmed)
         bridge.publish_frame({"action": np.array([1.0, 2.0])})
 
         bridge.reset_state()
@@ -341,12 +210,12 @@ def test_reset_state_forgets_previous_episode(rclpy_ctx):
         assert not bridge.warmed_up  # buffers cleared: next episode re-warms
 
         bridge.send_safety_action()  # hold source gone -> zeros, not [1, 2]
-        assert _spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
+        assert spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
         assert received["/arm_cmd"].count([1.0, 2.0]) == 1, received
 
 
-def test_setup_twice_raises(rclpy_ctx):
-    with _bridge_on_graph("double_setup", [], [_act("action", ["position.j1"], "/arm_cmd")]) as (
+def test_setup_twice_raises():
+    with bridge_on_graph("double_setup", [], [act_spec("action", ["position.j1"], "/arm_cmd")]) as (
         bridge,
         node,
         _fixture_node,

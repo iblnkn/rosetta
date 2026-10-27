@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""main()'s --hub-public/--hub-tags flags must reach port()'s writer_opts;
-without them the writer-level hub_private/hub_tags kwargs (which do exist and
-default safely) had no way to be set from the CLI at all."""
+"""main()'s --hub-public/--hub-tags flags reach port()'s writer_opts, and a
+hub push is private unless --hub-public is given."""
 
 import sys
 

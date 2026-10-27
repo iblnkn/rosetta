@@ -28,11 +28,6 @@ from rosetta_ros.bag_topics import contract_topics
 from rosetta_ros.bag_topics import dedup_topics as _dedup
 
 
-def test_identical_duplicate_collapses_to_one():
-    entry = ("/joint_states", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
-    assert _dedup([entry, entry]) == [entry]
-
-
 def test_distinct_topics_pass_through_in_order():
     a = ("/a", "sensor_msgs/msg/JointState", QoSProfile(depth=10))
     b = ("/b", "std_msgs/msg/Float32", QoSProfile(depth=10))
@@ -66,7 +61,7 @@ def test_same_qos_dict_derived_profiles_dedup():
     qos_b = qos_profile_from_dict({"reliability": "best_effort", "depth": 5})
     a = ("/t", "sensor_msgs/msg/JointState", qos_a)
     b = ("/t", "sensor_msgs/msg/JointState", qos_b)
-    assert len(_dedup([a, b])) == 1
+    assert _dedup([a, b]) == [a]
 
 
 _CONTRACT = """

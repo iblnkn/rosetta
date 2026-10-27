@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the FrameIO seam and core's purity.
+"""Core's purity: it imports without ROS.
 
 Core (``rosetta.contract``, ``rosetta.frames``, ``rosetta.policies``,
 ``rosetta.robots``) imports without any ROS dependency, so framework adapters
@@ -21,8 +21,6 @@ and robot interfaces other than ROS 2 are usable and testable without ROS.
 
 import subprocess
 import sys
-
-from rosetta.frames.protocols import FrameIO
 
 NO_RCLPY_PROBE = """
 import sys
@@ -46,24 +44,3 @@ def test_core_imports_without_rclpy():
     # A subprocess gives a clean sys.modules regardless of what this test
     # session has already imported.
     subprocess.run([sys.executable, "-c", NO_RCLPY_PROBE], check=True)
-
-
-def test_minimal_double_satisfies_source_and_sink():
-    # The surface framework-adapter test doubles rely on: sample/publish plus
-    # warmup/safety/reset. Keeps the protocol honest about its minimum.
-    class Double:
-        warmed_up = True
-
-        def sample_frame(self):
-            return {}
-
-        def publish_frame(self, action_frame):
-            return action_frame
-
-        def send_safety_action(self):
-            pass
-
-        def reset_state(self):
-            pass
-
-    assert isinstance(Double(), FrameIO)

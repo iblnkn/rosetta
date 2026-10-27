@@ -1,4 +1,4 @@
-# Copyright 2026 Isaac Blankenau
+# Copyright 2025 Isaac Blankenau
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,40 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The contract hil_launch defaults to loads, and every event it wires is one the manager acts on."""
+"""Shipped contracts' teleop wiring works in the HIL manager.
 
-from pathlib import Path
+Teleop input goes through the real CommandForwarder (decode with the teleop
+source, encode with its target action), so a width or unit mismatch in a
+shipped contract fails here instead of on every message at runtime.
+"""
 
 import pytest
+from forwarder_fakes import SO_101_HIL, STONE, forwarder
 from sensor_msgs.msg import JointState
 
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_teleop_input_specs
-from rosetta.frames.codecs import decode_value, encode_value
-from rosetta_ros_hil.hil_episode import ignored_events
-
-CONTRACT = Path(__file__).resolve().parent.parent / "contracts" / "so_101_hil.yaml"
+from rosetta_ros_hil.hil_episode import Control, ignored_events
 
 
-@pytest.fixture(scope="module")
-def contract():
-    return load_contract(CONTRACT)
+@pytest.fixture(params=[STONE, SO_101_HIL], ids=lambda path: path.name)
+def contract(request):
+    return load_contract(request.param)
 
 
-def test_every_wired_event_is_one_the_manager_acts_on(contract):
-    assert ignored_events(contract.teleop.events.select) == []
+def _positions(msg: JointState) -> dict[str, float]:
+    return dict(zip(msg.name, msg.position, strict=True))
 
 
 def test_teleop_input_reaches_the_action_topic_in_its_units(contract):
-    """The manager re-encodes decoded teleop input onto the action topic; the round trip keeps radians."""
-    actions = {s.source.channel.topic: s for s in iter_action_specs(contract)}
+    node, control = forwarder(contract)
+    control.now = Control.TELEOP
     for tis, spec in zip(contract.teleop.input, iter_teleop_input_specs(contract), strict=True):
         names = sorted(path.split(".", 1)[1] for path in spec.source.select)
-        leader = JointState(name=names, position=[0.1 * i for i in range(len(names))])
-        command = encode_value(decode_value(leader, spec), actions[tis.target])
-        assert dict(zip(command.name, command.position, strict=True)) == pytest.approx(
-            dict(zip(leader.name, leader.position, strict=True))
-        )
+        leader = JointState(name=names, position=[0.1 * (i + 1) for i in range(len(names))])
+        node.deliver(spec.source.channel.topic, leader)
+        (command,) = node.published[tis.target]
+        assert _positions(command) == pytest.approx(_positions(leader))
 
 
 def test_teleop_input_is_named_like_the_action_it_drives(contract):
@@ -54,3 +54,8 @@ def test_teleop_input_is_named_like_the_action_it_drives(contract):
     for tis, spec in zip(contract.teleop.input, iter_teleop_input_specs(contract), strict=True):
         target = actions[tis.target]
         assert (spec.namespace, spec.names) == (target.namespace, target.names)
+
+
+def test_every_event_hil_launch_wires_is_one_the_manager_acts_on():
+    """so_101_hil.yaml is the contract hil_launch defaults to; a typo'd event name would never fire."""
+    assert ignored_events(load_contract(SO_101_HIL).teleop.events.select) == []

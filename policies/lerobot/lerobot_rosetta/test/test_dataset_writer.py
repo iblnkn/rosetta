@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""End-to-end smoke test for LeRobotDatasetWriter against the installed lerobot.
+"""LeRobotDatasetWriter against the installed lerobot.
 
-Migration guard: LeRobotDataset.create() dropped the `vcodec` kwarg in
-lerobot 0.6.0 (codecs are configured via RGBEncoderConfig). This exercises
-the real create/add_frame/save_episode/finalize path in a tmp dir so a future
-signature change fails here instead of mid-port.
+Runs the real create/add_frame/save_episode/finalize path in a tmp dir, so a
+LeRobotDataset signature change fails here instead of mid-port, and pins the
+writer's own guarantees: the contract sidecar, discarded episodes, private uploads.
 """
 
 import json
@@ -28,10 +27,6 @@ import pytest
 
 from lerobot_rosetta.dataset_writer import LeRobotDatasetWriter
 from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import (
-    iter_action_specs,
-    iter_observation_specs,
-)
 from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
@@ -57,6 +52,29 @@ actions:
 """
 
 
+@pytest.fixture
+def contract_path(tmp_path: Path) -> Path:
+    path = tmp_path / "smoke.yaml"
+    path.write_text(CONTRACT_YAML)
+    return path
+
+
+@pytest.fixture
+def ds_root(tmp_path: Path) -> Path:
+    return tmp_path / "out" / "smoke/ds"
+
+
+def _open_writer(yaml_path: Path, **open_kwargs) -> LeRobotDatasetWriter:
+    writer = LeRobotDatasetWriter()
+    writer.open(
+        contract=load_contract(yaml_path),
+        repo_id="smoke/ds",
+        root=yaml_path.parent / "out",
+        **open_kwargs,
+    )
+    return writer
+
+
 def _frame(i: int) -> dict:
     return {
         "observation.images.cam": np.full((32, 32, 3), i * 10, dtype=np.uint8),
@@ -72,40 +90,21 @@ def _frame(i: int) -> dict:
 
 
 @pytest.mark.parametrize("streaming_encoding", [False, True])
-def test_writer_end_to_end(tmp_path: Path, streaming_encoding: bool):
-    contract_path = tmp_path / "smoke.yaml"
-    contract_path.write_text(CONTRACT_YAML)
-    contract = load_contract(contract_path)
-    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
-
-    writer = LeRobotDatasetWriter()
-    writer.open(
-        contract=contract,
-        repo_id="smoke/ds",
-        root=tmp_path / "out",
-        vcodec="libsvtav1",
-        streaming_encoding=streaming_encoding,
-    )
+def test_writer_end_to_end(contract_path: Path, ds_root: Path, streaming_encoding: bool):
+    writer = _open_writer(contract_path, vcodec="libsvtav1", streaming_encoding=streaming_encoding)
     for i in range(2):
         writer.add_frame(_frame(i))
     writer.save_episode()
     writer.finalize()
 
-    ds_root = tmp_path / "out" / "smoke/ds"
     assert (ds_root / "meta" / "info.json").exists()
     assert any((ds_root / "data").rglob("*.parquet"))
     assert any((ds_root / "videos").rglob("*.mp4"))
 
 
-def test_discarded_episode_does_not_leak(tmp_path: Path):
+def test_discarded_episode_does_not_leak(contract_path: Path, ds_root: Path):
     """Frames buffered before a mid-episode failure must not reach the dataset."""
-    contract_path = tmp_path / "smoke.yaml"
-    contract_path.write_text(CONTRACT_YAML)
-    contract = load_contract(contract_path)
-    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
-
-    writer = LeRobotDatasetWriter()
-    writer.open(contract=contract, repo_id="smoke/ds", root=tmp_path / "out")
+    writer = _open_writer(contract_path)
 
     writer.add_frame(_frame(0))  # partial episode, then failure upstream
     writer.discard_episode()
@@ -115,26 +114,14 @@ def test_discarded_episode_does_not_leak(tmp_path: Path):
     writer.save_episode()
     writer.finalize()
 
-    ds_root = tmp_path / "out" / "smoke/ds"
     info = json.loads((ds_root / "meta" / "info.json").read_text())
     assert info["total_episodes"] == 1
     assert info["total_frames"] == 2  # the discarded frame is gone
 
 
-def test_push_to_hub_private_by_default(tmp_path: Path, monkeypatch):
+def test_push_to_hub_private_by_default(contract_path: Path, monkeypatch):
     """Publishing a dataset publicly must be an explicit choice."""
-    contract_path = tmp_path / "smoke.yaml"
-    contract_path.write_text(CONTRACT_YAML)
-    contract = load_contract(contract_path)
-    list(iter_observation_specs(contract)) + list(iter_action_specs(contract))
-
-    writer = LeRobotDatasetWriter()
-    writer.open(
-        contract=contract,
-        repo_id="smoke/ds",
-        root=tmp_path / "out",
-        push_to_hub=True,
-    )
+    writer = _open_writer(contract_path, push_to_hub=True)
     writer.add_frame(_frame(0))
     writer.save_episode()
 
@@ -142,3 +129,19 @@ def test_push_to_hub_private_by_default(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(type(writer._ds), "push_to_hub", lambda _self, **kw: pushed.update(kw))
     writer.finalize()
     assert pushed["private"] is True
+
+
+@pytest.mark.parametrize("open_kwargs", [{"embed_contract": True}, {}], ids=["embed_contract", "default"])
+def test_embed_contract_writes_sidecar(contract_path: Path, ds_root: Path, open_kwargs):
+    _open_writer(contract_path, contract_path=contract_path, **open_kwargs)
+    assert (ds_root / "meta" / "rosetta_contract.yaml").read_text() == contract_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "open_kwargs",
+    [{"embed_contract": False}, {"contract_path": None}],
+    ids=["embed_contract=false", "no_contract_path"],
+)
+def test_no_sidecar_without_contract_or_opt_in(contract_path: Path, ds_root: Path, open_kwargs):
+    _open_writer(contract_path, **{"contract_path": contract_path, **open_kwargs})
+    assert not (ds_root / "meta" / "rosetta_contract.yaml").exists()

@@ -12,11 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TopicBridge structurally satisfies the FrameIO protocol PolicyRunner.run() is typed against."""
+"""Helpers shared by the codec tests."""
 
-from rosetta.frames.protocols import FrameIO
-from rosetta_ros.topic_bridge import TopicBridge
+import pytest
+from rosidl_runtime_py.utilities import get_message
 
 
-def test_topic_bridge_satisfies_frame_stream():
-    assert isinstance(TopicBridge([], [], fps=10), FrameIO)
+def require_message(msg_type: str) -> None:
+    """Skip the test when ``msg_type``'s package is not installed (e.g. control_msgs).
+
+    Contract load introspects timelines via rosidl, and encoders build real
+    messages, so both need the message package.
+    """
+    try:
+        get_message(msg_type)
+    except Exception:
+        pytest.skip(f"{msg_type} message package unavailable")

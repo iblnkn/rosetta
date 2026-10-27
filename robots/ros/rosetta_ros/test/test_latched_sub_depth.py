@@ -23,23 +23,19 @@ another in the RMW queue before the executor drains it (verified against
 rmw_zenoh and cyclonedds).
 """
 
-from rosetta_ros.bag_topics import MAX_LATCHED_SUB_DEPTH
-from rosetta_ros.bag_topics import latched_sub_depth as _depth
+import pytest
+
+from rosetta_ros.bag_topics import MAX_LATCHED_SUB_DEPTH, latched_sub_depth
 
 
-def test_multiple_publishers_widen_beyond_configured_depth():
-    # depth=1 (as configured for /tf_static in stone.yaml) with 2 live
-    # publishers must retain both, not evict down to 1.
-    assert _depth(configured_depth=1, publisher_count=2) == 2
-
-
-def test_single_publisher_keeps_configured_depth():
-    assert _depth(configured_depth=1, publisher_count=1) == 1
-
-
-def test_configured_depth_wins_when_larger_than_publisher_count():
-    assert _depth(configured_depth=5, publisher_count=1) == 5
-
-
-def test_clamped_to_safety_ceiling():
-    assert _depth(configured_depth=1, publisher_count=10_000) == MAX_LATCHED_SUB_DEPTH
+@pytest.mark.parametrize(
+    ("configured_depth", "publisher_count", "expected"),
+    [
+        (1, 2, 2),  # /tf_static in stone.yaml: two publishers must both be retained
+        (1, 1, 1),  # single publisher keeps the configured depth
+        (5, 1, 5),  # configured depth wins when larger
+        (1, 10_000, MAX_LATCHED_SUB_DEPTH),  # clamped to the safety ceiling
+    ],
+)
+def test_latched_sub_depth(configured_depth, publisher_count, expected):
+    assert latched_sub_depth(configured_depth=configured_depth, publisher_count=publisher_count) == expected

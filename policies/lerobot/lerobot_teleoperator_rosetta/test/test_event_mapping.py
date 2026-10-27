@@ -12,16 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pin the contract event names this plugin maps onto lerobot's TeleopEvents.
+"""Contract event names -> lerobot's TeleopEvents, as the teleop node applies them per message.
 
-Contract event names are open, so this plugin owns its vocabulary. The
-mapping once left three events unmapped and silently dropped; these tests
-fail if a lerobot event becomes unreachable or the composed events change.
+Contract event names are open, so this plugin owns its vocabulary.
 """
 
+import threading
+from types import SimpleNamespace
+
+import pytest
 from lerobot.teleoperators.utils import TeleopEvents
 
-from lerobot_teleoperator_rosetta.rosetta_teleop import DEFAULT_EVENTS, EVENT_NAME_TO_ENUMS
+from lerobot_teleoperator_rosetta.rosetta_teleop import (
+    DEFAULT_EVENTS,
+    EVENT_NAME_TO_ENUMS,
+    _RosettaTeleopLifecycleNode,
+)
+
+SUCCESS, FAILURE, TERMINATE = TeleopEvents.SUCCESS, TeleopEvents.FAILURE, TeleopEvents.TERMINATE_EPISODE
 
 
 def test_every_lerobot_event_but_rerecord_is_reachable_from_a_contract_name():
@@ -29,17 +37,27 @@ def test_every_lerobot_event_but_rerecord_is_reachable_from_a_contract_name():
     assert reachable == set(TeleopEvents) - {TeleopEvents.RERECORD_EPISODE}
 
 
-def test_end_success_composes_reward_and_termination():
-    assert set(EVENT_NAME_TO_ENUMS["end_success"]) == {TeleopEvents.SUCCESS, TeleopEvents.TERMINATE_EPISODE}
+def _apply(select, buttons, before=None):
+    """Run the node's events callback on a fake node holding ``before``; return the changed events."""
+    state = dict(DEFAULT_EVENTS) | (before or {})
+    node = SimpleNamespace(_events_lock=threading.Lock(), _events_state=state)
+    _RosettaTeleopLifecycleNode._on_events(node, SimpleNamespace(buttons=buttons), SimpleNamespace(select=select))
+    return {event: value for event, value in node._events_state.items() if value != DEFAULT_EVENTS[event]}
 
 
-def test_end_failure_composes_reward_and_termination():
-    assert set(EVENT_NAME_TO_ENUMS["end_failure"]) == {TeleopEvents.FAILURE, TeleopEvents.TERMINATE_EPISODE}
-
-
-def test_default_events_cover_full_lerobot_enum():
-    assert set(DEFAULT_EVENTS) == set(TeleopEvents)
-
-
-def test_default_events_start_false():
-    assert not any(DEFAULT_EVENTS.values())
+@pytest.mark.parametrize(
+    ("select", "buttons", "before", "after"),
+    [
+        ({"end_success": "buttons.0"}, [1], None, {SUCCESS: True, TERMINATE: True}),
+        ({"end_failure": "buttons.0"}, [1], None, {FAILURE: True, TERMINATE: True}),
+        # success and end_success both assert SUCCESS: either one pressed holds it.
+        ({"success": "buttons.0", "end_success": "buttons.1"}, [1, 0], None, {SUCCESS: True}),
+        ({"success": "buttons.0", "end_success": "buttons.1"}, [0, 1], None, {SUCCESS: True, TERMINATE: True}),
+        ({"success": "buttons.0"}, [0], {SUCCESS: True}, {}),  # release clears
+        ({"start_episode": "buttons.0"}, [1], None, {}),  # no lerobot mapping: skipped
+        ({"success": "buttons.9"}, [0], {SUCCESS: True}, {SUCCESS: True}),  # malformed: keeps last value
+    ],
+    ids=["end_success", "end_failure", "or_first", "or_second", "release", "unmapped", "malformed"],
+)
+def test_events_message_updates_the_lerobot_events(select, buttons, before, after):
+    assert _apply(select, buttons, before) == after

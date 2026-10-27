@@ -27,7 +27,6 @@ from rosetta_ros.timelines import (
 
 
 def test_provided_timelines_by_type():
-    pytest.importorskip("rosidl_runtime_py")
     assert provided_timelines("sensor_msgs/msg/JointState") == {"receive", "header"}
     assert provided_timelines("std_msgs/msg/Float64") == {"receive"}
     with pytest.raises(ValueError, match="NoSuchThing"):

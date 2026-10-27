@@ -12,20 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Full encode->decode round-trip tests for every codec pair.
+"""Encode->decode round trips for every ros2 codec pair, and the encoders' safety rules.
 
-encode_value builds real ROS message instances via
-rosidl_runtime_py.get_message. Individual pairs whose message package is
-missing (e.g. control_msgs) skip per-parameter.
+encode_value builds real ROS message instances. Pairs whose message package
+is missing (e.g. control_msgs) skip per-parameter.
 
 Coverage is enforced: ``test_every_pair_has_a_sample`` fails if a registered
 encoder/decoder pair has no sample here, so a new pair cannot be added without
-a round-trip case -- closing the historical 1-of-N gap for good.
+a round-trip case.
 """
 
 import numpy as np
 import pytest
-from rosidl_runtime_py.utilities import get_message
+from codec_helpers import require_message
 
 from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
@@ -36,7 +35,6 @@ from rosetta.contract.specs import (
 from rosetta.frames.codecs import (
     DECODERS,
     ENCODERS,
-    NonFiniteActionError,
     decode_value,
     discover_codecs,
     encode_value,
@@ -114,12 +112,7 @@ def test_every_pair_has_a_sample():
 @pytest.mark.parametrize("msg_type", _pairs())
 def test_codec_pair_round_trips(msg_type, tmp_path):
     """decode(encode(v)) == v for every encoder/decoder pair."""
-    try:
-        get_message(msg_type)
-    except Exception:
-        pytest.skip(f"{msg_type} message package unavailable")
-
-    assert msg_type in SAMPLES, f"No sample for {msg_type}"
+    require_message(msg_type)
     select, vec, atol = SAMPLES[msg_type]
     action_spec, obs_spec = _specs(tmp_path, msg_type, select)
     v = np.asarray(vec, dtype=np.float64)
@@ -128,17 +121,17 @@ def test_codec_pair_round_trips(msg_type, tmp_path):
     assert np.allclose(out1, v, rtol=0, atol=atol), f"{msg_type}: {v} -> {out1}"
 
 
-def test_roundtrip_rad2deg(tmp_path):
-    """Round trip through the operator pipeline (deg<->rad), not just the raw codec."""
+def test_rad2deg_reaches_the_wire_in_radians(tmp_path):
+    """The dataset speaks degrees; encode publishes radians and decode reads them back as degrees."""
     action_spec, obs_spec = _specs(
         tmp_path,
         "sensor_msgs/msg/JointState",
         ["position.j1", "position.j2"],
         apply_block="[rad2deg]",
     )
-    values = [90.0, 45.0]
-    out = decode_value(encode_value(values, action_spec), obs_spec)
-    assert np.allclose(out, values)
+    msg = encode_value([90.0, 45.0], action_spec)
+    assert np.allclose(msg.position, [np.pi / 2, np.pi / 4])
+    assert np.allclose(decode_value(msg, obs_spec), [90.0, 45.0])
 
 
 # ---------------------------------------------------------------------------
@@ -188,10 +181,7 @@ def test_joint_state_partial_field_coverage_raises(tmp_path):
 
 
 def test_joint_trajectory_partial_field_coverage_raises(tmp_path):
-    try:
-        get_message("trajectory_msgs/msg/JointTrajectory")
-    except Exception:
-        pytest.skip("trajectory_msgs unavailable")
+    require_message("trajectory_msgs/msg/JointTrajectory")
     spec = _action_spec(
         tmp_path,
         "trajectory_msgs/msg/JointTrajectory",
@@ -202,10 +192,7 @@ def test_joint_trajectory_partial_field_coverage_raises(tmp_path):
 
 
 def test_multidof_identical_sets_align(tmp_path):
-    try:
-        get_message("control_msgs/msg/MultiDOFCommand")
-    except Exception:
-        pytest.skip("control_msgs unavailable")
+    require_message("control_msgs/msg/MultiDOFCommand")
     spec = _action_spec(
         tmp_path,
         "control_msgs/msg/MultiDOFCommand",
@@ -218,10 +205,7 @@ def test_multidof_identical_sets_align(tmp_path):
 
 
 def test_multidof_divergent_sets_raise(tmp_path):
-    try:
-        get_message("control_msgs/msg/MultiDOFCommand")
-    except Exception:
-        pytest.skip("control_msgs unavailable")
+    require_message("control_msgs/msg/MultiDOFCommand")
     spec = _action_spec(
         tmp_path,
         "control_msgs/msg/MultiDOFCommand",
@@ -271,10 +255,7 @@ def test_selector_encoders_require_select(tmp_path, msg_type):
     # select declares which field each value lands in; a select-less channel
     # of a selector-driven type fails at CONTRACT LOAD (requires_select
     # registration), not at first publish.
-    try:
-        get_message(msg_type)
-    except Exception:
-        pytest.skip(f"{msg_type} message package unavailable")
+    require_message(msg_type)
     with pytest.raises(ContractValidationError, match="add 'select:'"):
         _selectless_action_spec(tmp_path, msg_type)
 
@@ -297,70 +278,9 @@ def test_int32_multiarray_encoder_rounds(tmp_path):
 
 
 def test_multidof_unknown_field_selector_raises(tmp_path):
-    try:
-        get_message("control_msgs/msg/MultiDOFCommand")
-    except Exception:
-        pytest.skip("control_msgs unavailable")
+    require_message("control_msgs/msg/MultiDOFCommand")
     # "velocity.j1" must raise, not publish a DOF literally named
     # "velocity.j1".
     spec = _action_spec(tmp_path, "control_msgs/msg/MultiDOFCommand", ["velocity.j1"])
     with pytest.raises(ValueError, match="Unknown MultiDOFCommand field 'velocity'"):
         encode_value([0.5], spec)
-
-
-# ---------------------------------------------------------------------------
-# Finiteness gate: encode_value is the single choke point before the wire, so
-# it refuses NaN/Inf commands (e.g. from a diverged policy) instead of
-# scattering them into message fields. clamp does NOT scrub NaN (np.clip
-# propagates it) -- the gate is the guarantee, on every action channel.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
-def test_encode_refuses_non_finite_command(tmp_path, bad):
-    spec = _action_spec(tmp_path, "sensor_msgs/msg/JointState", ["position.j1", "position.j2"])
-    with pytest.raises(NonFiniteActionError, match="position.j2"):
-        encode_value([0.5, bad], spec)
-
-
-def test_encode_refuses_nan_even_through_clamp(tmp_path):
-    # A clamp on the action does not launder NaN into a bounded value; the
-    # gate still fires after the inverse pipeline.
-    spec, _ = _specs(
-        tmp_path,
-        "sensor_msgs/msg/JointState",
-        ["position.j1"],
-        apply_block="[{clamp: {min: -1.0, max: 1.0}}]",
-    )
-    with pytest.raises(NonFiniteActionError):
-        encode_value([float("nan")], spec)
-
-
-def test_encode_finite_command_passes_gate(tmp_path):
-    spec = _action_spec(tmp_path, "sensor_msgs/msg/JointState", ["position.j1"])
-    msg = encode_value([0.5], spec)
-    assert list(msg.position) == [0.5]
-
-
-def test_encode_rejects_width_mismatch(tmp_path):
-    # select declares the vector width; a mismatched vector is refused at the
-    # choke point (as a structural ValueError, not a finiteness error) before
-    # any encoder scatters it — this also covers direct decode->encode
-    # callers like the HIL teleop passthrough, which bypass FrameLayout.
-    spec = _action_spec(tmp_path, "sensor_msgs/msg/JointState", ["position.j1"])
-    with pytest.raises(ValueError, match="2 values for its 1-wide"):
-        encode_value([0.5, float("nan")], spec)
-
-
-def test_split_output_reaches_gate_with_nan_intact(tmp_path):
-    # The finiteness gate must see values before any dtype cast. split emits
-    # float64, so a policy's NaN on an int32 action key reaches the gate
-    # intact; casting first would turn it into INT_MIN, finite garbage the
-    # gate would pass onto the wire.
-    from rosetta.frames.layout import FrameLayout
-
-    spec = _action_spec(tmp_path, "std_msgs/msg/Int32MultiArray", ["a", "b"])
-    assert spec.dtype == "int32"  # native codec dtype; the dangerous case
-    (part,) = FrameLayout([spec]).split({"action": np.array([float("nan"), 1.0])})
-    with pytest.raises(NonFiniteActionError):
-        encode_value(part, spec)

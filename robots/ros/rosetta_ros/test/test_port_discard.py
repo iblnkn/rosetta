@@ -25,30 +25,9 @@ so the tests hand it a recording fake and literal frame generators.
 """
 
 import pytest
+from bridge_helpers import StubWriter
 
 from rosetta_ros.offline.port import write_dataset
-
-
-class _StubWriter:
-    """Records the call sequence write_dataset drives."""
-
-    def __init__(self):
-        self.calls: list[str] = []
-
-    def open(self, **_kw):
-        self.calls.append("open")
-
-    def add_frame(self, _frame):
-        self.calls.append("add_frame")
-
-    def save_episode(self):
-        self.calls.append("save_episode")
-
-    def discard_episode(self):
-        self.calls.append("discard_episode")
-
-    def finalize(self):
-        self.calls.append("finalize")
 
 
 def _failing_frames():
@@ -62,7 +41,7 @@ def _good_frames():
 
 
 def test_failed_episode_discarded_before_next(tmp_path):
-    writer = _StubWriter()
+    writer = StubWriter()
 
     write_dataset(
         writer,
@@ -86,7 +65,7 @@ def test_failed_episode_discarded_before_next(tmp_path):
 def test_all_episodes_failed_raises_without_finalize(tmp_path):
     """An all-failed port is an error, and the writer must not finalize an
     empty dataset as if it were a product."""
-    writer = _StubWriter()
+    writer = StubWriter()
 
     with pytest.raises(RuntimeError, match="All 2 bags failed"):
         write_dataset(
@@ -123,7 +102,7 @@ def test_failed_episode_iterator_closed_before_next_episode(tmp_path):
         state["closed_before_next"] = state["suspended_closed"]
         yield {"observation.state": [2.0]}
 
-    class _FirstFrameBomb(_StubWriter):
+    class _FirstFrameBomb(StubWriter):
         def add_frame(self, frame):
             super().add_frame(frame)
             if self.calls.count("add_frame") == 1:

@@ -41,11 +41,12 @@ def test_sanitize_field_name(raw, sanitized):
     assert sanitize_field_name(raw) == sanitized
 
 
-def test_camera_name_preserves_dots():
-    """The semantic camera name keeps its dotted hierarchy (LeRobot/GR00T use it as-is)."""
-    assert camera_name("observation.images.wrist.right") == "wrist.right"
-
-
-def test_camera_name_no_prefix_key():
-    """A key without the image prefix is returned verbatim (removeprefix no-ops)."""
-    assert camera_name("wrist.cam") == "wrist.cam"
+@pytest.mark.parametrize(
+    ("key", "name"),
+    [
+        ("observation.images.wrist.right", "wrist.right"),  # dotted hierarchy kept (LeRobot/GR00T use it as-is)
+        ("wrist.cam", "wrist.cam"),  # no image prefix: verbatim
+    ],
+)
+def test_camera_name(key, name):
+    assert camera_name(key) == name
