@@ -37,7 +37,7 @@ pixi run zenoh-router
 ## rosetta_ws
 
 [rosetta_ws](https://github.com/iblnkn/rosetta_ws) installs ROS 2 Jazzy
-through [RoboStack](https://robostack.github.io/), LeRobot 0.6.0 and every
+through [RoboStack](https://robostack.github.io/), LeRobot 0.6.1 and every
 Rosetta package with [pixi](https://pixi.sh). Linux x86_64, Linux aarch64 and
 macOS arm64.
 
