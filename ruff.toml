@@ -1,0 +1,74 @@
+# Ruff config for the rosetta repository: lint, import order and format for
+# every Python package in it. Run through pre-commit (.pre-commit-config.yaml),
+# locally and in CI, so both use the same ruff version.
+indent-width = 4
+line-length = 120
+target-version = "py312"
+
+[lint]
+# CPY001 (license header) is a preview rule: preview is on, but explicit-preview-rules
+# limits it to preview rules selected by code, and the pinned ruff version
+# (.pre-commit-config.yaml) keeps their behavior fixed.
+preview = true
+explicit-preview-rules = true
+# Matches _, __, and _var but not _var_
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+fixable = ["ALL"]
+ignore = [
+  # pai baseline
+  "D203",
+  "D400",
+  "D401",
+  "D415",
+  "PLR0912",
+  "PLR0913",
+  "PLR0915",
+  "RUF012",
+  # rosetta additions
+  "D100",    # undocumented modules/classes/functions: not required (yet)
+  "D101",
+  "D102",
+  "D103",
+  "D104",
+  "D105",
+  "D107",
+  "D212",    # summary position: this codebase puts it on the second line
+  "D213",
+  "PLC0415", # imports inside functions ARE the backend plugin architecture
+  "PLR2004", # magic-value comparisons: dimension checks (quaternion == 4,
+             # stereo == 2) and keycodes read clearer inline than as constants
+]
+select = ["E", "W", "F", "I", "B", "D", "RET", "RUF", "PL", "PIE", "FLY", "CPY001"]
+unfixable = []
+
+[lint.flake8-copyright]
+# Every file starts with "# Copyright <year> <holder>" and the Apache-2.0 notice.
+notice-rgx = "(?i)Copyright \\d{4}"
+
+[lint.isort]
+# Pinned so import order doesn't depend on where ruff runs from: first-party
+# detection is cwd-dependent, and from a package root ruff would read the
+# package's own name as local but its siblings as third-party.
+known-first-party = [
+  "rosetta",
+  "rosetta_ros",
+  "rosetta_interfaces",
+  "rosetta_ros_hil",
+  "lerobot_rosetta",
+  "lerobot_robot_rosetta",
+  "lerobot_teleoperator_rosetta",
+]
+# `robots/ros/rosetta_ros/launch/` is a real directory, so from that package's
+# root ruff would read the ROS `launch` package as a local module.
+known-third-party = [
+  "launch",
+  "launch_ros",
+  "launch_testing",
+  "launch_testing_ros",
+]
+
+[lint.per-file-ignores]
+# Tests: docstrings optional; pytest.raises(match=...) substring-regexes are
+# intentional (RUF043)
+"**/test/**" = ["D", "RUF043"]
+"**/tests/**" = ["D", "RUF043"]

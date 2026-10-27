@@ -1,7 +1,7 @@
 name: lint
 
-# industrial_ci has no ruff support, so lint is its own workflow. ruff.toml is
-# the workspace's shared config, kept once in rosetta_ws.
+# The same hooks as `pre-commit run --all-files` locally, from the same
+# .pre-commit-config.yaml, so CI and local lint use identical tool versions.
 on:
   pull_request:
   push:
@@ -12,13 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ruff:
+  pre-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/main/ruff.toml -o ruff.toml
-      - uses: astral-sh/ruff-action@v3
+      - uses: actions/setup-python@v5
         with:
-          # Pinned to the workspace pixi env's ruff so CI and `pixi run lint` agree.
-          version: "0.15.21"
-          args: check .
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1

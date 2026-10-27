@@ -82,4 +82,3 @@ policy_runner:
     # robots will have observations skipped) until the upstream PR lands
     # (delta ready on libs/lerobot branch feature/add_obs_similarity_atol).
     obs_similarity_atol: -1.0
-
