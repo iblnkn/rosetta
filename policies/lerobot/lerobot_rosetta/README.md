@@ -2,7 +2,7 @@
 
 Rosetta's [LeRobot](https://github.com/huggingface/lerobot) framework adapter: dataset writer, policy runner, and gRPC inference servers.
 
-The naming convention is `<framework>_rosetta`, rosetta's adapter to a policy framework. This package is the rosetta-to-LeRobot direction: rosetta loads it by name via entry points. The opposite direction (the Robot and Teleoperator plugins that *LeRobot* auto-discovers) lives in [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) and [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta), whose names are forced by LeRobot's `lerobot_robot_*`/`lerobot_teleoperator_*` discovery convention. This package deliberately matches neither prefix, so LeRobot's `register_third_party_plugins()` never imports it. It depends on `lerobot_robot_rosetta` (for `RosettaConfig`, and LeRobot discovers the Robot plugin at policy-run time).
+The naming convention is `<framework>_rosetta`, rosetta's adapter to a policy framework. This package is the rosetta-to-LeRobot direction: rosetta loads it by name via entry points. The opposite direction (the Robot and Teleoperator plugins that *LeRobot* auto-discovers) lives in [`lerobot_robot_rosetta`](../lerobot_robot_rosetta) and [`lerobot_teleoperator_rosetta`](../lerobot_teleoperator_rosetta), whose names are forced by LeRobot's `lerobot_robot_*`/`lerobot_teleoperator_*` discovery convention. This package deliberately matches neither prefix, so LeRobot's `register_third_party_plugins()` never imports it. It depends on `lerobot_robot_rosetta` (for `RosettaConfig`, and LeRobot discovers the Robot plugin at policy-run time).
 
 ## Entry points
 

@@ -1,6 +1,6 @@
 # Test fixture: so_101 with an input-only teleop device and Joy events, a copy
 # of rosetta_ros_hil's so_101_hil.yaml so this package's tests don't depend on rosetta_ros_hil.
-# See rosetta's contracts/stone.yaml for the annotated tour of the contract format.
+# See rosetta_ros's contracts/stone.yaml for the annotated tour of the contract format.
 
 robot_type: so_101
 robot_interface: ros2

@@ -53,7 +53,9 @@ follow
 
 ## Packages
 
-This repository holds four packages:
+This repository holds Rosetta's core and every package maintained with it,
+organized by side: `robots/` holds robot interfaces (by middleware) and
+`policies/` holds framework adapters (by framework).
 
 | Package | Purpose |
 |---------|---------|
@@ -61,14 +63,13 @@ This repository holds four packages:
 | [`rosetta_ros`](robots/ros/rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder and policy runner nodes, bag porter, node toolkit |
 | [`rosetta_interfaces`](robots/ros/rosetta_interfaces) | Action, service and message definitions for every Rosetta ROS 2 node, HIL included |
 | [`rosetta_ros_hil`](robots/ros/rosetta_ros_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
+| [`lerobot_rosetta`](policies/lerobot/lerobot_rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
+| [`lerobot_robot_rosetta`](policies/lerobot/lerobot_robot_rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
+| [`lerobot_teleoperator_rosetta`](policies/lerobot/lerobot_teleoperator_rosetta) | LeRobot Teleoperator plugin (experimental) |
 
-Framework adapters live in their own repositories:
-
-| Package | Purpose |
-|---------|---------|
-| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
-| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
-| [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
+Adapters can also live in their own repositories: they register the same entry
+points, and nothing in this repository changes. [CONTRIBUTING.md](CONTRIBUTING.md)
+says which way to go.
 
 ## License
 

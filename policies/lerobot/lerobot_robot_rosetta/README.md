@@ -12,7 +12,7 @@ The package name follows LeRobot's `lerobot_robot_*`
 so installing it is enough for `--robot.type=rosetta` to work. It is a library
 with no executables. The opposite direction, Rosetta loading LeRobot as a
 policy framework, lives in
-[lerobot_rosetta](https://github.com/iblnkn/lerobot-rosetta).
+[lerobot_rosetta](../lerobot_rosetta).
 
 ## Usage
 
