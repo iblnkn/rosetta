@@ -3,12 +3,20 @@ name: lerobot
 # industrial_ci builds and tests inside an official ROS Docker image; rosdep
 # resolves dependencies from each package.xml. TARGET_WORKSPACE builds only
 # this slice of the repository and the packages it depends on.
+#
+# Two LeRobot versions: the newest release on PyPI, which must pass because
+# it's what `pip install lerobot` gives users, and LeRobot's main branch,
+# allowed to fail, as early warning of what the next release breaks. The
+# nightly run catches LeRobot changes that arrive without a change here.
 on:
   pull_request:
     paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
   push:
     branches: [main, dev]
     paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -16,7 +24,17 @@ concurrency:
 
 jobs:
   industrial_ci:
+    name: industrial_ci (lerobot ${{ matrix.lerobot }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.lerobot == 'main' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lerobot: release
+            spec: "lerobot[dataset]"
+          - lerobot: main
+            spec: "lerobot[dataset] @ git+https://github.com/huggingface/lerobot@main"
     env:
       ROS_DISTRO: jazzy
       ROS_REPO: main
@@ -26,7 +44,7 @@ jobs:
       TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       BEFORE_BUILD_TARGET_WORKSPACE: >-
-        pip install --break-system-packages --ignore-installed 'lerobot[dataset]' torch
+        pip install --break-system-packages --ignore-installed '${{ matrix.spec }}' torch
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
         && pip install --break-system-packages --ignore-installed --upgrade protobuf grpcio
     steps:

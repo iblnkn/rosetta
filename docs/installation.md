@@ -78,8 +78,11 @@ with the LeRobot writer, `policy_runner_node` and the LeRobot plugins, install
 into the same Python:
 
 ```bash
-pip install "lerobot[dataset,async]==0.6.0" torch grpcio
+pip install "lerobot[dataset,async]" torch grpcio
 ```
+
+CI tests the newest LeRobot release, and LeRobot's main branch as an early
+warning.
 
 Add the `training` extra if you'll run `lerobot-train`.
 

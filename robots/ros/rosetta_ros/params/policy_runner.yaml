@@ -76,9 +76,8 @@ policy_runner:
     # - Set to -1.0: DISABLE filtering (recommended for most robots)
     # - Set to positive value: filter observations within this L2 tolerance
     # Note: Requires a LeRobot version with obs_similarity_atol support.
-    # STOCK lerobot v0.6.0 (the current pin — see repos/libs.repos) does NOT
-    # support it: the runner logs a warning and ignores this parameter, and
-    # the async-inference filter stays hardcoded ON at atol 1.0 (small-motion
-    # robots will have observations skipped) until the upstream PR lands
-    # (delta ready on libs/lerobot branch feature/add_obs_similarity_atol).
+    # Stock LeRobot releases (0.6.x) do NOT support it: the runner logs a
+    # warning and ignores this parameter, and the async-inference filter stays
+    # hardcoded ON at atol 1.0 (small-motion robots will have observations
+    # skipped) until the upstream PR lands.
     obs_similarity_atol: -1.0

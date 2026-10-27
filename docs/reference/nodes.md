@@ -151,7 +151,7 @@ adapter's. `params/policy_runner.yaml` sets the third.
 | `actions_per_chunk` | `50` | `30` | Actions returned per inference. |
 | `chunk_size_threshold` | `0.5` | `0.95` | Queue fill ratio at which the next observation is sent. |
 | `aggregate_fn_name` | `weighted_average` | same | How a new chunk merges with the queue: `weighted_average`, `latest_only`, `average`, `conservative`. |
-| `obs_similarity_atol` | `1.0` | `-1.0` | Negative disables. Ignored by stock LeRobot 0.6.0. |
+| `obs_similarity_atol` | `1.0` | `-1.0` | Negative disables. Ignored by stock LeRobot 0.6.x. |
 
 Launch arguments: `params_file`, `contract_path`,
 `pretrained_name_or_path`, `policy_type`, `policy_device`, `server_address`,

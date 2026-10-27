@@ -95,8 +95,8 @@ class RosettaPolicyServer(PolicyServer):
         return True
 
     # Mirrors lerobot.async_inference.policy_server.PolicyServer.
-    # SendPolicyInstructions (lerobot v0.6.0 pin, see repos/libs.repos) with the
-    # load routed through the _ensure_policy cache — re-check on pin bumps.
+    # SendPolicyInstructions (LeRobot 0.6.x) with the load routed through the
+    # _ensure_policy cache. Re-check when LeRobot changes it.
     def SendPolicyInstructions(self, request, context):
         """Receive policy instructions; load the policy only if it changed."""
         if not self.running:
