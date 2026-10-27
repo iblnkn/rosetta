@@ -77,6 +77,10 @@ class _ProbeNode(RosettaLifecycleNode):
         #: "error" fails immediately.
         self.mode = "wait"
         self.started = threading.Event()
+        #: Cleared by a test to hold the execute callback open after the
+        #: terminal transition, until the client has its result.
+        self.may_return = threading.Event()
+        self.may_return.set()
 
     def setup(self):
         self._server = ActionServer(
@@ -116,6 +120,7 @@ class _ProbeNode(RosettaLifecycleNode):
                 result.termination_reason = self.stop_reason or TERMINATION_TIMEOUT
             result.message = "probe"
             finish_goal(goal_handle, result)
+            self.may_return.wait(5.0)
             return result
 
 
@@ -210,6 +215,21 @@ def test_work_ending_on_its_own_is_not_a_cancel(graph, mode, status):
     goal_handle = _send_goal(client)
 
     assert _terminal(goal_handle) == status
+
+
+def test_result_reaches_the_client_at_the_terminal_transition(graph):
+    """rclpy answers result requests when the goal turns terminal, before the
+    execute callback returns. The result must travel with that transition, or
+    a client asking early gets an empty one."""
+    node, client = graph
+    node.mode = "error"
+    node.may_return.clear()
+    try:
+        result = _result_of(_send_goal(client).get_result_async()).result
+    finally:
+        node.may_return.set()
+
+    assert (result.termination_reason, result.message) == (TERMINATION_ERROR, "probe")
 
 
 def test_deactivate_ends_aborted_naming_the_deactivate(graph):

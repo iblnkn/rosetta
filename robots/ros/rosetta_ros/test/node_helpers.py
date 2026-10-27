@@ -33,13 +33,13 @@ class FakeGoalHandle:
         self.feedback: list = []
         self._on_feedback = on_feedback
 
-    def canceled(self):
+    def canceled(self, response=None):
         self.calls.append("canceled")
 
-    def abort(self):
+    def abort(self, response=None):
         self.calls.append("abort")
 
-    def succeed(self):
+    def succeed(self, response=None):
         self.calls.append("succeed")
 
     def publish_feedback(self, feedback):

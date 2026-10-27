@@ -148,13 +148,17 @@ def finish_goal(goal_handle, result) -> None:
     work loop (true for all three rosetta action results). This function never
     writes it: the loop is its single writer, so the terminal state and the
     reported reason cannot disagree.
+
+    The result travels with the transition: rclpy answers a client's pending
+    result request as soon as the goal turns terminal, before the execute
+    callback returns, so a transition without it sends an empty result.
     """
     if goal_handle.is_cancel_requested:
-        goal_handle.canceled()
+        goal_handle.canceled(result)
     elif result.termination_reason in _ABORT_REASONS:
-        goal_handle.abort()
+        goal_handle.abort(result)
     else:
-        goal_handle.succeed()
+        goal_handle.succeed(result)
 
 
 def request_cancel_all(cancel_client, *, warn: Callable[[str], None] | None = None) -> bool:

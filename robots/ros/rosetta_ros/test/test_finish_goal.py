@@ -60,13 +60,13 @@ class FakeGoalHandle:
         self.is_cancel_requested = cancel_requested
         self.calls: list[str] = []
 
-    def canceled(self):
+    def canceled(self, response=None):
         self.calls.append("canceled")
 
-    def abort(self):
+    def abort(self, response=None):
         self.calls.append("abort")
 
-    def succeed(self):
+    def succeed(self, response=None):
         self.calls.append("succeed")
 
 
