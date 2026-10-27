@@ -27,3 +27,13 @@ Rosetta finds them the same way wherever they live.
   so people can find it.
 
 The how-to guides "Add a framework" and "Add a robot interface" cover both.
+
+## Releasing
+
+The ROS packages release through bloom, which releases every package in this
+repository at one version. The packages under `policies/` depend on libraries
+with no rosdep key (LeRobot, torch), so the ROS buildfarm can't build them:
+list them, one per line, in a `<distro>.ignored` file (e.g. `jazzy.ignored`)
+on the release repository's default branch. bloom assumes that branch is
+`master`; if yours is `main`, check that the file is honored before the first
+release. Those packages install with pip alongside a ROS 2 workspace instead.

@@ -62,6 +62,18 @@ and the `so_101_hil.yaml` contract shipped with `rosetta_ros_hil`. For the ROS 2
 loop, where the HIL manager muxes policy and teleop for you, see
 [`rosetta_ros_hil`](../../../robots/ros/rosetta_ros_hil).
 
+## Install
+
+This package builds in a ROS 2 workspace with colcon, but it also needs
+LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
+reports it missing. Install it with pip first. The `rosetta_ws` pixi
+environment does both. It isn't released to the ROS buildfarm.
+
+```bash
+pip install 'lerobot[dataset]'
+colcon build --packages-up-to lerobot_teleoperator_rosetta
+```
+
 ## Documentation
 
 Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**

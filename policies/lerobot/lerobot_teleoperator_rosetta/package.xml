@@ -13,6 +13,9 @@
   <depend>rosetta</depend>
   <depend>rosetta_ros</depend>
   <depend>python3-numpy</depend>
+  <!-- lerobot has no rosdep key, so rosdep can neither install it nor report it
+       missing: install it with pip (it is in setup.py install_requires). This
+       package is not released to the ROS buildfarm (see CONTRIBUTING.md). -->
 
   <test_depend>ament_index_python</test_depend>
   <test_depend>ament_lint_auto</test_depend>

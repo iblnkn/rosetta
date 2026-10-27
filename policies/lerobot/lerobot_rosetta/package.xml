@@ -13,8 +13,10 @@
   <depend>rosetta</depend>
   <depend>lerobot_robot_rosetta</depend>
   <depend>python3-numpy</depend>
-  <!-- lerobot/torch/grpcio have no rosdep keys; provided by the pixi env
-       (pixi.toml) and declared in setup.py install_requires. -->
+  <!-- lerobot and torch have no rosdep keys, so rosdep can neither install them
+       nor report them missing: install them with pip (they are in setup.py
+       install_requires). This package is not released to the ROS buildfarm
+       (see CONTRIBUTING.md). -->
   <exec_depend condition="$ROS_PYTHON_VERSION == 3">python3-grpcio</exec_depend>
 
   <test_depend>rosetta_ros</test_depend>

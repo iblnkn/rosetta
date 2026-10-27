@@ -60,6 +60,18 @@ LeRobot collapses numeric features into one `observation.state` and one
 `action`. A richer contract still records and trains, and is rejected at
 `connect()` with an error naming the offending keys.
 
+## Install
+
+This package builds in a ROS 2 workspace with colcon, but it also needs
+LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
+reports it missing. Install it with pip first. The `rosetta_ws` pixi
+environment does both. It isn't released to the ROS buildfarm.
+
+```bash
+pip install 'lerobot[dataset]'
+colcon build --packages-up-to lerobot_robot_rosetta
+```
+
 ## Documentation
 
 Contract schema:

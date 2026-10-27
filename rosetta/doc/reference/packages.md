@@ -68,6 +68,6 @@ load.
 `lerobot_rosetta` needs `lerobot`, `torch`, `grpcio` and
 `lerobot_robot_rosetta`. `lerobot_robot_rosetta` needs `lerobot`. `rosdep`
 has a key for `grpcio` but none for `lerobot` or `torch`, so install those
-with `pip`. [`rosetta_ws`](https://github.com/iblnkn/rosetta_ws) installs
+with `pip`; for the same reason the LeRobot packages aren't released to the ROS buildfarm. [`rosetta_ws`](https://github.com/iblnkn/rosetta_ws) installs
 LeRobot 0.6.0 from a source checkout with the `dataset`, `async`, `training`,
 `peft` and `smolvla` extras.

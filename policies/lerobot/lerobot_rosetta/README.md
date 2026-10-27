@@ -29,10 +29,17 @@ python -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
 
 `LeRobotPolicyRunner` starts the appropriate server with these flags at node configure time (`launch_local_server: true`), so the first `run_policy` goal is as fast as any other.
 
-## Build
+## Install
+
+This package builds in a ROS 2 workspace with colcon, but it also needs
+LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
+reports it missing. Install it with pip first; the inference servers also
+need `torch` and `grpcio`. The `rosetta_ws` pixi environment does both. It
+isn't released to the ROS buildfarm.
 
 ```bash
-colcon build --packages-select lerobot_rosetta
+pip install 'lerobot[dataset]'
+colcon build --packages-up-to lerobot_rosetta
 ```
 
 ## Documentation
