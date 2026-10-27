@@ -37,7 +37,7 @@ reports it missing. Install it with pip first; the inference servers also
 need `torch` and `grpcio`. It isn't released to the ROS buildfarm.
 
 ```bash
-pip install 'lerobot[dataset]'
+pip install 'lerobot[dataset]<0.6.2'
 colcon build --packages-up-to lerobot_rosetta
 ```
 

@@ -78,11 +78,13 @@ with the LeRobot writer, `policy_runner_node` and the LeRobot plugins, install
 into the same Python:
 
 ```bash
-pip install "lerobot[dataset,async]" torch grpcio
+pip install "lerobot[dataset,async]<0.6.2" torch grpcio
 ```
 
-CI tests the newest LeRobot release, and LeRobot's main branch as an early
-warning.
+LeRobot 0.6.2 removes the async inference that the LeRobot policy runner is
+built on, so the version is capped until the runner moves to LeRobot's new
+inference engines. CI tests the newest release under the cap, and LeRobot's
+main branch as an early warning.
 
 Add the `training` extra if you'll run `lerobot-train`.
 

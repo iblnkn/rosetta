@@ -32,7 +32,7 @@ jobs:
       matrix:
         include:
           - lerobot: release
-            spec: "lerobot[dataset]"
+            spec: "lerobot[dataset]<0.6.2"
           - lerobot: main
             spec: "lerobot[dataset] @ git+https://github.com/huggingface/lerobot@main"
     env:

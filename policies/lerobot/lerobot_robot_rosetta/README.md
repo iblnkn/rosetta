@@ -68,7 +68,7 @@ reports it missing. Install it with pip first. It isn't released to the ROS
 buildfarm.
 
 ```bash
-pip install 'lerobot[dataset]'
+pip install 'lerobot[dataset]<0.6.2'
 colcon build --packages-up-to lerobot_robot_rosetta
 ```
 
