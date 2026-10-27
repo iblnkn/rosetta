@@ -662,7 +662,7 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
     robot_type, robot_interface, fps = _parse_header(data)
 
     # Spec resolution below looks up dtypes and encoders in the codec registry.
-    discover_codecs()
+    discover_codecs(robot_interface)
 
     sections = {name: _parse_frame_section(data.get(name), name) for name in FRAME_SECTIONS}
 

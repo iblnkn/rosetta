@@ -31,12 +31,13 @@ from rosetta_ros_hil.hil_episode import (
 )
 
 
-def test_new_episode_starts_with_policy_in_control_and_no_label():
+@pytest.mark.parametrize("control", [Control.POLICY, Control.TELEOP])
+def test_new_episode_starts_with_the_given_control_and_no_label(control):
     state = EpisodeState()
-    state.set_control(Control.TELEOP)
+    state.set_control(Control.TELEOP if control == Control.POLICY else Control.POLICY)
     state.label(True, 1.0)
-    state.reset()
-    assert state.snapshot() == (Control.POLICY, 0.0, OUTCOME_UNLABELED)
+    state.reset(control)
+    assert state.snapshot() == (control, 0.0, OUTCOME_UNLABELED)
 
 
 @pytest.mark.parametrize(("success", "outcome"), [(True, OUTCOME_SUCCESS), (False, OUTCOME_FAILURE)])

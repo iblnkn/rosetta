@@ -35,6 +35,7 @@ cause, which is what stopped a deactivate from being reported as a human stop.
 """
 
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -45,6 +46,7 @@ from rclpy.action import CancelResponse, GoalResponse
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import TransitionCallbackReturn
 from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
@@ -182,6 +184,29 @@ def base_node(rclpy_ctx):
     n = _RecordingNode("base_node_under_test")
     yield n
     n.destroy_node()
+
+
+def test_start_service_claims_then_runs_the_work_on_a_thread(base_node):
+    base_node._accepting_work = True
+    ran = threading.Event()
+    response = base_node.handle_start_service(SimpleNamespace(), ran.set, (), what="work")
+    assert (response.accepted, response.message) == (True, "Work started")
+    assert ran.wait(5.0)
+    assert base_node.busy  # released by the work itself (goal_work), not by the service
+    base_node._busy = False
+
+
+@pytest.mark.parametrize(
+    ("accepting", "busy", "reason"), [(False, False, "node not active"), (True, True, "already busy")]
+)
+def test_start_service_rejects_without_starting_or_claiming(base_node, accepting, busy, reason):
+    base_node._accepting_work, base_node._busy = accepting, busy
+    ran = []
+    response = base_node.handle_start_service(SimpleNamespace(), ran.append, (1,), what="work")
+    assert (response.accepted, response.message) == (False, f"Rejected: {reason}")
+    assert ran == []
+    assert base_node.busy is busy
+    base_node._busy = False
 
 
 def test_cleanup_refused_while_work_in_progress(base_node):
@@ -363,3 +388,17 @@ def test_concurrent_claims_admit_exactly_one_winner(base_node):
     for t in threads:
         t.join()
     assert len(wins) == 1
+
+
+def test_output_after_teardown_is_logged_not_raised(rclpy_ctx, node, monkeypatch):
+    """A work thread outliving shutdown's bounded wait must not crash on its torn-down publishers."""
+    logged = []
+    logger = SimpleNamespace(warning=lambda msg, **_: logged.append(msg))
+    monkeypatch.setattr(node, "get_logger", lambda: logger)
+    publisher = node.create_publisher(String, "/lifecycle_out", 1)
+    node.destroy_publisher(publisher)
+    node.publish_output(publisher, String(data="destroyed"))
+    node.publish_output(None, String(data="never created"))
+    assert len(logged) == 2
+    assert "destroyed" in logged[0]
+    assert "never created" in logged[1]

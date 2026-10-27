@@ -556,7 +556,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                     with self._writer_lock:
                         msg_count = self._messages_written
                     status = RecordEpisodeStatus(elapsed_s=elapsed, messages_written=msg_count)
-                    self._status_pub.publish(status)
+                    self.publish_output(self._status_pub, status)
                     if goal_handle is not None:
                         goal_handle.publish_feedback(copy_fields(status, RecordEpisode.Feedback()))
             except Exception as e:
@@ -618,7 +618,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             # Terminal goal state. This thread owns the goal handle and is the
             # only place that transitions it; finish_goal uses only rcl-legal
             # transitions and reads the reason set just above.
-            self._result_pub.publish(copy_fields(result, RecordEpisodeResult()))
+            self.publish_output(self._result_pub, copy_fields(result, RecordEpisodeResult()))
             if goal_handle is not None:
                 finish_goal(goal_handle, result)
             return result

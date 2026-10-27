@@ -223,9 +223,11 @@ CODEC_ENTRY_POINT_GROUP = "rosetta.codecs"
 """Entry-point group third-party codec plugins register under."""
 
 
-def discover_codecs() -> None:
+def discover_codecs(robot_interface: str | None = None) -> None:
     """
     Register every robot interface's built-in codecs, then import ``rosetta.codecs`` plugins.
+
+    Raises if ``robot_interface`` (the one a contract names) failed to register.
 
     Each entry point's value is a module path. Loading it runs that module's
     ``@register_decoder`` / ``@register_encoder`` decorators, so installed
@@ -246,7 +248,7 @@ def discover_codecs() -> None:
     # module level: an interface's codec modules import this one.
     from rosetta.robots.registry import register_interface_codecs
 
-    register_interface_codecs()
+    register_interface_codecs(robot_interface)
     load_entry_point_plugins(CODEC_ENTRY_POINT_GROUP, "codec")
 
 

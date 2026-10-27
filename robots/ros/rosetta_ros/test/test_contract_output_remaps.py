@@ -37,6 +37,11 @@ def test_no_prefix_means_no_remaps():
     assert contract_output_remaps(STONE, "") == []
 
 
+def test_a_prefix_without_a_contract_path_names_the_problem():
+    with pytest.raises(ValueError, match="explicit contract_path"):
+        contract_output_remaps("", "/hil/policy")
+
+
 @pytest.mark.parametrize("prefix", ["/hil/policy", "/hil/policy/"])
 @pytest.mark.parametrize("topic", ["/cmd_vel", "cmd_vel"])
 def test_prefixed_topic_joins_with_exactly_one_slash(prefix, topic):

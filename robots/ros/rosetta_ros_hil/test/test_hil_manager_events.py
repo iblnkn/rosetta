@@ -187,27 +187,17 @@ def test_start_episode_button_starts_when_idle(node, monkeypatch):
     assert started == [("", 0.0, 0.0)]
 
 
-def test_start_episode_button_noop_when_already_busy(node, monkeypatch):
+@pytest.mark.parametrize(("accepting", "busy"), [(True, True), (False, False)], ids=["busy", "inactive"])
+def test_start_episode_button_is_ignored_when_work_cannot_be_claimed(node, monkeypatch, accepting, busy):
     started = []
     monkeypatch.setattr(node, "_run_episode_detached", lambda *a: started.append(a))
-    node._accepting_work = True
-    node._busy = True  # simulate an episode already running
+    node._accepting_work, node._busy = accepting, busy
 
     node._on_teleop_events(_joy(start_episode=1), EVENTS_SPEC)
 
     assert started == []
+    assert node.busy is busy
     node._busy = False
-
-
-def test_start_episode_button_noop_when_node_inactive(node, monkeypatch):
-    started = []
-    monkeypatch.setattr(node, "_run_episode_detached", lambda *a: started.append(a))
-    node._accepting_work = False
-
-    node._on_teleop_events(_joy(start_episode=1), EVENTS_SPEC)
-
-    assert started == []
-    assert not node.busy
 
 
 @pytest.mark.parametrize(
@@ -351,6 +341,17 @@ def _run_episode_with(node, monkeypatch, reason, reward_threshold=0.0, during=No
     monkeypatch.setattr(node, "_cancel_child", lambda *a, **k: None)
     monkeypatch.setattr(node, "_stop_recorder", lambda: None)
     return node._run_episode("t", 0.0, reward_threshold, threading.Event())
+
+
+@pytest.mark.parametrize(("held", "control"), [(True, "teleop"), (False, "policy")])
+def test_an_episode_starts_with_whoever_holds_intervention(node, monkeypatch, held, control):
+    """A human still holding intervention at the start keeps the arm: holding is not a new press."""
+    node._on_teleop_events(_joy(intervention=1), EVENTS_SPEC)
+    if not held:
+        node._on_teleop_events(_joy(), EVENTS_SPEC)
+    seen = []
+    _run_episode_with(node, monkeypatch, TERMINATION_STOPPED, during=lambda: seen.append(node._episode.control))
+    assert seen == [control]
 
 
 def test_reward_threshold_promotes_an_unlabeled_episode_to_success(node, monkeypatch):

@@ -14,6 +14,9 @@
 
 """Core works with any robot interface: a contract for the fake one loads, decodes and encodes."""
 
+import importlib.metadata as ilm
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from fake_interface import FakeVector
@@ -22,6 +25,7 @@ from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 from rosetta.frames.codecs import decode_value, encode_value
+from rosetta.robots import registry
 
 CONTRACT = """\
 robot_type: fake_bot
@@ -67,3 +71,23 @@ def test_the_interface_decides_what_loads(fake_interface, tmp_path, old, new, ma
     assert old in CONTRACT
     with pytest.raises(ContractValidationError, match=match):
         _load(tmp_path, CONTRACT.replace(old, new))
+
+
+@pytest.fixture
+def broken_interface_too(fake_interface, monkeypatch):
+    """Install a second interface, ``broken``, whose package fails to import."""
+    eps = [
+        ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=registry.ROBOT_INTERFACE_GROUP),
+        ilm.EntryPoint(name="broken", value="no_such_module:Interface", group=registry.ROBOT_INTERFACE_GROUP),
+    ]
+    monkeypatch.setattr(registry, "_ilm", SimpleNamespace(entry_points=lambda group: eps))
+
+
+def test_a_broken_interface_does_not_block_contracts_for_another(broken_interface_too, tmp_path):
+    assert _load(tmp_path, CONTRACT).robot_interface == "fake"
+
+
+def test_a_contract_for_a_broken_interface_gets_its_error(broken_interface_too, tmp_path):
+    for _ in range(2):  # latched: the retry raises the same error
+        with pytest.raises(ContractValidationError, match="Failed to load robot interface 'broken'"):
+            _load(tmp_path, CONTRACT.replace("robot_interface: fake", "robot_interface: broken"))

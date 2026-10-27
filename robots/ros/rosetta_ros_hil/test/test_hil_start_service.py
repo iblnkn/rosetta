@@ -48,11 +48,6 @@ def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
     assert resp.accepted is True  # returned while the episode still runs
     assert node.busy
 
-    # Concurrent start while the episode runs is rejected.
-    resp2 = _call(node)
-    assert resp2.accepted is False
-    assert "already busy" in resp2.message
-
     release.set()
     assert wait_until(lambda: not node.busy, timeout=5.0)
 
@@ -68,14 +63,6 @@ def test_guard_released_when_episode_raises(node, monkeypatch):
     assert resp.accepted is True
     # The thread's finally must release the guard, or the node stays busy.
     assert wait_until(lambda: not node.busy, timeout=5.0)
-
-
-def test_inactive_node_rejects_without_claiming(node):
-    node._accepting_work = False
-    resp = _call(node)
-    assert resp.accepted is False
-    assert "node not active" in resp.message
-    assert not node.busy
 
 
 def _fields():

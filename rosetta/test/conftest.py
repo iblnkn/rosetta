@@ -28,4 +28,4 @@ def fake_interface(monkeypatch):
     ep = ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=registry.ROBOT_INTERFACE_GROUP)
     monkeypatch.setattr(registry, "_ilm", SimpleNamespace(entry_points=lambda group: [ep]))
     monkeypatch.setattr(registry, "_instances", {})
-    monkeypatch.setattr(registry, "_codec_state", {"done": False, "failure": None})
+    monkeypatch.setattr(registry, "_codec_state", {"done": False, "failures": {}})

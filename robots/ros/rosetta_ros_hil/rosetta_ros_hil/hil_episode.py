@@ -72,10 +72,10 @@ class EpisodeState:
         self._reward = 0.0
         self._outcome = OUTCOME_UNLABELED
 
-    def reset(self) -> None:
-        """Start a new episode: policy in control, zero reward, unlabeled."""
+    def reset(self, control: Control = Control.POLICY) -> None:
+        """Start a new episode: ``control`` in control, zero reward, unlabeled."""
         with self._lock:
-            self._control = Control.POLICY
+            self._control = Control(control)
             self._reward = 0.0
             self._outcome = OUTCOME_UNLABELED
 
@@ -134,6 +134,11 @@ class EdgeDetector:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pressed: dict[str, bool] = {}
+
+    def is_pressed(self, name: str) -> bool:
+        """Whether ``name`` was held in the last message that carried it."""
+        with self._lock:
+            return self._pressed.get(name, False)
 
     def update(self, levels: dict[str, bool]) -> list[tuple[str, bool]]:
         """Return ``(name, pressed)`` for every button whose level changed, in input order."""

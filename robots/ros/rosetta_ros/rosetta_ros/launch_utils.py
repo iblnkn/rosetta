@@ -63,10 +63,14 @@ def contract_output_remaps(contract_path: str, prefix: str) -> list[tuple[str, s
     or the other (rewards when ``is_classifier`` is set), and a remap for a
     topic a node never uses has no effect, so both are remapped. Use it to put
     something between the runner and the robot, such as a mux. An empty
-    ``prefix`` returns no remaps.
+    ``prefix`` returns no remaps, and a prefix needs an explicit ``contract_path``.
     """
     if not prefix:
         return []
+    if not contract_path:
+        # The node can fall back to a model's embedded contract; launch can't
+        # read the topics to remap from it.
+        raise ValueError("output_prefix needs an explicit contract_path: the topics to remap are read from it")
     from rosetta.contract.schema import load_contract
 
     contract = load_contract(contract_path)

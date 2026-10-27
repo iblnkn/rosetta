@@ -521,8 +521,7 @@ class HilManagerNode(RosettaLifecycleNode):
 
     def _publish_control(self) -> None:
         """Publish who has control: 0 policy, 1 human."""
-        if self._intervention_pub is not None:
-            self._intervention_pub.publish(Int8(data=0 if self._episode.control == Control.POLICY else 1))
+        self.publish_output(self._intervention_pub, Int8(data=0 if self._episode.control == Control.POLICY else 1))
 
     def _label_episode(self, success: bool) -> float:
         """Latch the human's verdict on this episode and return its reward value.
@@ -724,7 +723,10 @@ class HilManagerNode(RosettaLifecycleNode):
             f"Starting episode: prompt={prompt!r}, max_duration={max_duration}s, reward_threshold={reward_threshold}"
         )
 
-        self._episode.reset()
+        # A human still holding intervention keeps control: the held button
+        # is not a new press, so no edge would hand it back.
+        held = self._edges.is_pressed("is_intervention")
+        self._episode.reset(Control.TELEOP if held else Control.POLICY)
         self._publish_control()
 
         enable_reward = self.get_parameter("enable_reward_classifier").value
@@ -816,7 +818,7 @@ class HilManagerNode(RosettaLifecycleNode):
             self._reward_goal_handle = None
             self._recorder_goal_handle = None
             # Every exit, including the early failure returns above.
-            self._result_pub.publish(ManageEpisodeResult(**fields))
+            self.publish_output(self._result_pub, ManageEpisodeResult(**fields))
 
         self.get_logger().info(f"Episode finished: {fields['message']}")
         return fields
@@ -865,7 +867,7 @@ class HilManagerNode(RosettaLifecycleNode):
                 outcome=outcome,
                 messages_written=self._recorder_messages_written,
             )
-            self._status_pub.publish(status)
+            self.publish_output(self._status_pub, status)
             if goal_handle is not None:
                 goal_handle.publish_feedback(copy_fields(status, ManageEpisode.Feedback()))
 

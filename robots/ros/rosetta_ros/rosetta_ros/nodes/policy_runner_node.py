@@ -399,7 +399,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
                 feedback_stop.set()
                 feedback_thread.join(timeout=1.0)
 
-            self._result_pub.publish(copy_fields(result, RunPolicyResult()))
+            self.publish_output(self._result_pub, copy_fields(result, RunPolicyResult()))
             if goal_handle is not None:
                 finish_goal(goal_handle, result)
             self.get_logger().info(f"Finished ({result.termination_reason}): {result.message}")
@@ -414,7 +414,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             try:
                 snap = self._runner.feedback()
                 status = RunPolicyStatus(queue_depth=snap.queue_depth, published_actions=snap.published_actions)
-                self._status_pub.publish(status)
+                self.publish_output(self._status_pub, status)
                 if goal_handle is not None:
                     goal_handle.publish_feedback(copy_fields(status, RunPolicy.Feedback()))
             except Exception:

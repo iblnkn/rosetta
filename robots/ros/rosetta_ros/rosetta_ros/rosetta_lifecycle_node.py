@@ -34,6 +34,7 @@ import traceback
 from contextlib import contextmanager
 
 from rclpy.action import CancelResponse, GoalResponse
+from rclpy.exceptions import InvalidHandle
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
 
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
@@ -171,6 +172,21 @@ class RosettaLifecycleNode(Node):
         :attr:`_work_gate`, so an override may block; it must be safe to call
         with no work active.
         """
+
+    def publish_output(self, publisher, msg) -> None:
+        """Publish work output (status, result) from a work thread.
+
+        ``on_shutdown`` tears down after a bounded wait even when work is still
+        winding down, so the publisher may already be gone. Then the message is
+        logged instead of raising, so the work's own outcome still reaches the log.
+        """
+        if publisher is not None:
+            try:
+                publisher.publish(msg)
+                return
+            except InvalidHandle:
+                pass
+        self.get_logger().warning(f"Node torn down, not published: {msg}")
 
     def send_safety_action(self) -> None:
         """Secure the robot after work has stopped.
