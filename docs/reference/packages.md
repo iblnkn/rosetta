@@ -31,7 +31,8 @@ explains the split.
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_robot_rosetta) | A LeRobot `Robot` plugin. `--robot.type=rosetta` in LeRobot's own CLIs. |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_teleoperator_rosetta) | A LeRobot `Teleoperator` plugin. Experimental. |
 
-All seven are at version 0.2.0.
+All seven are at version 0.2.0. On ROS 2, install `rosetta_ros`; it brings
+`rosetta` and `rosetta_interfaces` with it.
 
 ## Packages outside this repository
 

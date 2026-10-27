@@ -8,7 +8,10 @@ Three ways to get Rosetta. Pick by what you already have.
 | Nothing, and you have your own robot | [rosetta_ws](#rosetta_ws) |
 | A ROS 2 workspace already | [An existing workspace](#an-existing-workspace) |
 
-Rosetta builds on ROS 2 Jazzy and Lyrical.
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
+Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
+the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
+the first ROS release.
 
 ## The demos workspace
 
@@ -61,8 +64,14 @@ into your `src/`, then:
 
 ```bash
 rosdep install --from-paths src --ignore-src -y --skip-keys ament_python
-colcon build
+colcon build --packages-up-to rosetta_ros
 ```
+
+On ROS 2, `rosetta_ros` is the package to build and install: it has the nodes,
+launch files and `rosetta_port`, and brings `rosetta` and `rosetta_interfaces`
+with it. `rosetta` alone is the core library, with no nodes. Add
+`rosetta_ros_hil` for human-in-the-loop episodes, and the LeRobot packages for
+LeRobot.
 
 `rosetta` itself doesn't import a learning framework. For `rosetta_port`
 with the LeRobot writer, `policy_runner_node` and the LeRobot plugins, install

@@ -34,8 +34,7 @@ python -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
 This package builds in a ROS 2 workspace with colcon, but it also needs
 LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
 reports it missing. Install it with pip first; the inference servers also
-need `torch` and `grpcio`. The `rosetta_ws` pixi environment does both. It
-isn't released to the ROS buildfarm.
+need `torch` and `grpcio`. It isn't released to the ROS buildfarm.
 
 ```bash
 pip install 'lerobot[dataset]'

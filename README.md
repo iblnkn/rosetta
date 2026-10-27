@@ -72,6 +72,15 @@ explains the split.
 | [`lerobot_robot_rosetta`](policies/lerobot/lerobot_robot_rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
 | [`lerobot_teleoperator_rosetta`](policies/lerobot/lerobot_teleoperator_rosetta) | LeRobot Teleoperator plugin (experimental) |
 
+On ROS 2, install `rosetta_ros`: it has the nodes, launch files and
+`rosetta_port`, and brings `rosetta` and `rosetta_interfaces` with it.
+`rosetta` alone is the core library, with no nodes.
+
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
+Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
+the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
+the first ROS release.
+
 Adapters can also live in their own repositories: they register the same entry
 points, and nothing in this repository changes. [CONTRIBUTING.md](CONTRIBUTING.md)
 says which way to go.

@@ -28,6 +28,13 @@ Rosetta finds them the same way wherever they live.
 
 The how-to guides "Add a framework" and "Add a robot interface" cover both.
 
+## Supported ROS distros
+
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
+Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
+the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
+the first ROS release.
+
 ## Releasing
 
 The ROS packages release through bloom, which releases every package in this

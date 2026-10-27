@@ -66,8 +66,8 @@ loop, where the HIL manager muxes policy and teleop for you, see
 
 This package builds in a ROS 2 workspace with colcon, but it also needs
 LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
-reports it missing. Install it with pip first. The `rosetta_ws` pixi
-environment does both. It isn't released to the ROS buildfarm.
+reports it missing. Install it with pip first. It isn't released to the ROS
+buildfarm.
 
 ```bash
 pip install 'lerobot[dataset]'
