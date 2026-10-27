@@ -63,3 +63,16 @@ ros2 launch rosetta_ros policy_runner_launch.py ...   # with framework: myfw in 
 An unknown name lists the registered ones. A class missing part of the
 protocol is rejected at load. Contracts don't name a framework, so one
 written for LeRobot runs unchanged on yours.
+
+## Package it
+
+An adapter is an ordinary Python package, so it can live in your own
+repository with your own releases. Depend on `rosetta`. Your adapter imports
+no ROS, so add `rosetta_ros` only as a test dependency, and only if your tests
+load `robot_interface: ros2` contracts. To build it in a ROS workspace, give it
+a `package.xml` with `ament_python` as the build type, as the in-repo adapters
+do. [`policies/lerobot/lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta)
+is a complete example.
+
+Rosetta's [CONTRIBUTING.md](https://github.com/iblnkn/rosetta/blob/main/CONTRIBUTING.md)
+says when an adapter belongs in the `rosetta` repository instead.

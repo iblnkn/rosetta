@@ -54,8 +54,13 @@ follow
 ## Packages
 
 This repository holds Rosetta's core and every package maintained with it,
-organized by side: `robots/` holds robot interfaces (by middleware) and
-`policies/` holds framework adapters (by framework).
+organized by side. Rosetta sits between a robot and a policy, and each side
+is named after its endpoint: `robots/` holds robot interfaces, grouped by the
+middleware they adapt (ROS 2 today), and `policies/` holds framework adapters,
+grouped by the learning framework they adapt. Core's modules use the same
+names, `rosetta.robots` and `rosetta.policies`. The
+[design page](https://iblnkn.github.io/rosetta/explanation/design.html)
+explains the split.
 
 | Package | Purpose |
 |---------|---------|

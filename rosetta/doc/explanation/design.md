@@ -67,6 +67,20 @@ frames into a dataset or into actions. Neither imports the other, and the
 core package `rosetta` imports neither: each side is a separate package that
 plugs into it.
 
+```
+robot  ──  middleware  ──  Rosetta  ──  framework  ──  policy
+           (ROS 2)                      (LeRobot)
+```
+
+Each side is named after its endpoint: the robot on one side, the policy on
+the other. What plugs in on a side adapts to whatever that endpoint runs on.
+A robot interface adapts a middleware, and a framework adapter adapts a
+learning framework. LeRobot is a framework, not a policy: its one adapter
+runs every policy LeRobot supports, chosen by `policy_type`. The same names
+organize the code and the repository: `rosetta.robots` and
+`robots/<middleware>/` on the robot side, `rosetta.policies` and
+`policies/<framework>/` on the policy side.
+
 A robot interface such as `rosetta_ros` registers under
 `rosetta.robot_interfaces`, named after the `robot_interface` value contracts
 use. Loading a contract asks that interface which message types exist, which

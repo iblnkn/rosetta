@@ -65,6 +65,7 @@ how-to/route-commands
 how-to/human-in-the-loop
 how-to/add-a-message-type
 how-to/add-a-framework
+how-to/add-a-robot-interface
 ```
 
 ```{toctree}
