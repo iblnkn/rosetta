@@ -216,3 +216,40 @@ def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
     robot_config = captured["config"].robot
     assert robot_config._external_bridge is frames
     assert robot_config._stop_event is stop
+
+
+@pytest.mark.parametrize(("stop_requested", "message"), [(True, "Stopped"), (False, "Completed")])
+def test_a_stopped_run_succeeds_like_a_completed_one(spawned, monkeypatch, stop_requested, message):
+    # RunnerResult: a host-requested stop is a successful run. Reporting it as
+    # a failure makes the node end every stopped goal with reason "error".
+    import lerobot_robot_rosetta.config_rosetta as cr
+
+    monkeypatch.setattr(cr, "load_contract", lambda path: SimpleNamespace(fps=30, robot_type="bot"))
+    monkeypatch.setattr(cr, "iter_observation_specs", lambda c: [])
+    monkeypatch.setattr(cr, "iter_action_specs", lambda c: [])
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
+    stop = threading.Event()
+
+    class _FakeClient:
+        def __init__(self, config):
+            self.shutdown_event = threading.Event()
+
+        def start(self):
+            return True
+
+        def receive_actions(self):
+            pass
+
+        def control_loop(self, task):
+            if stop_requested:
+                stop.set()
+                # The runner forwards the host's stop to LeRobot's shutdown_event.
+                assert self.shutdown_event.wait(timeout=5.0)
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(pr, "RobotClient", _FakeClient)
+
+    result = runner.run(object(), task="t", stop_event=stop)
+    assert (result.success, result.message) == (True, message)

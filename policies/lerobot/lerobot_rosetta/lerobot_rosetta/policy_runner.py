@@ -195,9 +195,8 @@ class LeRobotPolicyRunner:
             watcher_stop.set()
             watcher.join(timeout=THREAD_JOIN_TIMEOUT_SEC)
 
-        cancelled = stop_event.is_set()
         self._client = None
-        return RunnerResult(not cancelled, "Cancelled" if cancelled else "Completed")
+        return RunnerResult(True, "Stopped" if stop_event.is_set() else "Completed")
 
     def request_stop(self) -> None:
         """Interrupt an in-progress control loop.
