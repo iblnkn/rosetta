@@ -17,7 +17,8 @@ setup(
         # Include our package.xml file
         (os.path.join("share", package_name), ["package.xml"]),
     ],
-    install_requires=["setuptools", "numpy", "pyyaml"],
+    python_requires=">=3.12",
+    install_requires=["numpy", "pyyaml"],
     extras_require={"test": ["pytest"]},
     zip_safe=True,
     author="Isaac Blankenau",

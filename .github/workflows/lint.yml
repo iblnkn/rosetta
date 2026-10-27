@@ -1,0 +1,24 @@
+name: lint
+
+# industrial_ci has no ruff support, so lint is its own workflow. ruff.toml is
+# the workspace's shared config, kept once in rosetta_ws.
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: curl -sfL https://raw.githubusercontent.com/iblnkn/rosetta_ws/main/ruff.toml -o ruff.toml
+      - uses: astral-sh/ruff-action@v3
+        with:
+          # Pinned to the workspace pixi env's ruff so CI and `pixi run lint` agree.
+          version: "0.15.21"
+          args: check .

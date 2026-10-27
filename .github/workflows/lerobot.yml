@@ -1,0 +1,34 @@
+name: lerobot
+
+# industrial_ci builds and tests inside an official ROS Docker image; rosdep
+# resolves dependencies from each package.xml. TARGET_WORKSPACE builds only
+# this slice of the repository and the packages it depends on.
+on:
+  pull_request:
+    paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
+  push:
+    branches: [main, dev]
+    paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      # ament_python has no rosdep key (it ships with base ROS), and
+      # industrial_ci treats any unresolved key as fatal.
+      ROSDEP_SKIP_KEYS: ament_python
+      TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
+      # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
+      BEFORE_BUILD_TARGET_WORKSPACE: >-
+        pip install --break-system-packages --ignore-installed 'lerobot[dataset]' torch
+        --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+        && pip install --break-system-packages --ignore-installed --upgrade protobuf grpcio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master

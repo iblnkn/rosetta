@@ -1,0 +1,30 @@
+name: core
+
+# Rosetta's core imports no ROS, so it is tested and built as a plain Python
+# package: the same install a PyPI user gets.
+on:
+  pull_request:
+    paths: [rosetta/**, .github/workflows/core.yml]
+  push:
+    branches: [main, dev]
+    paths: [rosetta/**, .github/workflows/core.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # 3.12 is ROS 2 Jazzy's Python and the oldest Rosetta supports.
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install ./rosetta pytest build
+      - run: pytest rosetta/test
+      - run: python -m build rosetta
