@@ -249,11 +249,6 @@ The run ends with `termination_reason`:
 - `error` when the adapter raised or reported a failure, with the detail in
   `message`.
 
-The LeRobot adapter reports a failure whenever its run was stopped, so with
-`framework: lerobot` a cancelled, timed-out or deactivated run currently
-reports `termination_reason: error` with `message: Cancelled`. The goal state
-for a client cancel is still `CANCELED`.
-
 ### Contract fallback
 
 With an empty `contract_path`, configure follows
