@@ -21,7 +21,7 @@ run on pull requests that touch their paths, so a core change runs all three.
 |---|---|---|
 | `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12 and 3.13 with no ROS | `rosetta/` |
 | `ros` | Builds and tests `rosetta` and `robots/ros` with industrial_ci on ROS 2 Jazzy | `rosetta/`, `robots/` |
-| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Jazzy, against LeRobot's newest release before 0.6.2 and against LeRobot's `main`, which is allowed to fail. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
+| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Jazzy, against LeRobot's newest release before 0.6.2. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
 | `lint` | The `pre-commit` hooks: ruff check and format, plus file checks for whitespace, line endings, YAML, XML, merge conflicts and large files | every pull request |
 | `docs` | Builds the docs site with warnings as errors and publishes it | pushes to `main` |
 
