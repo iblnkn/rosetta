@@ -42,7 +42,8 @@ setup(
         "numpy",
         "lerobot<0.6.2",  # the version lerobot_rosetta supports (0.6.2 removes async_inference)
         "rclpy",
-        "rosetta",  # Depends on rosetta.contract/frames + rosetta_ros
+        "rosetta",  # rosetta.contract/frames
+        "rosetta_ros",  # node host and lifecycle base
     ],
     extras_require={"test": ["pytest"]},
     zip_safe=True,

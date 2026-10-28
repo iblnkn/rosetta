@@ -9,7 +9,6 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
-  <depend>rclpy</depend>
   <depend>rosetta</depend>
   <depend>lerobot_robot_rosetta</depend>
   <depend>python3-numpy</depend>
