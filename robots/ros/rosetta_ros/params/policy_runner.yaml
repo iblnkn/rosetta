@@ -19,10 +19,10 @@ policy_runner:
     # LeRobot policy server address (host:port)
     server_address: "127.0.0.1:8080"
 
-    # Policy architecture type — must match the pretrained checkpoint above
-    # (a mismatch fails at configure inside lerobot's from_pretrained).
-    # Options: "act", "smolvla", "diffusion", "tdmpc", "vqbet", "pi0", "pi05"
-    policy_type: "act"
+    # Policy architecture ("act", "diffusion", ...). Empty reads it from the
+    # checkpoint. Set it only when this machine can't read the checkpoint,
+    # such as a path that exists only on a remote policy server.
+    policy_type: ""
 
     # Device for policy inference: "cuda", "xpu", "mps", "cpu", or specific like "cuda:0"
     policy_device: "cuda"

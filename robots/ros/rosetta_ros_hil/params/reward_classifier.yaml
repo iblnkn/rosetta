@@ -4,7 +4,6 @@ policy_runner:
   ros__parameters:
     is_classifier: true
     pretrained_name_or_path: "checkpoints/reward_classifier"
-    policy_type: "reward_classifier"
     server_address: "127.0.0.1:8081"
     feedback_rate_hz: 30.0
     launch_local_server: true

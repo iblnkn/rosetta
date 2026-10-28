@@ -90,7 +90,7 @@ def generate_launch_description():
         # Robot policy: empty keeps the params-file value.
         arg("robot_policy_params_file", os.path.join(hil_params, "robot_policy.yaml"), "Robot policy params"),
         arg("pretrained_name_or_path", "", "Trained policy (empty = params file)"),
-        arg("policy_type", "", "Policy architecture (empty = params file)"),
+        arg("policy_type", "", "Policy architecture, read from the checkpoint when empty (empty = params file)"),
         arg("policy_device", "", "Inference device for both runners (empty = params file)"),
         arg("server_address", "", "Policy server host:port (empty = params file)"),
         # The policy publishes every contract action topic under this prefix;
@@ -105,7 +105,6 @@ def generate_launch_description():
         ),
         arg("reward_classifier_contract_path", "", "Classifier contract (empty = contract_path)"),
         arg("reward_classifier_pretrained_name_or_path", "", "Trained classifier (empty = params file)"),
-        arg("reward_classifier_policy_type", "", "Classifier architecture (empty = params file)"),
         arg("reward_classifier_server_address", "", "Classifier server host:port (empty = params file)"),
         arg("reward_remap_prefix", hil_cfg["reward_remap_prefix"], "Prefix for the classifier's output topics"),
         # Episode recorder.
@@ -157,7 +156,6 @@ def generate_launch_description():
         params_file=LaunchConfiguration("reward_classifier_params_file"),
         contract_path=reward_contract,
         pretrained_name_or_path=LaunchConfiguration("reward_classifier_pretrained_name_or_path"),
-        policy_type=LaunchConfiguration("reward_classifier_policy_type"),
         policy_device=LaunchConfiguration("policy_device"),
         server_address=LaunchConfiguration("reward_classifier_server_address"),
     )

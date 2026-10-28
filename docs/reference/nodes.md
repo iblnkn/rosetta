@@ -270,8 +270,8 @@ default and the third is what `params/policy_runner.yaml` sets.
 
 | Parameter | Adapter default | Params file | Meaning |
 |---|---|---|---|
-| `pretrained_name_or_path` | `""` | `iblnk/act-turtlebot3_demo` | Checkpoint. Empty starts the server without a model, which then loads on the first run. |
-| `policy_type` | `act` | `act` | One of LeRobot's `SUPPORTED_POLICIES` (0.6.1: `act`, `smolvla`, `diffusion`, `tdmpc`, `vqbet`, `pi0`, `pi05`, `groot`). With `is_classifier`, `reward_classifier`. Must match the checkpoint. Read-only. |
+| `pretrained_name_or_path` | `""` | `iblnk/act-turtlebot3_demo` | Checkpoint. Empty starts the server without a model, which then loads on the first run. With `is_classifier`, a `reward_classifier` checkpoint. |
+| `policy_type` | `""` | `""` | Policy type sent to the server, one of LeRobot's `SUPPORTED_POLICIES` (0.6.1: `act`, `smolvla`, `diffusion`, `tdmpc`, `vqbet`, `pi0`, `pi05`, `groot`). Empty reads it at configure from the checkpoint's `config.json`, or uses `reward_classifier` with `is_classifier`. A checkpoint the runner cannot read fails configure, so set it when the checkpoint exists only on a remote server. The Rosetta servers load the type the checkpoint records and ignore this value. Read-only. |
 | `policy_device` | `cuda` | `cuda` | Torch device, such as `cuda`, `cuda:1`, `mps`, `xpu`, `cpu`. Sent to the server unchanged. The server resolves it on its own machine: a backend that machine lacks falls back to `cpu` with a warning in the server log, and a name LeRobot does not know is passed through. Empty fails each run with `policy_device cannot be empty`. Read-only. |
 | `server_address` | `127.0.0.1:8080` | `127.0.0.1:8080` | `host:port` of the policy server. Read-only. |
 | `launch_local_server` | `true` | `true` | Start a policy server on `server_address` at configure. Read-only. |

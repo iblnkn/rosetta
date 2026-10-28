@@ -21,8 +21,8 @@ lerobot-train \
 - `--dataset.root` is the dataset directory itself, which is `rosetta_port`'s
   `--root` joined with `--repo-id`. Drop it to train from a dataset on the
   Hugging Face Hub.
-- `--policy.type` is the architecture. Pass the same value as `policy_type`
-  when you deploy.
+- `--policy.type` is the architecture. The checkpoint records it, so
+  deploying doesn't ask for it again.
 - `--policy.push_to_hub=false` keeps the checkpoint local. LeRobot pushes by
   default, and without `--policy.repo_id` it stops with
   `ValueError: 'repo_id' argument missing. Please specify it to push the model to the hub.`

@@ -99,7 +99,6 @@ ros2 launch rosetta_ros policy_runner_launch.py \
     params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
     contract_path:=$CONTRACT \
     pretrained_name_or_path:=francocipollone/rospai_act_sim_arm101_place_cubes_on_tray \
-    policy_type:=act \
     use_sim_time:=true
 ```
 
@@ -198,7 +197,6 @@ ros2 launch rosetta_ros policy_runner_launch.py \
     params_file:=$(ros2 pkg prefix pai_data_collection)/share/pai_data_collection/config/rosetta/policy_runner.yaml \
     contract_path:=$CONTRACT \
     pretrained_name_or_path:=outputs/train/act_tutorial/checkpoints/last/pretrained_model \
-    policy_type:=act \
     use_sim_time:=true
 ```
 

@@ -15,9 +15,10 @@
 """RosettaPolicyServer preload/cache behavior.
 
 The wrapper must load the policy once (at preload or the first handshake) and
-reuse it for identical (policy_type, path, device) requests, while rebuilding
-the cheap pre/post processors on every handshake. No real weights, no CUDA:
-the policy factory and processor factory are monkeypatched.
+reuse it for identical (path, device) requests, while rebuilding the cheap
+pre/post processors on every handshake. The policy type comes from the
+checkpoint, never from the client. No real weights, no CUDA: the config
+loader, policy factory and processor factory are monkeypatched.
 """
 
 import pickle
@@ -47,13 +48,15 @@ class _Recorder:
         self.loads: list[tuple[str, str]] = []
         self.processor_builds: list[dict] = []
         self.fail_paths: set[str] = set()
+        self.types: dict[str, str] = {}  # checkpoint path -> recorded type; "act" if absent
 
     def get_policy_class(self, policy_type):
         recorder = self
 
         class _Cls:
             @staticmethod
-            def from_pretrained(path):
+            def from_pretrained(path, config):
+                assert config.type == policy_type
                 if path in recorder.fail_paths:
                     raise OSError(f"no such repo: {path}")
                 recorder.loads.append((policy_type, path))
@@ -71,6 +74,8 @@ def recorder(monkeypatch):
     rec = _Recorder()
     monkeypatch.setattr(ps, "get_policy_class", rec.get_policy_class)
     monkeypatch.setattr(ps, "make_pre_post_processors", rec.make_pre_post_processors)
+    fake_config = SimpleNamespace(from_pretrained=lambda path: SimpleNamespace(type=rec.types.get(path, "act")))
+    monkeypatch.setattr(ps, "PreTrainedConfig", fake_config)
     return rec
 
 
@@ -109,7 +114,7 @@ def test_identical_handshakes_load_once(recorder, server):
 
 
 def test_preload_makes_first_handshake_a_cache_hit(recorder, server):
-    server.preload("act", "user/repo", "cpu")
+    server.preload("user/repo", "cpu")
     assert recorder.loads == [("act", "user/repo")]
     _handshake(server)
     assert recorder.loads == [("act", "user/repo")]  # no second load
@@ -145,7 +150,14 @@ def test_failed_load_is_not_cached(recorder, server):
     assert recorder.loads == [("act", "user/repo")]
 
 
-def test_unsupported_policy_type_rejected(recorder, server):
-    with pytest.raises(ValueError, match="not supported"):
-        server.preload("not_a_policy", "user/repo", "cpu")
+def test_policy_type_comes_from_the_checkpoint(recorder, server):
+    recorder.types["user/repo"] = "diffusion"
+    _handshake(server, policy_type="act")
+    assert recorder.loads == [("diffusion", "user/repo")]
+
+
+def test_unsupported_checkpoint_type_rejected(recorder, server):
+    recorder.types["user/repo"] = "not_a_policy"
+    with pytest.raises(ValueError, match="'not_a_policy'.*does not support"):
+        server.preload("user/repo", "cpu")
     assert recorder.loads == []

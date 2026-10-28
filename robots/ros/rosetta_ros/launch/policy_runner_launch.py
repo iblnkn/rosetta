@@ -140,7 +140,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "policy_type",
             default_value="",  # Empty = use value from params file
-            description="Policy architecture, must match the checkpoint (empty = use params file value)",
+            description="Policy architecture, read from the checkpoint when empty (empty = use params file value)",
         ),
         DeclareLaunchArgument(
             "policy_device",

@@ -30,18 +30,17 @@ Both servers speak LeRobot's async-inference gRPC protocol, so LeRobot's
 
 - `policy_server` wraps LeRobot's `PolicyServer`. The stock server loads the
   checkpoint on every client handshake. This one keeps the loaded policy and
-  reuses it while the requested policy type, checkpoint and device are
-  unchanged.
+  reuses it while the requested checkpoint and device are unchanged. It
+  reads the policy type from the checkpoint's `config.json`.
 - `classifier_server` serves a LeRobot `reward_classifier` model, returning
   one reward per observation. It caches the model the same way.
 
-Given `--policy-type`, `--pretrained-name-or-path` and `--policy-device`
-together, a server loads the model before it opens its port, so a port that
+Given `--pretrained-name-or-path` and `--policy-device` together, a server loads the model before it opens its port, so a port that
 accepts connections means the model is ready:
 
 ```bash
 python3 -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
-    --policy-type=act --pretrained-name-or-path=<checkpoint> --policy-device=cuda
+    --pretrained-name-or-path=<checkpoint> --policy-device=cuda
 ```
 
 `<checkpoint>` is a local path or a Hugging Face Hub repo ID. The classifier

@@ -12,8 +12,7 @@ observation topics.
 ```bash
 ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:=robot.yaml \
-    pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model \
-    policy_type:=act
+    pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model
 ```
 
 - `contract_path` is the contract to run on. Leave it out to use the
@@ -22,8 +21,6 @@ ros2 launch rosetta_ros policy_runner_launch.py \
 - `pretrained_name_or_path` is a local checkpoint directory or a Hugging Face
   Hub model id. The package params file sets a demo checkpoint, so always pass
   it too.
-- `policy_type` has to match the `--policy.type` the checkpoint was trained
-  with.
 - Add `use_sim_time:=true` for a simulator.
 
 The launch file configures and activates the node. Configure starts a local
@@ -65,8 +62,7 @@ the contract the policy was trained with:
 
 ```bash
 ros2 launch rosetta_ros policy_runner_launch.py \
-    pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model \
-    policy_type:=act
+    pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model
 ```
 
 The node logs `Using model-embedded contract (via dataset chain):` with the
@@ -88,12 +84,11 @@ on `PYTHONPATH`. On the GPU machine:
 ```bash
 PYTHONPATH=rosetta/policies/lerobot/lerobot_rosetta python3 -m lerobot_rosetta.policy_server \
     --host=0.0.0.0 --port=8080 \
-    --policy-type=act \
     --pretrained-name-or-path=<checkpoint> \
     --policy-device=cuda
 ```
 
-`--policy-type`, `--pretrained-name-or-path` and `--policy-device` preload the
+`--pretrained-name-or-path` and `--policy-device` preload the
 model before the server accepts connections. They go together. Without them
 the server loads the model when the runner first connects.
 
@@ -103,15 +98,17 @@ On the robot, point the runner at the server and name the same checkpoint:
 ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:=robot.yaml \
     pretrained_name_or_path:=<checkpoint> \
-    policy_type:=act \
     launch_local_server:=false \
     server_address:=<gpu_host>:8080
 ```
 
-At the start of each run the runner sends its own `policy_type`,
+At the start of each run the runner sends its own
 `pretrained_name_or_path` and `policy_device` to the server, and the server
 loads that model if it differs from the one it holds. So `<checkpoint>` has to
-be a path that exists on the GPU machine, or a Hub repo ID. The server
+be a path that exists on the GPU machine, or a Hub repo ID. The runner reads
+the policy type from the checkpoint too. When `<checkpoint>` is a path only the
+GPU machine has, add `policy_type:=<type>` with the `--policy.type` you trained
+with, such as `act`. The server
 resolves `policy_device` on its own machine, so a robot without CUDA can still
 ask for `cuda`.
 

@@ -76,8 +76,8 @@ Each side is named after its endpoint: the robot on one side, the policy on
 the other. What plugs in on a side adapts to whatever that endpoint runs on.
 A robot interface adapts a middleware, and a framework adapter adapts a
 learning framework. LeRobot is a framework, not a policy: its one adapter
-serves every policy type LeRobot's async inference supports, chosen by
-`policy_type`. The same names organize the code and the repository:
+serves every policy type LeRobot's async inference supports, read from the
+checkpoint it loads. The same names organize the code and the repository:
 `rosetta.robots` and `robots/<middleware>/` on the robot side,
 `rosetta.policies` and `policies/<framework>/` on the policy side.
 
