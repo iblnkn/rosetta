@@ -201,7 +201,7 @@ Runs a policy on the live robot through a framework adapter. Node name
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `contract_path` | string | `""` | Contract file. Empty resolves it from `pretrained_name_or_path`, as in [Contract fallback](#contract-fallback). The launch file defaults to `contracts/so_101.yaml`. Read-only. |
+| `contract_path` | string | `""` | Contract file. Empty resolves it from `pretrained_name_or_path`, as in [Contract fallback](#contract-fallback). The launch argument defaults to empty, which keeps the params-file value. Read-only. |
 | `pretrained_name_or_path` | string | `""` | Checkpoint, a local path or a Hugging Face Hub repo ID. Read by the adapter and by the contract fallback. Read-only. |
 | `framework` | string | `lerobot` | Adapter, by its name in the `rosetta.policy_runners` entry-point group. Read-only. |
 | `is_classifier` | bool | `false` | Publish the contract's `rewards` section as the output instead of `actions`. Read-only. |
@@ -272,7 +272,7 @@ default and the third is what `params/policy_runner.yaml` sets.
 |---|---|---|---|
 | `pretrained_name_or_path` | `""` | `iblnk/act-turtlebot3_demo` | Checkpoint. Empty starts the server without a model, which then loads on the first run. |
 | `policy_type` | `act` | `act` | One of LeRobot's `SUPPORTED_POLICIES` (0.6.1: `act`, `smolvla`, `diffusion`, `tdmpc`, `vqbet`, `pi0`, `pi05`, `groot`). With `is_classifier`, `reward_classifier`. Must match the checkpoint. Read-only. |
-| `policy_device` | `cuda` | `cuda` | Torch device, such as `cuda`, `cuda:1`, `mps`, `xpu`, `cpu`. Empty means `cpu`. A device whose backend is unavailable falls back to `cpu` with a warning. A name LeRobot does not know is passed through. Read-only. |
+| `policy_device` | `cuda` | `cuda` | Torch device, such as `cuda`, `cuda:1`, `mps`, `xpu`, `cpu`. Sent to the server unchanged. The server resolves it on its own machine: a backend that machine lacks falls back to `cpu` with a warning in the server log, and a name LeRobot does not know is passed through. Empty fails each run with `policy_device cannot be empty`. Read-only. |
 | `server_address` | `127.0.0.1:8080` | `127.0.0.1:8080` | `host:port` of the policy server. Read-only. |
 | `launch_local_server` | `true` | `true` | Start a policy server on `server_address` at configure. Read-only. |
 | `server_startup_timeout_sec` | `120.0` | `120.0` | Seconds configure waits for the local server to accept connections. The server loads the model before it listens, so this covers the model load and any download. Read-only. |

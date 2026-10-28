@@ -16,8 +16,9 @@ ros2 launch rosetta_ros policy_runner_launch.py \
     policy_type:=act
 ```
 
-- `contract_path` is the contract to run on. The launch default is the
-  package's `so_101.yaml`, so always pass it.
+- `contract_path` is the contract to run on. Leave it out to use the
+  contract the checkpoint was trained with, as in
+  [Use the contract from training](#use-the-contract-from-training).
 - `pretrained_name_or_path` is a local checkpoint directory or a Hugging Face
   Hub model id. The package params file sets a demo checkpoint, so always pass
   it too.
@@ -29,8 +30,8 @@ The launch file configures and activates the node. Configure starts a local
 policy server and waits for it to load the model, for up to
 `server_startup_timeout_sec` (120 s by default). Raise it in a params file if
 the first launch has to download weights from the Hub. `policy_device` is
-`cuda` by default and falls back to `cpu`, with a warning, when CUDA isn't
-available.
+`cuda` by default. The server falls back to `cpu`, with a warning in its log,
+when its machine has no CUDA.
 
 With LeRobot 0.6.1, every run logs
 `obs_similarity_atol not supported in this LeRobot version; ignoring.`
@@ -58,34 +59,34 @@ runner, which stops and publishes each action channel's `safety` value (see
 ## Use the contract from training
 
 `rosetta_port` copies the contract into the dataset as
-`meta/rosetta_contract.yaml`. Pass that file to run on exactly the contract the
-policy was trained with:
+`meta/rosetta_contract.yaml`. Leave `contract_path` out and the runner finds
+that file through the checkpoint's `train_config.json`, so it runs on exactly
+the contract the policy was trained with:
 
 ```bash
 ros2 launch rosetta_ros policy_runner_launch.py \
-    contract_path:=datasets/lerobot/my_org/my_dataset/meta/rosetta_contract.yaml \
     pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model \
     policy_type:=act
 ```
 
-The runner uses `contract_path` as given and doesn't compare it with the
-checkpoint's dataset.
+The node logs `Using model-embedded contract (via dataset chain):` with the
+path it found. If it finds none, configure fails with `contract_path parameter
+required`. [Contract fallback](../reference/nodes.md#contract-fallback) lists
+each link it follows.
 
-The node can also find this file itself when `contract_path` is empty, by
-reading the checkpoint's `train_config.json`. That path doesn't work with
-the launch file, which rejects `contract_path:=` as malformed, and with the
-LeRobot runner a run on a contract found this way fails with
-`TypeError: '<=' not supported between instances of 'NoneType' and 'int'`.
+A `contract_path` you pass is used as given and isn't compared with the
+checkpoint's dataset.
 
 ## Run inference on another machine
 
 The policy server can run on a GPU machine while the runner stays on the
-robot. The GPU machine needs the same install as the robot, including ROS 2:
-the server module imports `rclpy` through `lerobot_rosetta`. On the GPU
-machine:
+robot. The server imports only LeRobot, so the GPU machine doesn't need ROS 2.
+It needs LeRobot with its `async` extra, plus any extra the policy type
+needs, and the `policies/lerobot/lerobot_rosetta` directory of a Rosetta clone
+on `PYTHONPATH`. On the GPU machine:
 
 ```bash
-python3 -m lerobot_rosetta.policy_server \
+PYTHONPATH=rosetta/policies/lerobot/lerobot_rosetta python3 -m lerobot_rosetta.policy_server \
     --host=0.0.0.0 --port=8080 \
     --policy-type=act \
     --pretrained-name-or-path=<checkpoint> \
@@ -110,9 +111,9 @@ ros2 launch rosetta_ros policy_runner_launch.py \
 At the start of each run the runner sends its own `policy_type`,
 `pretrained_name_or_path` and `policy_device` to the server, and the server
 loads that model if it differs from the one it holds. So `<checkpoint>` has to
-be a path that exists on the GPU machine, or a Hub repo ID. The runner
-resolves `policy_device` on the robot, so a robot without CUDA sends `cpu` and
-the server reloads the model on its CPU.
+be a path that exists on the GPU machine, or a Hub repo ID. The server
+resolves `policy_device` on its own machine, so a robot without CUDA can still
+ask for `cuda`.
 
 The server listens on an unencrypted gRPC port and unpickles what clients send.
 Only expose it on a network you trust.
