@@ -37,9 +37,9 @@ Keys:
   q            Quit
 
 Usage:
-    ros2 run rosetta episode_keyboard_node
-    ros2 run rosetta episode_keyboard_node --ros-args -p recorder_ns:=/my_recorder
-    ros2 run rosetta episode_keyboard_node --ros-args -p default_prompt:="pick cube"
+    ros2 run rosetta_ros episode_keyboard_node
+    ros2 run rosetta_ros episode_keyboard_node --ros-args -p recorder_ns:=/my_recorder
+    ros2 run rosetta_ros episode_keyboard_node --ros-args -p default_prompt:="pick cube"
 """
 
 from __future__ import annotations

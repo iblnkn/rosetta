@@ -20,7 +20,7 @@ Records ROS2 messages directly to rosbag2 as they arrive. Topics come from
 a contract file. The node exposes a RecordEpisode action for start/stop control.
 
 Usage:
-    ros2 run rosetta episode_recorder_node --ros-args \
+    ros2 run rosetta_ros episode_recorder_node --ros-args \
         -p contract_path:=/path/to/contract.yaml
 
     ros2 action send_goal /record_episode \

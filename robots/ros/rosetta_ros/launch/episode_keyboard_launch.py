@@ -29,13 +29,13 @@ Keys:
 
 Usage:
     # Default — connects to /episode_recorder/* (the recorder's node-private services)
-    ros2 launch rosetta episode_keyboard_launch.py
+    ros2 launch rosetta_ros episode_keyboard_launch.py
 
     # Custom recorder namespace
-    ros2 launch rosetta episode_keyboard_launch.py recorder_ns:=/my_recorder
+    ros2 launch rosetta_ros episode_keyboard_launch.py recorder_ns:=/my_recorder
 
     # Pre-set task prompt
-    ros2 launch rosetta episode_keyboard_launch.py default_prompt:="pick up the cube"
+    ros2 launch rosetta_ros episode_keyboard_launch.py default_prompt:="pick up the cube"
 """
 
 from launch import LaunchDescription

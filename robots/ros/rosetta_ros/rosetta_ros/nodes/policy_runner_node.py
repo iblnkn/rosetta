@@ -32,7 +32,7 @@ side puts each in its own namespace, e.g. ``/robot_policy/run_policy`` and
 ``/reward_classifier/run_policy``.
 
 Usage:
-    ros2 launch rosetta policy_runner_launch.py
+    ros2 launch rosetta_ros policy_runner_launch.py
 
     ros2 action send_goal /run_policy \
         rosetta_interfaces/action/RunPolicy "{prompt: 'pick up cube'}" --feedback

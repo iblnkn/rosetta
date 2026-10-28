@@ -2,13 +2,13 @@
 # This file is the source of truth for node configuration.
 #
 # Usage:
-#   ros2 launch rosetta policy_runner_launch.py
+#   ros2 launch rosetta_ros policy_runner_launch.py
 #
 # Override at launch (launch-arg form):
-#   ros2 launch rosetta policy_runner_launch.py pretrained_name_or_path:=/path/to/model
+#   ros2 launch rosetta_ros policy_runner_launch.py pretrained_name_or_path:=/path/to/model
 #
 # Or when running the node directly:
-#   ros2 run rosetta policy_runner_node --ros-args --params-file <this file> \
+#   ros2 run rosetta_ros policy_runner_node --ros-args --params-file <this file> \
 #       -p pretrained_name_or_path:=/path/to/model
 
 policy_runner:

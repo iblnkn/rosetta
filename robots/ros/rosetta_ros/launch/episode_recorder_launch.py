@@ -24,20 +24,20 @@ Algorithm/tuning parameters should be set in the YAML file.
 
 Usage:
     # Launch with default params file
-    ros2 launch rosetta episode_recorder_launch.py
+    ros2 launch rosetta_ros episode_recorder_launch.py
 
     # Use custom params file
-    ros2 launch rosetta episode_recorder_launch.py \\
+    ros2 launch rosetta_ros episode_recorder_launch.py \\
         params_file:=/path/to/custom_params.yaml
 
     # Override deployment-specific settings
-    ros2 launch rosetta episode_recorder_launch.py \\
+    ros2 launch rosetta_ros episode_recorder_launch.py \\
         contract_path:=/path/to/contract.yaml \\
         bag_base_dir:=/custom/dataset/path \\
         use_sim_time:=true
 
     # Manual lifecycle control
-    ros2 launch rosetta episode_recorder_launch.py \\
+    ros2 launch rosetta_ros episode_recorder_launch.py \\
         configure:=false activate:=false
 """
 

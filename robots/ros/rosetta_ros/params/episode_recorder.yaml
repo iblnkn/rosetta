@@ -1,8 +1,8 @@
 # Episode Recorder Node Parameters
 # Usage:
-#   ros2 launch rosetta episode_recorder_launch.py
+#   ros2 launch rosetta_ros episode_recorder_launch.py
 #   Or with custom params:
-#   ros2 run rosetta episode_recorder_node --ros-args \
+#   ros2 run rosetta_ros episode_recorder_node --ros-args \
 #       --params-file /path/to/episode_recorder.yaml \
 #       -p contract_path:=/path/to/contract.yaml
 
