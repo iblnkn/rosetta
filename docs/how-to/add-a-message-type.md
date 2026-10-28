@@ -1,41 +1,79 @@
 # Add a message type
 
-Rosetta ships decoders for the common sensor and command types. For
-anything else, register your own. The API is on
-[Message types](../reference/message-types.md#custom-codecs).
+Write a codec for a message type Rosetta doesn't ship, so a contract can name
+the type in a channel. The built-in types are listed in
+[Message types](../reference/message-types.md).
+
+A contract that names a type with no codec fails to load:
+
+```text
+rosetta.contract.errors.ContractValidationError: No decoder registered for 'sensor_msgs/msg/BatteryState' in observation 'observation.battery'. Add a decoder in decoders.py, install a 'rosetta.codecs' entry-point plugin that registers one, or set a custom 'decoder:' on the channel.
+```
+
+You need a Python package installed in the same environment as Rosetta, and
+the message type's Python module importable there.
 
 ## Write the codec
 
-A decoder turns a message into an array of the declared dtype with one
-value per `select` entry, or one value without `select`. A message that
-decodes to the wrong width, or raises, is dropped with one warning per
-stream. An encoder does the reverse, and you only need one if the type is an
-action.
+A decoder turns a message into a flat array. An encoder turns an array back
+into a message, for the types Rosetta publishes: actions, teleop feedback,
+and rewards from a reward classifier.
+
+This module adds a decoder for `sensor_msgs/msg/BatteryState`, and an encoder
+and a decoder for `geometry_msgs/msg/Point`:
 
 ```python
 # my_pkg/codecs.py
 import numpy as np
+
 from rosetta.frames.codecs import register_decoder, register_encoder
 
-@register_decoder("my_msgs/msg/MySensor", dtype="float64")
-def decode_my_sensor(msg, spec):
-    return np.array([msg.field1, msg.field2], dtype=np.float64)
 
-@register_encoder("my_msgs/msg/MyCommand")
-def encode_my_command(values, spec, stamp_ns=None):
-    from my_msgs.msg import MyCommand
-    out = MyCommand()
-    out.a, out.b = float(values[0]), float(values[1])
-    return out
+@register_decoder("sensor_msgs/msg/BatteryState", dtype="float32", requires_select=True)
+def decode_battery_state(msg, spec):
+    return np.array([getattr(msg, name) for name in spec.names], dtype=np.float32)
+
+
+@register_decoder("geometry_msgs/msg/Point", dtype="float64", requires_select=True)
+def decode_point(msg, spec):
+    return np.array([getattr(msg, name) for name in spec.names], dtype=np.float64)
+
+
+@register_encoder("geometry_msgs/msg/Point", requires_select=True)
+def encode_point(values, spec, stamp_ns=None):
+    from geometry_msgs.msg import Point
+
+    msg = Point()
+    for name, value in zip(spec.names, values):
+        setattr(msg, name, float(value))
+    return msg
 ```
 
-`spec.names` is the contract's `select` list as a tuple, empty when there
-was no `select`. Honor it if the type has named fields.
+What the code has to get right:
+
+- `spec.names` is the channel's `select` list as a tuple, and `()` without
+  `select`. The decoder returns exactly one value per name, or one value when
+  there is no `select`. A message that decodes to the wrong width, or makes
+  the decoder raise, is dropped with one warning per stream until a message
+  decodes again.
+- `requires_select=True` makes a channel of this type without `select` fail
+  at load. Pass it when the codec reads fields by name, as these do.
+- `dtype` is the stream's contract dtype: `float32`, `float64`, `int32`,
+  `int64`, `bool`, `video` or `string`. A channel's own `dtype:` overrides it.
+- `values` in the encoder has already run back through the channel's `apply`
+  list, so it holds the values in message units.
+- Give an action type a decoder as well as an encoder. Serving needs only the
+  encoder, but `rosetta_port` decodes every channel it records, and it fails
+  each bag with `contract streams cannot be decoded for porting` when a
+  channel has no decoder.
+- Import message classes inside the function, as `encode_point` does. Rosetta
+  imports codec modules every time a contract loads, and a module that fails
+  to import fails every contract in that environment.
 
 ## Register it
 
-Advertise the module as an entry point in your package's `setup.py`, so any
-contract naming the type works:
+Advertise the module under the `rosetta.codecs` entry-point group in your
+package's `setup.py`:
 
 ```python
 entry_points={
@@ -43,19 +81,50 @@ entry_points={
 },
 ```
 
-Or name the function in the contract:
+Rosetta reads entry points from the installed package's metadata, so rebuild
+or reinstall the package after adding one. Every contract that names the type
+then loads, with nothing extra in the contract.
+
+To use a codec in one contract only, name the function on the channel
+instead, and give the module no entry point:
 
 ```yaml
-channel:
-  topic: /my_sensor
-  type: my_msgs/msg/MySensor
-  decoder: my_pkg.codecs:decode_my_sensor
+observations:
+  observation.battery:
+    channel: {topic: /battery, type: sensor_msgs/msg/BatteryState,
+              decoder: "my_pkg.codecs:decode_battery_state", dtype: float32}
+    align: {strategy: hold, timeline: header}
+    select: [voltage, percentage]
 ```
 
-## Check
+An inline `decoder:` wins over the registry for that channel. Without a
+`dtype:` on the channel, an inline decoder's stream is `float64`. The
+function needs no decorator, and `encoder:` works the same way on an action
+channel.
+
+## Check it
+
+Load a contract that uses the type:
 
 ```bash
-python -c "from rosetta.contract.schema import load_contract; load_contract('robot.yaml'); print('OK')"
+python3 -c "from rosetta.contract.schema import load_contract; load_contract('robot.yaml'); print('OK')"
 ```
 
-A bad path, a missing module or a duplicate registration shows up here.
+`robot.yaml` is your contract. The command prints `OK` when every channel
+resolves. Problems with the codec show up here, for example:
+
+```text
+rosetta.contract.errors.ContractValidationError: 'sensor_msgs/msg/BatteryState' in observation 'observation.battery': its decoder gathers values by selected field names; add 'select:' to declare them.
+rosetta.contract.errors.ContractValidationError: Codec function not found for 'my_pkg.codecs:nope' in observations.observation.battery.channel.decoder: module 'my_pkg.codecs' has no attribute 'nope'
+```
+
+A type that already has a codec can't be registered again, and the failed
+plugin fails every contract load in that environment:
+
+```text
+rosetta.contract.errors.ContractValidationError: Failed to load codec plugin 'my_pkg' (my_pkg.codecs) from entry-point group 'rosetta.codecs': Decoder already registered for 'sensor_msgs/msg/JointState'. Pass override=True to replace it intentionally.
+```
+
+To replace a built-in codec on purpose, pass `override=True` to
+`register_decoder` or `register_encoder`. To replace it for one channel only,
+use an inline `decoder:` or `encoder:`.

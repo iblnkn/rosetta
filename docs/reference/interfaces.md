@@ -1,46 +1,108 @@
 # Interfaces
 
-The `rosetta_interfaces` package holds every Rosetta ROS 2 interface. The nodes
-also use `std_srvs/srv/Trigger`. This page covers the recorder's and the policy
-runner's. The human-in-the-loop manager's (`ManageEpisode`, `StartHILEpisode`,
-`ManageEpisodeStatus`, `ManageEpisodeResult`) are documented in the
-[`rosetta_ros_hil` README](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil).
+The `rosetta_interfaces` package holds every Rosetta ROS 2 interface: three
+actions, three services and six messages. The nodes also use
+`std_srvs/srv/Trigger`, `std_srvs/srv/SetBool` and `std_msgs/msg/Int8`. Which
+node serves what is on [Nodes](nodes.md). The `ManageEpisode` family belongs to
+the human-in-the-loop manager in
+[`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil),
+whose README describes its behavior.
+
+```bash
+ros2 interface show rosetta_interfaces/action/RecordEpisode
+```
+
+## Ending work
+
+Every action result reports how the work ended in `termination_reason`. The
+legal values are string constants in each `.action` file. The goal's terminal
+state is the coarse view: `SUCCEEDED` when the work reached a defined end,
+`CANCELED` when a client cancelled it, `ABORTED` when the server stopped it.
+`ManageEpisode` also reports whether the robot did the task, in `outcome`,
+independently of `termination_reason`.
+
+A start service mirrors its action's goal and returns as soon as the work is
+accepted. Work started this way has no goal, so it has no action feedback or
+result. Each server therefore publishes the feedback fields on `~/status`
+while work runs and the result fields on `~/result` when it ends, whatever
+started the work. `~/result` is transient-local, so a subscriber that joins
+later still gets the last one. Stop service-started work with the matching
+cancel service, or let `default_max_duration_s` end it.
 
 ## Actions
 
+Each action has a goal, a result and feedback. Defaults named in the goal
+tables are parameters of the serving node.
+
 ### RecordEpisode
 
-Server: `episode_recorder_node`, `/record_episode`.
+Server: `episode_recorder_node`, as `/record_episode` by default.
 
 | Goal | Type | Meaning |
 |---|---|---|
-| `prompt` | string | Task label stored in the bag. Empty uses `default_prompt`. |
-| `max_duration_s` | float64 | Zero uses `default_max_duration_s`. |
+| `prompt` | string | Task label stored in the bag. Empty uses the node's `default_prompt`. |
+| `max_duration_s` | float64 | Seconds. Zero or less uses the node's `default_max_duration_s`. |
 
 | Result | Type | Meaning |
 |---|---|---|
 | `termination_reason` | string | `stopped`, `timeout`, `cancelled`, `node_deactivated`, `error` |
-| `message` | string | |
-| `bag_path` | string | |
-| `messages_written` | int32 | |
+| `message` | string | Detail when something went wrong. Empty otherwise. |
+| `bag_path` | string | Bag directory. Set on every path, including errors. |
+| `messages_written` | int32 | Messages written to the bag. |
 
-Feedback: `elapsed_s` float64, `messages_written` int32.
+| Feedback | Type | Meaning |
+|---|---|---|
+| `elapsed_s` | float64 | Seconds since the recording started. |
+| `messages_written` | int32 | Messages written so far. |
 
 ### RunPolicy
 
-Server: `policy_runner_node`, `/run_policy`.
+Server: `policy_runner_node`, as `/run_policy` by default.
 
 | Goal | Type | Meaning |
 |---|---|---|
-| `prompt` | string | Task string passed to the policy. |
-| `max_duration_s` | float64 | Zero uses `default_max_duration_s`. |
+| `prompt` | string | Task passed to the policy. Empty uses the node's `default_prompt`. |
+| `max_duration_s` | float64 | Seconds. Zero or less uses the node's `default_max_duration_s`. |
 
 | Result | Type | Meaning |
 |---|---|---|
 | `termination_reason` | string | `completed`, `timeout`, `cancelled`, `node_deactivated`, `error` |
-| `message` | string | |
+| `message` | string | Detail when something went wrong. Empty otherwise. |
 
-Feedback: `published_actions` uint32, `queue_depth` uint32.
+| Feedback | Type | Meaning |
+|---|---|---|
+| `published_actions` | uint32 | Actions published so far in this run. |
+| `queue_depth` | uint32 | Actions waiting in the adapter's queue. |
+
+### ManageEpisode
+
+Server: `hil_manager_node`, as `/manage_episode` by default.
+
+| Goal | Type | Meaning |
+|---|---|---|
+| `prompt` | string | Task for the episode. Empty uses the manager's `default_prompt`. |
+| `max_duration_s` | float64 | Seconds. Zero or less uses the manager's `default_max_duration_s`. |
+| `success_reward_threshold` | float64 | End the episode when the reward reaches this value. Zero or less disables it. |
+
+| Result | Type | Meaning |
+|---|---|---|
+| `termination_reason` | string | `stopped`, `timeout`, `reward_threshold`, `cancelled`, `node_deactivated`, `error` |
+| `outcome` | string | `success`, `failure`, `unlabeled` |
+| `message` | string | Detail when something went wrong. Empty otherwise. |
+| `bag_path` | string | Bag directory of the episode's recording. Empty when the manager does not record. |
+| `final_reward` | float64 | Last reward value at episode end. |
+| `messages_written` | int32 | Messages written to the bag. |
+
+| Feedback | Type | Meaning |
+|---|---|---|
+| `elapsed_s` | float64 | Seconds since the episode started. |
+| `current_reward` | float64 | Latest reward value. |
+| `control_source` | string | `policy` or `teleop` |
+| `outcome` | string | Verdict so far, one of the result's `outcome` values. |
+| `messages_written` | int32 | Messages written so far. |
+
+`unlabeled` means nobody claimed success or failure. It is a different answer
+from a reward of `0.0`.
 
 ## Services
 
@@ -48,23 +110,23 @@ Feedback: `published_actions` uint32, `queue_depth` uint32.
 |---|---|---|
 | `StartRecording` | `prompt` string | `accepted` bool, `message` string |
 | `StartPolicy` | `prompt` string | `accepted` bool, `message` string |
+| `StartHILEpisode` | `prompt` string, `max_duration_s` float64, `success_reward_threshold` float64 | `accepted` bool, `message` string |
 
-A start service returns as soon as the work is accepted. Work started this
-way has no goal. Stop it with the matching cancel service, or let
-`default_max_duration_s` end it. Neither `StartRecording` nor `StartPolicy`
-has a duration field. Both use `default_max_duration_s`.
+The request fields mean the same as the matching goal fields.
+`StartRecording` and `StartPolicy` have no duration field, so work they start
+always uses the node's `default_max_duration_s`. `accepted: false` comes with
+the reason in `message`, such as `Rejected: already busy`.
 
 ## Messages
 
-Clients that start work through a service get no action feedback or result.
-Each server therefore publishes the same fields on two topics, whatever
-started the work. `~/status` carries the feedback fields at the feedback rate
-while work runs. `~/result` carries the result fields once when it ends, and is
-transient-local, so a client that subscribes later still gets the last one.
-
-| Message | Fields | Topic |
+| Message | Fields | Published on |
 |---|---|---|
-| `RecordEpisodeStatus` | `RecordEpisode` feedback | `episode_recorder` `~/status` |
-| `RecordEpisodeResult` | `RecordEpisode` result | `episode_recorder` `~/result` |
-| `RunPolicyStatus` | `RunPolicy` feedback | `policy_runner` `~/status` |
-| `RunPolicyResult` | `RunPolicy` result | `policy_runner` `~/result` |
+| `RecordEpisodeStatus` | `RecordEpisode` feedback | recorder `~/status` |
+| `RecordEpisodeResult` | `RecordEpisode` result | recorder `~/result` |
+| `RunPolicyStatus` | `RunPolicy` feedback | runner `~/status` |
+| `RunPolicyResult` | `RunPolicy` result | runner `~/result` |
+| `ManageEpisodeStatus` | `ManageEpisode` feedback | manager `~/status` |
+| `ManageEpisodeResult` | `ManageEpisode` result | manager `~/result` |
+
+Each message has the same field names, types and order as the action part it
+mirrors.

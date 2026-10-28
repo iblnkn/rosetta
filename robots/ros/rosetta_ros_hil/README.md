@@ -6,19 +6,16 @@ device ready to take over, an optional reward classifier, and the episode
 recorder, and reports how each episode ended and whether the robot did the
 task.
 
-`rosetta_ros_hil` uses only the public Python API of `rosetta` and `rosetta_ros`
-and their actions (`RecordEpisode`, `RunPolicy`). Its interfaces (`ManageEpisode`, `StartHILEpisode`, `ManageEpisodeStatus`,
+`rosetta_ros_hil` uses only the public Python API of `rosetta` and
+`rosetta_ros` and their actions (`RecordEpisode`, `RunPolicy`). Its
+interfaces (`ManageEpisode`, `StartHILEpisode`, `ManageEpisodeStatus`,
 `ManageEpisodeResult`) live with the rest of Rosetta's in
 [`rosetta_interfaces`](../rosetta_interfaces).
 
-## Declare the teleop device
+## Usage
 
-Add a `teleop` section to the contract: an `input` whose `target` is the
-action topic, and `events` mapping event names to buttons. This package's
-`contracts/so_101_hil.yaml` is a complete example, and the schema is on
-Rosetta's Contract reference page.
-
-## Launch
+Add a `teleop` section to your contract (this package's
+`contracts/so_101_hil.yaml` is a complete example), then launch:
 
 ```bash
 ros2 launch rosetta_ros_hil hil_launch.py \
@@ -27,109 +24,124 @@ ros2 launch rosetta_ros_hil hil_launch.py \
     policy_type:=act
 ```
 
-Run `--show-args` for every argument; `contract_path` defaults to this
-package's `so_101_hil.yaml`.
+`hil_launch.py` includes `rosetta_ros`'s `policy_runner_launch.py` (in
+namespace `robot_policy`, its output under `/hil/policy`) and
+`episode_recorder_launch.py`, and starts the manager next to them. With
+`enable_reward_classifier:=true` it includes the policy runner a second time,
+as a classifier in namespace `reward_classifier`. Run `--show-args` for every
+argument.
 
-The launch file includes `rosetta_ros`'s `policy_runner_launch.py` (in namespace
-`robot_policy`) and `episode_recorder_launch.py`, and starts the manager next
-to them. With `enable_reward_classifier:=true` it includes the policy runner a
-second time, as a classifier in namespace `reward_classifier`.
-
-The policy runner publishes every action topic of the contract under
-`policy_remap_prefix` (`/hil/policy<topic>`), through `policy_runner_launch.py`'s
-`output_prefix`. The manager forwards each one to `<topic>` while the policy has
-control. While the human has control it drops the policy's commands and
-re-encodes each teleop input onto the action it targets, so the device and the
-robot may use different message types and units. Teleop feedback reaches the
-device whoever has control. The classifier's reward topics go through
-`reward_remap_prefix` the same way.
-
-There is no command watchdog on the human's side: while a person drives they
-are the safety. The policy's commands keep the policy runner's own watchdog.
-
-Each included node takes a params file from this package's `params/`, layered
-over `rosetta_ros`'s defaults: `robot_policy.yaml`, `reward_classifier.yaml` (which
-sets `is_classifier: true`) and `episode_recorder.yaml`. They hold only what
-HIL changes, such as a 30 Hz feedback rate. Tuning such as `actions_per_chunk`
-goes in your own copy, passed as `robot_policy_params_file:=`,
-`reward_classifier_params_file:=` or `episode_recorder_params_file:=`.
-Deployment values (`pretrained_name_or_path`, `policy_type`, `policy_device`,
-`server_address`, `bag_base_dir`, `storage_id`) are launch arguments, where
-empty keeps the params-file value.
-
-## Run an episode
+Start an episode, take over with the `is_intervention` button, and end it
+with `end_success` or `end_failure`:
 
 ```bash
 ros2 action send_goal /manage_episode \
     rosetta_interfaces/action/ManageEpisode "{prompt: 'place cubes on tray'}"
 ```
 
-Hold the `is_intervention` button to take over and release it to hand back.
-Intervention also works between episodes, so you can drive the robot to a
-start pose. An episode starts with the policy in control, unless you are still
-holding `is_intervention`.
-Press `end_success` or `end_failure` to finish. The services do the same:
+The full walkthrough is
+[Run human-in-the-loop episodes](https://iblnkn.github.io/rosetta/how-to/human-in-the-loop.html).
 
-```bash
-ros2 service call /hil_manager/set_intervention std_srvs/srv/SetBool "{data: true}"
-ros2 service call /hil_manager/end_episode std_srvs/srv/SetBool "{data: true}"
-```
+Things to know before a run:
 
-The result reports `termination_reason` and `outcome` separately. An episode
-started through `~/start_episode` or the `start_episode` button has no action
-client, so follow it on `/hil_manager/status` and read how it ended on
-`/hil_manager/result`. Nothing
-here deletes a bag. For that, call the recorder's `delete_last_bag` service.
-
-To end on a reward, set `success_reward_threshold` on the goal. When the
-reward reaches it, the episode ends with `termination_reason:
-reward_threshold`, and an unlabeled outcome is recorded as `success`.
+- Nothing watches the person's commands. If the teleop device stops
+  publishing while it has control, the robot gets no further commands. The
+  policy runner's watchdog covers only the policy's output.
+- An episode starts with the policy in control, unless the `is_intervention`
+  button is still held.
+- Nothing here deletes a bag. Call the recorder's `delete_last_bag` service.
+- There is no environment reset between episodes. Put the scene back
+  yourself, by hand or with teleop between episodes.
 
 ## Reference
 
-`hil_manager_node` is a lifecycle node named `hil_manager`. Defaults come from
-`params/hil_manager.yaml`. On deactivate it waits up to 10 s for a running
-episode to stop.
+`hil_manager_node` is a lifecycle node named `hil_manager`, configured and
+activated by `hil_launch.py`. Its defaults come from `params/hil_manager.yaml`.
+It runs one episode at a time. A start while an episode runs, or while the
+node is not active, is rejected. On deactivate it waits up to 10 s for a
+running episode to stop.
 
-| Parameter | Default | Meaning |
-|---|---|---|
-| `contract_path` | `""` | Required. The launch file defaults to this package's `contracts/so_101_hil.yaml`. |
-| `enable_recording` | `true` | Send a `RecordEpisode` goal per episode. |
-| `manage_policy_lifecycle` | `true` | Send and cancel a `RunPolicy` goal per episode. |
-| `enable_reward_classifier` | `false` | |
-| `policy_action_name` | `/robot_policy/run_policy` | |
-| `reward_classifier_action_name` | `/reward_classifier/run_policy` | |
-| `recorder_action_name` | `/record_episode` | |
-| `policy_remap_prefix` | `/hil/policy` | The runner publishes actions to `<prefix><action topic>`. The manager forwards to `<action topic>` while the policy is in control. |
-| `reward_remap_prefix` | `/hil/reward` | Same for the classifier. |
-| `human_reward_positive` | `1.0` | |
-| `human_reward_negative` | `-1.0` | |
-| `default_prompt` | `""` | |
-| `default_max_duration_s` | `0.0` | |
-| `feedback_rate_hz` | `30.0` | |
+### Parameters
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `contract_path` | string | `""` | Contract YAML. Required, configure fails when empty. `hil_launch.py` defaults it to this package's `contracts/so_101_hil.yaml`. Read-only. |
+| `enable_recording` | bool | `true` | Send a `RecordEpisode` goal per episode. When false, nothing is written to a bag and everything else runs the same. Read-only. |
+| `manage_policy_lifecycle` | bool | `true` | Send a `RunPolicy` goal at episode start and cancel it at the end. When false, no policy goal is ever sent or cancelled. Read-only. |
+| `enable_reward_classifier` | bool | `false` | Send a `RunPolicy` goal to the classifier per episode and forward its rewards from `reward_remap_prefix`. Read-only. |
+| `policy_action_name` | string | `/robot_policy/run_policy` | The policy runner's `RunPolicy` action. Read-only. |
+| `reward_classifier_action_name` | string | `/reward_classifier/run_policy` | The classifier's `RunPolicy` action. Read-only. |
+| `recorder_action_name` | string | `/record_episode` | The episode recorder's `RecordEpisode` action. Read-only. |
+| `policy_remap_prefix` | string | `/hil/policy` | The policy publishes each action topic as `<prefix><topic>`. The manager forwards it to `<topic>` while the policy has control. Read-only. |
+| `reward_remap_prefix` | string | `/hil/reward` | The classifier publishes each reward topic as `<prefix><topic>`. The manager forwards it to `<topic>` while no human label holds. Read-only. |
+| `human_reward_positive` | double | `1.0` | Reward published for a success label. Read at each label. |
+| `human_reward_negative` | double | `-1.0` | Reward published for a failure label. Distinct from the `0.0` of an unlabeled episode. Read at each label. |
+| `default_prompt` | string | `""` | Prompt for a goal, service call or `start_episode` press that leaves it empty. Read at each episode start. |
+| `default_max_duration_s` | double | `0.0` | Episode limit in seconds when the request leaves `max_duration_s` at 0. 0 or negative means no limit. Read at each episode start. |
+| `feedback_rate_hz` | double | `30.0` | Rate of feedback, `~/status` and `hil_intervention` during an episode, and of the termination checks. 0.1 to 1000. Read at each episode start. |
+
+### Interfaces
 
 | Interface | Type | Effect |
 |---|---|---|
-| `manage_episode` | action `rosetta_interfaces/action/ManageEpisode` | |
-| `~/start_episode` | service `rosetta_interfaces/srv/StartHILEpisode` | |
-| `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode. `true` labels success, `false` failure. The goal succeeds. |
-| `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. The goal ends `CANCELED`. |
-| `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. |
-| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending. Refused with no active episode. |
-| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label. Refused with no active episode. |
-| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` human. Transient-local. Published on every change, between episodes too, and at the feedback rate while an episode runs. |
-| `~/status` | topic `rosetta_interfaces/msg/ManageEpisodeStatus` | The feedback fields, at the feedback rate while an episode runs, however it started. |
-| `~/result` | topic `rosetta_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode. Transient-local, so a late subscriber gets the last one. |
+| `manage_episode` | action `rosetta_interfaces/action/ManageEpisode` | Runs one episode. Goal `prompt`, `max_duration_s` (0 uses `default_max_duration_s`), `success_reward_threshold` (0 disables). |
+| `~/start_episode` | service `rosetta_interfaces/srv/StartHILEpisode` | Starts an episode with the goal's fields and returns at once. |
+| `~/end_episode` | service `std_srvs/srv/SetBool` | Ends the episode with a label, `true` success and `false` failure. `termination_reason` is `stopped` and the goal succeeds. Refused with no active episode. |
+| `~/cancel_episode` | service `std_srvs/srv/Trigger` | Abandons the episode. An action goal ends `CANCELED`. The label stays as it was. Refused with no active episode. |
+| `~/set_intervention` | service `std_srvs/srv/SetBool` | `true` hands control to teleop, `false` to the policy. Works between episodes. |
+| `~/set_reward_override` | service `std_srvs/srv/SetBool` | Labels without ending, like the `success` and `failure` buttons. Refused with no active episode. |
+| `~/clear_reward_override` | service `std_srvs/srv/Trigger` | Retracts the label, so classifier rewards flow again. Refused with no active episode. |
+| `hil_intervention` | topic `std_msgs/msg/Int8` | `0` policy, `1` teleop. Reliable, transient-local, depth 1. Published on every change, between episodes too, and at `feedback_rate_hz` during an episode. |
+| `~/status` | topic `rosetta_interfaces/msg/ManageEpisodeStatus` | The feedback fields at `feedback_rate_hz` during an episode, however it started. |
+| `~/result` | topic `rosetta_interfaces/msg/ManageEpisodeResult` | The result fields, once per episode, including one that failed to start. Transient-local, so a late subscriber gets the last one. |
 
-Teleop events from the contract are edge-triggered: an `is_intervention`
-press hands control to teleop and its release hands it back, `start_episode`
-starts an episode with `default_prompt`, `success` and `failure` set the
-label, and `end_success` and `end_failure` end the episode. A label holds
-until the other button, `~/clear_reward_override`, or the next episode. The
-four label buttons are ignored when no episode is running. Event names are
-open in the contract, so the manager ignores names outside these six and logs
-them as a warning at configure.
+Topics from the contract:
 
-Result `termination_reason`: `stopped`, `timeout`, `reward_threshold`,
-`cancelled`, `node_deactivated`, `error`. `outcome`: `success`, `failure`,
-`unlabeled`.
+- Subscribes to `<policy_remap_prefix><topic>` and publishes `<topic>` for
+  each action topic.
+- Subscribes to each `teleop.input` channel and each `teleop.feedback` origin,
+  and publishes each `teleop.feedback` channel. Feedback reaches the device
+  whoever has control.
+- Publishes every reward topic. With the classifier enabled, subscribes to
+  `<reward_remap_prefix><topic>` for each.
+- Subscribes to the `teleop.events` channel.
+
+A teleop input target or feedback origin topic shared by two contract sources
+fails configure. Reward topics need a message type with a numeric `data`
+field, such as `std_msgs/msg/Float64`.
+
+### Teleop events
+
+Events are edge-triggered: the manager acts when a button's value changes.
+
+| Event | Acts on | Effect |
+|---|---|---|
+| `is_intervention` | press and release | Teleop has control while held. |
+| `start_episode` | press | Starts an episode with `default_prompt`. Ignored while one runs. |
+| `success`, `failure` | press | Labels the episode without ending it. |
+| `end_success`, `end_failure` | press | Labels the episode and ends it with `stopped`. |
+
+The four label events are ignored when no episode is running. A label holds
+until another label, `~/clear_reward_override`, or the next episode. Event
+names are open in the contract, so the manager ignores names outside these
+six and logs them as a warning at configure.
+
+### Result
+
+`termination_reason` says how the episode ended, and `outcome` says whether
+the robot did the task.
+
+| `termination_reason` | Cause | Goal status |
+|---|---|---|
+| `stopped` | `~/end_episode`, or an `end_success` or `end_failure` press | `SUCCEEDED` |
+| `timeout` | The episode reached its maximum duration | `SUCCEEDED` |
+| `reward_threshold` | The reward reached `success_reward_threshold`. An unlabeled outcome becomes `success`. | `SUCCEEDED` |
+| `cancelled` | An action cancel or `~/cancel_episode` | `CANCELED` |
+| `node_deactivated` | The manager was deactivated during the episode | `ABORTED` |
+| `error` | The recorder or policy goal failed to start, or the episode raised | `ABORTED` |
+
+`outcome` is `success`, `failure` or `unlabeled`.
+
+## License
+
+Apache-2.0

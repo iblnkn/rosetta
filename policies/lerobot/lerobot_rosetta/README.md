@@ -1,8 +1,18 @@
 # lerobot_rosetta
 
-Rosetta's [LeRobot](https://github.com/huggingface/lerobot) framework adapter: dataset writer, policy runner, and gRPC inference servers.
+Rosetta's framework adapter for [LeRobot](https://github.com/huggingface/lerobot):
+a dataset writer, a policy runner, and two gRPC inference servers. Rosetta
+loads it by the name `lerobot`, as `rosetta_port --framework lerobot` and as
+`policy_runner_node`'s `framework` parameter, which is the default for both.
 
-The naming convention is `<framework>_rosetta`, rosetta's adapter to a policy framework. This package is the rosetta-to-LeRobot direction: rosetta loads it by name via entry points. The opposite direction (the Robot and Teleoperator plugins that *LeRobot* auto-discovers) lives in [`lerobot_robot_rosetta`](../lerobot_robot_rosetta) and [`lerobot_teleoperator_rosetta`](../lerobot_teleoperator_rosetta), whose names are forced by LeRobot's `lerobot_robot_*`/`lerobot_teleoperator_*` discovery convention. This package deliberately matches neither prefix, so LeRobot's `register_third_party_plugins()` never imports it. It depends on `lerobot_robot_rosetta` (for `RosettaConfig`, and LeRobot discovers the Robot plugin at policy-run time).
+This package is the Rosetta-to-LeRobot direction. The other direction, the
+`Robot` and `Teleoperator` plugins that LeRobot itself discovers, is in
+[`lerobot_robot_rosetta`](../lerobot_robot_rosetta) and
+[`lerobot_teleoperator_rosetta`](../lerobot_teleoperator_rosetta). Their names
+follow LeRobot's `lerobot_robot_*` and `lerobot_teleoperator_*` discovery
+convention. This package matches neither prefix, so LeRobot never imports it.
+The policy runner uses `lerobot_robot_rosetta` to drive LeRobot's
+`RobotClient`.
 
 ## Entry points
 
@@ -15,39 +25,50 @@ The naming convention is `<framework>_rosetta`, rosetta's adapter to a policy fr
 
 ## Inference servers
 
-Two gRPC servers speak LeRobot's AsyncInference protocol (the `RobotClient` connects to either unchanged):
+Both servers speak LeRobot's async-inference gRPC protocol, so LeRobot's
+`RobotClient` connects to either unchanged.
 
-- **`policy_server.py`** (`rosetta_policy_server`): preload and cache wrapper over LeRobot's stock `lerobot.async_inference.policy_server`. The stock server reloads the checkpoint on every client handshake; this one loads it once and reuses it while the requested `(policy_type, pretrained_name_or_path, device)` is unchanged.
-- **`classifier_server.py`** (`rosetta_classifier_server`): reward-classifier variant with the same preload and cache behavior.
+- `policy_server` wraps LeRobot's `PolicyServer`. The stock server loads the
+  checkpoint on every client handshake. This one keeps the loaded policy and
+  reuses it while the requested policy type, checkpoint and device are
+  unchanged.
+- `classifier_server` serves a LeRobot `reward_classifier` model, returning
+  one reward per observation. It caches the model the same way.
 
-Both accept optional preload flags that load the model **before** the port is bound, so a socket-level readiness check implies the model is ready:
+Given `--policy-type`, `--pretrained-name-or-path` and `--policy-device`
+together, a server loads the model before it opens its port, so a port that
+accepts connections means the model is ready:
 
 ```bash
-python -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
-    --policy-type=act --pretrained-name-or-path=my-org/my-policy --policy-device=cuda
+python3 -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
+    --policy-type=act --pretrained-name-or-path=<checkpoint> --policy-device=cuda
 ```
 
-`LeRobotPolicyRunner` starts the appropriate server with these flags at node configure time (`launch_local_server: true`), so the first `run_policy` goal is as fast as any other.
+`<checkpoint>` is a local path or a Hugging Face Hub repo ID. The classifier
+server defaults to port 8081. With `launch_local_server: true`,
+`policy_runner_node` starts the matching server this way at configure.
 
 ## Install
 
-This package builds in a ROS 2 workspace with colcon, but it also needs
-LeRobot, which has no rosdep key: `rosdep install` neither installs it nor
-reports it missing. Install it with pip first; the inference servers also
-need `torch` and `grpcio`. It isn't released to the ROS buildfarm.
+LeRobot has no rosdep key, so `rosdep install` neither installs it nor
+reports it missing. Install it with pip first. The policy runner needs
+LeRobot's `async` extra, and this package needs a LeRobot older than 0.6.2,
+which removes the async-inference module the runner uses. The package is not
+released to the ROS buildfarm.
 
 ```bash
-pip install 'lerobot[dataset]<0.6.2'
+pip install 'lerobot[dataset,async]<0.6.2'
 colcon build --packages-up-to lerobot_rosetta
 ```
 
 ## Documentation
 
-How the LeRobot adapter fits together, and the dataset layout it writes:
-[LeRobot integration](https://iblnkn.github.io/rosetta/explanation/design.html)
-and [LeRobot data model](https://iblnkn.github.io/rosetta/reference/contract.html).
-
-Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
+- [Prepare a dataset](https://iblnkn.github.io/rosetta/how-to/prepare-a-dataset.html)
+  and [Deploy a policy](https://iblnkn.github.io/rosetta/how-to/deploy-a-policy.html)
+- [LeRobot adapter parameters](https://iblnkn.github.io/rosetta/reference/nodes.html#lerobot-adapter-parameters)
+  on `policy_runner_node`
+- [rosetta_port](https://iblnkn.github.io/rosetta/reference/rosetta-port.html)
+- Full Rosetta documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)
 
 ## License
 
