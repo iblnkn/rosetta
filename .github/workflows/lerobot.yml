@@ -4,10 +4,9 @@ name: lerobot
 # resolves dependencies from each package.xml. TARGET_WORKSPACE builds only
 # this slice of the repository and the packages it depends on.
 #
-# Two LeRobot versions: the newest release on PyPI, which must pass because
-# it's what `pip install lerobot` gives users, and LeRobot's main branch,
-# allowed to fail, as early warning of what the next release breaks. The
-# nightly run catches LeRobot changes that arrive without a change here.
+# Tests the newest LeRobot release the runner supports: 0.6.2 removes
+# async_inference, which the runner uses until it is ported. The nightly run
+# catches dependency changes that arrive without a change here.
 on:
   pull_request:
     paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
@@ -24,17 +23,8 @@ concurrency:
 
 jobs:
   industrial_ci:
-    name: industrial_ci (lerobot ${{ matrix.lerobot }})
+    name: industrial_ci (lerobot)
     runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.lerobot == 'main' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - lerobot: release
-            spec: "lerobot[dataset]<0.6.2"
-          - lerobot: main
-            spec: "lerobot[dataset] @ git+https://github.com/huggingface/lerobot@main"
     env:
       ROS_DISTRO: jazzy
       ROS_REPO: main
@@ -42,11 +32,9 @@ jobs:
       # industrial_ci treats any unresolved key as fatal.
       ROSDEP_SKIP_KEYS: ament_python
       TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
-      # The ROS image has no git, which pip needs to install LeRobot main.
-      ADDITIONAL_DEBS: git
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       BEFORE_BUILD_TARGET_WORKSPACE: >-
-        pip install --break-system-packages --ignore-installed '${{ matrix.spec }}' torch
+        pip install --break-system-packages --ignore-installed 'lerobot[dataset]<0.6.2' torch
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
         && pip install --break-system-packages --ignore-installed --upgrade protobuf grpcio
     steps:
