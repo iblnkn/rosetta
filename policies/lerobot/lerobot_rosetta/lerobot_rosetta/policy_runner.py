@@ -83,7 +83,6 @@ class LeRobotPolicyRunner:
     def __init__(self) -> None:
         self._host = None
         self._contract: Optional[Contract] = None
-        self._contract_path: str = ""
         self._client: Optional[RobotClient] = None
         self._policy_device: str = "cpu"
         self._server_process: Optional[subprocess.Popen] = None
@@ -96,8 +95,6 @@ class LeRobotPolicyRunner:
         """Declare LeRobot inference settings on the host and store the contract."""
         self._host = host
         self._contract = contract
-        # contract_path is declared by the host and shared by all backends. Read it.
-        self._contract_path = host.get("contract_path")
 
         # Fail the lifecycle configure early: the live LeRobot stack cannot
         # represent >1 numeric observation key or >1 action key (see
@@ -161,9 +158,11 @@ class LeRobotPolicyRunner:
         if self._host.get("launch_local_server"):
             self._start_policy_server()
 
-        robot_config = RosettaConfig(
+        # The host's contract, not contract_path: the host may have resolved
+        # it from the checkpoint when the parameter is empty.
+        robot_config = RosettaConfig.from_contract(
+            self._contract,
             id="rosetta",
-            config_path=self._contract_path,
             is_classifier=self._host.get("is_classifier"),
         )
         robot_config._external_bridge = frames  # Inject the pre-built frame I/O

@@ -202,6 +202,34 @@ def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
     assert robot_config._stop_event is stop
 
 
+def test_run_uses_the_hosts_contract_when_contract_path_is_empty(spawned, monkeypatch):
+    # The node falls back to the checkpoint's contract when contract_path is
+    # empty; the runner must use the contract it was handed, not the parameter.
+    contract = load_contract(CONTRACT)
+    host = _FakeHost(
+        {"contract_path": "", "is_classifier": False, "pretrained_name_or_path": "user/repo", "policy_device": "cpu"}
+    )
+    runner = pr.LeRobotPolicyRunner()
+    runner.setup(host, contract=contract)
+
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self, config):
+            captured["config"] = config
+            self.shutdown_event = threading.Event()
+
+        def start(self):
+            return False
+
+    monkeypatch.setattr(pr, "RobotClient", _FakeClient)
+
+    runner.run(object(), task="t", stop_event=threading.Event())
+    robot_config = captured["config"].robot
+    assert robot_config.contract is contract
+    assert robot_config.fps == contract.fps
+
+
 @pytest.mark.parametrize(("stop_requested", "message"), [(True, "Stopped"), (False, "Completed")])
 def test_a_stopped_run_succeeds_like_a_completed_one(spawned, monkeypatch, stop_requested, message):
     # RunnerResult: a host-requested stop is a successful run. Reporting it as

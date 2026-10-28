@@ -25,6 +25,7 @@ from ament_index_python.packages import get_package_share_directory
 import lerobot_robot_rosetta.rosetta as adapter
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta
+from rosetta.contract.schema import load_contract
 from rosetta.frames.codecs import discover_codecs
 from rosetta_ros.topic_bridge import TopicBridge
 
@@ -83,6 +84,15 @@ def _injected_robot(clock, stop_event=None, contract="so_101.yaml"):
         if shape is not float:
             bridge.frame[f"observation.images.{short}"] = np.zeros(shape, dtype=np.uint8)
     return robot, bridge
+
+
+def test_from_contract_derives_what_config_path_derives():
+    path = CONTRACTS / "so_101.yaml"
+    from_path = RosettaConfig(config_path=str(path))
+    from_contract = RosettaConfig.from_contract(load_contract(path))
+    assert (from_contract.fps, from_contract.id) == (from_path.fps, from_path.id)
+    assert [s.key for s in from_contract.observation_specs] == [s.key for s in from_path.observation_specs]
+    assert [s.key for s in from_contract.action_specs] == [s.key for s in from_path.action_specs]
 
 
 def _zero_action(robot):

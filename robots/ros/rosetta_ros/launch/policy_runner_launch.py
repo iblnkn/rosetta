@@ -24,24 +24,28 @@ Algorithm/tuning parameters should be set in the YAML file.
 
 Usage:
     # Launch with default params file
-    ros2 launch rosetta policy_runner_launch.py
+    ros2 launch rosetta_ros policy_runner_launch.py
 
     # Use custom params file
-    ros2 launch rosetta policy_runner_launch.py \\
+    ros2 launch rosetta_ros policy_runner_launch.py \\
         params_file:=/path/to/custom_params.yaml
 
     # Override deployment-specific settings
-    ros2 launch rosetta policy_runner_launch.py \\
+    ros2 launch rosetta_ros policy_runner_launch.py \\
         contract_path:=/path/to/contract.yaml \\
         pretrained_name_or_path:=/path/to/model \\
         server_address:=192.168.1.100:8080
 
+    # Use the contract the checkpoint was trained with (omit contract_path)
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        pretrained_name_or_path:=/path/to/model
+
     # Manual lifecycle control
-    ros2 launch rosetta policy_runner_launch.py \\
+    ros2 launch rosetta_ros policy_runner_launch.py \\
         configure:=false activate:=false
 
     # Connect to remote server (don't launch local)
-    ros2 launch rosetta policy_runner_launch.py \\
+    ros2 launch rosetta_ros policy_runner_launch.py \\
         launch_local_server:=false
 """
 
@@ -73,8 +77,11 @@ def launch_setup(context, *args, **kwargs):
     output_prefix = LaunchConfiguration("output_prefix").perform(context)
 
     # YAML first; overrides carry only the non-empty launch args (empty =
-    # keep the params-file value).
-    overrides = {"contract_path": contract_path}
+    # keep the params-file value). An empty contract_path everywhere makes the
+    # node fall back to the contract the checkpoint was trained with.
+    overrides = {}
+    if contract_path:
+        overrides["contract_path"] = contract_path
     if pretrained_name_or_path:
         overrides["pretrained_name_or_path"] = pretrained_name_or_path
     if policy_type:
@@ -109,8 +116,6 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     """Generate the launch description for the rosetta client node."""
-    default_contract = os.path.join(get_package_share_directory("rosetta_ros"), "contracts", "so_101.yaml")
-
     # Declare launch arguments
     # Only deployment-specific settings are exposed as launch args
     # Algorithm/tuning parameters should be set in the params YAML file
@@ -124,8 +129,8 @@ def generate_launch_description():
         # Deployment-specific paths
         DeclareLaunchArgument(
             "contract_path",
-            default_value=default_contract,
-            description="Path to robot contract YAML file",
+            default_value="",  # Empty = params file value, else the checkpoint's contract
+            description="Path to robot contract YAML file (empty = params file value, else the checkpoint's contract)",
         ),
         DeclareLaunchArgument(
             "pretrained_name_or_path",

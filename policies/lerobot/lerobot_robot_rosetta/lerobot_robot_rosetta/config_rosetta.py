@@ -117,22 +117,30 @@ class RosettaConfig(RobotConfig):
     def __post_init__(self):
         super().__post_init__()
 
-        if not self.config_path:
-            return
+        if self.config_path:
+            self._bind(load_contract(self.config_path))
 
-        self._contract = load_contract(self.config_path)
+    @classmethod
+    def from_contract(cls, contract: Contract, **kwargs) -> RosettaConfig:
+        """Build a config around an already-loaded contract (config_path stays empty)."""
+        config = cls(**kwargs)
+        config._bind(contract)
+        return config
+
+    def _bind(self, contract: Contract) -> None:
+        self._contract = contract
 
         if self.fps is None:
-            self.fps = self._contract.fps
+            self.fps = contract.fps
 
         if self.id is None:
-            self.id = self._contract.robot_type
+            self.id = contract.robot_type
 
-        self._observation_specs = list(iter_observation_specs(self._contract))
+        self._observation_specs = list(iter_observation_specs(contract))
         if self.is_classifier:
-            self._action_specs = list(iter_reward_as_action_specs(self._contract))
+            self._action_specs = list(iter_reward_as_action_specs(contract))
         else:
-            self._action_specs = list(iter_action_specs(self._contract))
+            self._action_specs = list(iter_action_specs(contract))
 
     @property
     def contract(self) -> Contract:
