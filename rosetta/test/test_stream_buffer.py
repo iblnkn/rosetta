@@ -103,6 +103,10 @@ def test_slight_future_stamp_served_under_all_policies(policy, kwargs):
 
 def test_reset_tolerance_floor_scales_with_step():
     # At very low rates one frame period can exceed the 1 s default; the
-    # tolerance floors at two periods.
+    # tolerance floors at two periods, so a stamp 1.5 periods ahead is skew,
+    # not a reset, while one beyond two periods still clears the buffer.
     buf = StreamBuffer(ResamplePolicy.HOLD.value, step_ns=1 * SEC)
-    assert buf.reset_tol_ns == 2 * SEC
+    buf.push(int(11.5 * SEC), 4.2)
+    assert buf.sample(10 * SEC) == 4.2
+    buf.push(13 * SEC, 4.3)
+    assert buf.sample(10 * SEC) is None

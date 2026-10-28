@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Built-in codecs of the fake robot interface: select names fields of a FakeVector."""
+"""Built-in codecs of the fake robot interface.
+
+select names the fields of a FakeVector; fake/Data and fake/Text take no select.
+"""
 
 import numpy as np
-from fake_interface import VECTOR, FakeVector
+from fake_interface import DATA, TEXT, VECTOR, FakeData, FakeVector
 
 from rosetta.frames.codecs import register_decoder, register_encoder
 
@@ -28,3 +31,18 @@ def decode_vector(msg, spec):
 @register_encoder(VECTOR, requires_select=True)
 def encode_vector(action_vec, spec, stamp_ns=None):
     return FakeVector({name: float(v) for name, v in zip(spec.source.select, action_vec, strict=True)})
+
+
+@register_decoder(DATA, dtype="float32")
+def decode_data(msg, spec):
+    return np.atleast_1d(np.asarray(msg.data, dtype=np.float32))
+
+
+@register_encoder(DATA)
+def encode_data(action_vec, spec, stamp_ns=None):
+    return FakeData(float(action_vec[0]))
+
+
+@register_decoder(TEXT, dtype="string")
+def decode_text(msg, spec):
+    return msg

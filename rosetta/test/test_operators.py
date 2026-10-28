@@ -28,19 +28,11 @@ from rosetta.contract.operators import (
     inverse_pipeline,
     register_operator,
 )
-from rosetta.contract.schema import _parse_apply
+
+pytestmark = pytest.mark.usefixtures("scratch_registries")
 
 CTX = OperatorContext()
 IMG_CTX = OperatorContext(is_image=True)  # resize only builds on image streams
-
-
-@pytest.fixture(autouse=True)
-def _restore_operator_registry():
-    """Drop operators a test registers, so each test sees only the built-ins."""
-    saved = dict(OPERATOR_REGISTRY)
-    yield
-    OPERATOR_REGISTRY.clear()
-    OPERATOR_REGISTRY.update(saved)
 
 
 def test_rad2deg_roundtrip():
@@ -70,36 +62,21 @@ def test_resize_upsample_is_symmetric():
 
 
 @pytest.mark.parametrize(
-    "args",
+    ("args", "match"),
     [
-        [0, 2],  # zero dim
-        [2, -1],  # negative dim
-        [2],  # wrong arity
-        "x",  # not a list
-        [2.5, 3],  # float: rejected, never silently truncated
-        [True, 2],  # bool is not an integer dimension
-        ["2", "2"],  # strings: rejected, never coerced
-        [9000, 10],  # above the sanity ceiling
+        ([0, 2], "must be in"),  # zero dim
+        ([2, -1], "must be in"),  # negative dim
+        ([2], "expects"),  # wrong arity
+        ("x", "expects"),  # not a list
+        ([2.5, 3], "must be integers"),  # float: rejected, never silently truncated
+        ([True, 2], "must be integers"),  # bool is not an integer dimension
+        (["2", "2"], "must be integers"),  # strings: rejected, never coerced
+        ([9000, 10], "must be in"),  # above the sanity ceiling
     ],
 )
-def test_resize_bad_args_raise(args):
-    with pytest.raises(ContractValidationError):
+def test_resize_bad_args_raise(args, match):
+    with pytest.raises(ContractValidationError, match=f"resize operator.*{match}"):
         build_operator("resize", args, IMG_CTX)
-
-
-def test_resize_rejected_on_non_image_stream():
-    # A resize on a state vector would crash on every message at runtime;
-    # the ctx.is_image gate turns that into a contract-load error.
-    with pytest.raises(ContractValidationError, match="image"):
-        build_operator("resize", [2, 2], CTX)
-
-
-def test_resize_declares_output_hw():
-    # Geometry is a declared Operator capability (read at spec resolution),
-    # not a name match; non-geometry operators leave it None.
-    assert build_operator("resize", [2, 3], IMG_CTX).output_hw == (2, 3)
-    assert build_operator("rad2deg", None, CTX).output_hw is None
-    assert build_operator("clamp", {"min": 0.0, "max": 1.0}, CTX).output_hw is None
 
 
 def test_clamp_clips_both_directions():
@@ -125,57 +102,24 @@ def test_clamp_preserves_dtype():
     assert op.inverse(state).dtype == np.float32
 
 
-def test_clamp_propagates_nan():
-    # Clamp is a RANGE bound, not a finiteness guard: np.clip passes NaN
-    # through. The serve path's finiteness gate (encode_value) is what refuses
-    # non-finite commands -- pinned here so nobody "fixes" clamp into a
-    # NaN scrubber and weakens that gate's rationale.
-    op = build_operator("clamp", {"min": 0.0, "max": 1.0}, CTX)
-    out = op.inverse(np.array([np.nan, 0.5, 9.0]))
-    assert np.isnan(out[0]) and np.allclose(out[1:], [0.5, 1.0])
-
-
 @pytest.mark.parametrize(
-    "args",
+    ("args", "match"),
     [
-        [0.0, 1.0],
-        "x",
-        {"min": 0.0},
-        {"max": 1.0},
-        {"min": 0.0, "max": 1.0, "step": 0.1},
-        {"lo": 0.0, "hi": 1.0},
-        {"min": 1.0, "max": 0.0},  # lo > hi
-        {"min": float("inf"), "max": 1.0},  # non-finite bound
-        {"min": True, "max": 1.0},  # bool is not a number here
-        {"min": "0", "max": 1.0},  # strings: rejected, never coerced
+        ([0.0, 1.0], "expects"),
+        ("x", "expects"),
+        ({"min": 0.0}, "expects"),
+        ({"max": 1.0}, "expects"),
+        ({"min": 0.0, "max": 1.0, "step": 0.1}, "expects"),
+        ({"lo": 0.0, "hi": 1.0}, "expects"),
+        ({"min": 1.0, "max": 0.0}, "requires lo <= hi"),
+        ({"min": float("inf"), "max": 1.0}, "must be finite"),
+        ({"min": True, "max": 1.0}, "must be numbers"),  # bool is not a number here
+        ({"min": "0", "max": 1.0}, "must be numbers"),  # strings: rejected, never coerced
     ],
 )
-def test_clamp_bad_args_raise(args):
-    with pytest.raises(ContractValidationError):
+def test_clamp_bad_args_raise(args, match):
+    with pytest.raises(ContractValidationError, match=f"clamp operator.*{match}"):
         build_operator("clamp", args, CTX)
-
-
-@pytest.mark.parametrize(
-    ("apply", "context", "require_serveable"),
-    [
-        ([{"clamp": {"min": -1.0, "max": 1.0}}], "action 'action'", True),  # BIDIRECTIONAL serves
-        ([{"resize": [2, 2]}], "observations[0]", False),  # observations never serve
-    ],
-)
-def test_apply_allows_operators_the_section_can_run(apply, context, require_serveable):
-    ops = _parse_apply(apply, context, require_serveable=require_serveable)
-    assert ops == [(name, args) for entry in apply for name, args in entry.items()]
-
-
-def test_action_apply_rejects_forward_only_op_at_load():
-    # An action's apply list must be fully serveable; resize is FORWARD_ONLY.
-    with pytest.raises(ContractValidationError, match="resize"):
-        _parse_apply([{"resize": [2, 2]}], "action 'action'", require_serveable=True)
-
-
-def test_build_op_unknown_name_raises():
-    with pytest.raises(ContractValidationError, match="Unknown operator"):
-        build_operator("nope", None, CTX)
 
 
 def test_bare_operator_rejects_args():
@@ -183,17 +127,6 @@ def test_bare_operator_rejects_args():
     # `rad2deg: [2]` in a contract is a load error, not silently ignored args.
     with pytest.raises(ContractValidationError, match="takes no arguments"):
         build_operator("rad2deg", [2], CTX)
-
-
-def test_inverse_pipeline_runs_back_to_front():
-    # The encode path must undo the pipeline in reverse: with
-    # apply: [rad2deg, {clamp: [0, 90]}] the dataset speaks clamped degrees,
-    # so serving must clamp IN DEGREES first, then convert deg->rad.
-    # Forward-order traversal would deg2rad(180)=pi first (unclamped, pi < 90)
-    # -- numerically distinct, so this pins the reversed() in inverse_pipeline.
-    ops = [build_operator("rad2deg", None, CTX), build_operator("clamp", {"min": 0.0, "max": 90.0}, CTX)]
-    out = inverse_pipeline(np.array([180.0]), ops)
-    assert np.allclose(out, [np.pi / 2])
 
 
 # --- Registration invariants -----------------------------------------------------

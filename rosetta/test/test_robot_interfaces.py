@@ -62,7 +62,6 @@ def test_contract_for_the_fake_interface_round_trips(fake_interface, tmp_path):
     ("old", "new", "match"),
     [
         ("robot_interface: fake", "robot_interface: ros2", r"'ros2' is not installed\. Installed: fake"),
-        ("type: fake/Vector, qos", "type: fake/Nope, qos", "Unknown message type 'fake/Nope'"),
         ("timeline: arrival}\n    select: [a, b]\nactions", "timeline: header}\n    select: [a, b]\nactions", "header"),
         ("qos: {level: 1}", "qos: {level: 7}", "qos must be"),
     ],

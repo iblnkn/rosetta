@@ -17,14 +17,16 @@ that keeps a broken contract from misbehaving at runtime fails at resolution.
 
 Contracts are built from the schema dataclasses against the fake interface,
 whose ``fake/Vector`` has a decoder and an encoder that both need ``select``;
-``fake/Nope`` has neither. Image rules key off ``observation.images.*``, not
-the message type, so they hold for any decodable type.
+``fake/Data`` decodes to float32 and encodes without ``select``;
+``fake/Text`` decodes to a string and has no encoder; ``fake/Nope`` has
+neither. Image rules key off ``observation.images.*``, not the message type,
+so they hold for any decodable type.
 """
 
 import pytest
 
 from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.operators import OPERATOR_REGISTRY, Invertibility, Operator, register_operator
+from rosetta.contract.operators import Invertibility, Operator, register_operator
 from rosetta.contract.schema import (
     Align,
     Channel,
@@ -36,7 +38,6 @@ from rosetta.contract.schema import (
     TeleopInputSource,
 )
 from rosetta.contract.specs import (
-    _derive_namespaces,
     iter_action_specs,
     iter_observation_specs,
     iter_policy_specs,
@@ -46,9 +47,11 @@ from rosetta.contract.specs import (
     iter_teleop_input_specs,
 )
 
-pytestmark = pytest.mark.usefixtures("fake_interface")
+pytestmark = pytest.mark.usefixtures("fake_interface", "scratch_registries")
 
 VECTOR = "fake/Vector"
+DATA = "fake/Data"
+TEXT = "fake/Text"
 NOPE = "fake/Nope"
 HOLD = Align("hold", "arrival")
 RESIZE = [("resize", [4, 4])]
@@ -92,20 +95,6 @@ def _resolve(iterator, contract):
     return list(iterator(contract))
 
 
-@pytest.fixture
-def scoped_operator():
-    """Register a test operator class under a name; unregister it afterwards."""
-    names = []
-
-    def register(name, cls, kind):
-        names.append(name)
-        register_operator(name, kind=kind)(cls)
-
-    yield register
-    for name in names:
-        OPERATOR_REGISTRY.pop(name, None)
-
-
 # ---------------------------------------------------------------------------
 # Computed fields
 # ---------------------------------------------------------------------------
@@ -143,6 +132,11 @@ def test_action_computed_fields_and_namespaces():
     assert (arm.namespace, gripper.namespace) == ("cmd", "gripper_cmd")
 
 
+def _namespaces(*topics):
+    entry = _entry("observation.state", *(_source(t) for t in topics))
+    return {s.source.channel.topic: s.namespace for s in _resolve(iter_observation_specs, _contract([entry]))}
+
+
 @pytest.mark.parametrize(
     ("topics", "expected"),
     [
@@ -150,22 +144,22 @@ def test_action_computed_fields_and_namespaces():
         (["/arm/state", "/base/state"], {"/arm/state": "arm", "/base/state": "base"}),
         (["/arm/pos", "/arm/vel"], {"/arm/pos": "pos", "/arm/vel": "vel"}),
         # Uneven depths: the short topic gets an empty segment at the winning index.
-        (["/cmd_vel", "/cmd_vel/filtered"], {"/cmd_vel": "", "/cmd_vel/filtered": "filtered"}),
-        (["/only"], {"/only": ""}),
+        (["/cmd_vel", "/cmd_vel/filtered"], {"/cmd_vel": None, "/cmd_vel/filtered": "filtered"}),
+        (["/only"], {"/only": None}),
         # No single segment distinguishes all three: falls through to the depth-2 compound tier.
         (["/a/x/1", "/a/y/1", "/b/x/2"], {"/a/x/1": "a.x", "/a/y/1": "a.y", "/b/x/2": "b.x"}),
     ],
 )
-def test_derive_namespaces_tiers(topics, expected):
-    assert _derive_namespaces(topics) == expected
+def test_namespace_tiers(topics, expected):
+    assert _namespaces(*topics) == expected
 
 
-def test_derive_namespaces_identical_normalization_rejected():
+def test_topics_with_identical_normalization_rejected():
     """Distinct topic strings that normalize to the same segments ('/a/b' vs
     'a/b') have no unique namespace at any tier: a load error, not silent
     duplicate feature names."""
     with pytest.raises(ContractValidationError, match="identical paths"):
-        _derive_namespaces(["/a/b", "a/b"])
+        _namespaces("/a/b", "a/b")
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +167,7 @@ def test_derive_namespaces_identical_normalization_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_third_party_operator_with_output_hw_satisfies_image_gate(scoped_operator):
+def test_third_party_operator_with_output_hw_satisfies_image_gate():
     """The image-geometry gate reads Operator.output_hw, not the name 'resize',
     so any plugin declaring a fixed output size can fulfill it."""
 
@@ -185,7 +179,7 @@ def test_third_party_operator_with_output_hw_satisfies_image_gate(scoped_operato
         def forward(self, arr):
             return arr
 
-    scoped_operator("_test_scale", _Scale, Invertibility.FORWARD_ONLY)
+    register_operator("_test_scale", kind=Invertibility.FORWARD_ONLY)(_Scale)
     contract = _contract(observations=[_entry("observation.images.wrist", _image("/w", apply=[("_test_scale", None)]))])
     (spec,) = _resolve(iter_observation_specs, contract)
     assert spec.image_resize == (8, 8)
@@ -196,6 +190,14 @@ def test_last_geometry_operator_wins():
     image = _image("/w", apply=[("resize", [48, 64]), ("resize", [24, 32])])
     (spec,) = _resolve(iter_observation_specs, _contract(observations=[_entry("observation.images.wrist", image)]))
     assert spec.image_resize == (24, 32)
+
+
+def test_string_stream_with_apply_rejected():
+    """Operators transform numeric arrays; `apply` on a string stream fails at
+    resolution, not by silently skipping the pipeline at decode time."""
+    status = _source("/status", TEXT, select=(), apply=[("clamp", {"min": 0.0, "max": 1.0})])
+    with pytest.raises(ContractValidationError, match="string"):
+        _resolve(iter_observation_specs, _contract(observations=[_entry("observation.environment_state", status)]))
 
 
 def test_resize_on_non_image_stream_rejected():
@@ -236,6 +238,13 @@ def test_undecodable_observation_rejected(contract):
         _resolve(iter_specs, contract)
 
 
+def test_native_codec_dtype_tier():
+    """No explicit dtype, no custom decoder: the registered codec's dtype."""
+    contract = _contract(observations=[_entry("observation.state", _source("/v", DATA, select=()))])
+    (spec,) = _resolve(iter_observation_specs, contract)
+    assert spec.dtype == "float32"
+
+
 @pytest.mark.parametrize("bad_dtype", ["float32", "bool"])
 def test_explicit_non_video_dtype_on_image_rejected(bad_dtype):
     """Otherwise the feature is declared numeric while assemble produces
@@ -270,6 +279,25 @@ def test_action_with_custom_encoder_only_type_allowed():
     contract = _contract(actions=[_entry("action", _source("/cmd", NOPE, encoder="m:encode"))])
     (spec,) = _resolve(iter_action_specs, contract)
     assert spec.dtype == "float64"
+
+
+def test_non_numeric_action_dtype_rejected():
+    """Published streams are numeric vectors. A string action channel fails at
+    load, not at the first publish_frame inside split's float coercion."""
+    contract = _contract(actions=[_entry("action", _source("/note", TEXT, select=(), encoder="m:encode"))])
+    with pytest.raises(ContractValidationError, match="numeric vectors"):
+        _resolve(iter_action_specs, contract)
+
+
+def test_teleop_input_non_numeric_dtype_rejected():
+    """A string teleop input decodes to str, which the HIL forwarder would try
+    to re-encode onto the numeric action topic on every message."""
+    teleop = Teleop(
+        input=(TeleopInputSource(source=_source("/leader/text", TEXT, select=()), target="/cmd"),), events=None
+    )
+    contract = _contract(actions=[_entry("action", _source("/cmd"))], teleop=teleop)
+    with pytest.raises(ContractValidationError, match="numeric action topic"):
+        _resolve(iter_specs, contract)
 
 
 def _teleop_feedback(feedback_source):
@@ -326,7 +354,33 @@ def test_reward_as_action_rejects_empty_rewards_section():
         _resolve(iter_reward_as_action_specs, _contract())
 
 
-def test_reward_as_action_rejects_nonserveable_operator(scoped_operator):
+def test_reward_as_action_multi_entry_namespace_derivation():
+    """Select-less rewards on distinct topics share the forced 'action' key but
+    get distinguishing namespaces, so their synthesized 'data' names stay unique."""
+    rewards = [
+        _entry("next.reward", _source("/reward_a", DATA, select=(), dtype="float32")),
+        _entry("next.bonus", _source("/reward_b", DATA, select=(), dtype="float32")),
+    ]
+    specs = _resolve(iter_reward_as_action_specs, _contract(rewards=rewards))
+    assert [(s.key, s.names, s.namespace, s.dtype) for s in specs] == [
+        ("action", ("data",), "reward_a", "float32"),
+        ("action", ("data",), "reward_b", "float32"),
+    ]
+
+
+def test_reward_as_action_duplicate_selectless_names_rejected():
+    """Two select-less rewards on one topic derive no namespace and would emit
+    identical 'data' feature names, bypassing FrameLayout's shared-key select
+    check because the name is synthesized."""
+    rewards = [
+        _entry("next.reward", _source("/reward", DATA, select=(), dtype="float32")),
+        _entry("next.bonus", _source("/reward", DATA, select=(), dtype="float32")),
+    ]
+    with pytest.raises(ContractValidationError, match="collides"):
+        _resolve(iter_reward_as_action_specs, _contract(rewards=rewards))
+
+
+def test_reward_as_action_rejects_nonserveable_operator():
     """A reward used as a classifier action publishes, so its pipeline must run
     in the serve direction. This is the only gate: rewards parse with
     serveable=False rules."""
@@ -335,7 +389,7 @@ def test_reward_as_action_rejects_nonserveable_operator(scoped_operator):
         def forward(self, arr):
             return arr
 
-    scoped_operator("_test_fwd_only_reward", _FwdOnly, Invertibility.FORWARD_ONLY)
+    register_operator("_test_fwd_only_reward", kind=Invertibility.FORWARD_ONLY)(_FwdOnly)
     reward = _source("/reward", dtype="float32", apply=[("_test_fwd_only_reward", None)])
     with pytest.raises(ContractValidationError, match="no serve direction"):
         _resolve(iter_reward_as_action_specs, _contract(rewards=[_entry("next.reward", reward)]))

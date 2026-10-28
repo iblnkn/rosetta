@@ -19,6 +19,8 @@ channel cannot provide are load-time errors with a dotted-path context, never
 a silent default. Each test pins one rule.
 """
 
+import warnings
+
 import pytest
 
 from rosetta.contract.errors import ContractValidationError
@@ -300,6 +302,78 @@ def test_unsupported_dtypes_rejected_at_load(tmp_path, dtype):
 
 
 # ---------------------------------------------------------------------------
+# kind: a semantic tag whose dimension count select must match
+# ---------------------------------------------------------------------------
+
+QUATERNION_FIELDS = ["orientation.x", "orientation.y", "orientation.z", "orientation.w"]
+
+
+def _kind(kind, select):
+    """BASE with the observation's select replaced and, unless None, a kind added."""
+    kind_line = f"    kind: {kind}\n" if kind else ""
+    return BASE.replace(OBS_SELECT, f"    select: [{', '.join(select)}]\n{kind_line}actions:", 1)
+
+
+def _fields(n):
+    return [f"f{i}" for i in range(n)]
+
+
+def test_kind_defaults_to_continuous(tmp_path):
+    assert _load(tmp_path, BASE).observations[0].sources[0].kind == "continuous"
+
+
+@pytest.mark.parametrize(
+    ("kind", "n"),
+    [("quaternion", 4), ("euler_rpy", 3), ("rotation_6d", 6), ("binary", 1), ("continuous", 10)],
+)
+def test_kind_with_matching_dim_count_loads(kind, n, tmp_path):
+    assert _load(tmp_path, _kind(kind, _fields(n))).observations[0].sources[0].kind == kind
+
+
+@pytest.mark.parametrize(("kind", "n", "expected"), [("quaternion", 3, 4), ("euler_rpy", 4, 3)])
+def test_kind_with_wrong_dim_count_rejected(kind, n, expected, tmp_path):
+    _expect_error(
+        tmp_path, _kind(kind, _fields(n)), rf"kind '{kind}' .* requires {expected} dim\(s\) but select has {n}"
+    )
+
+
+def test_invalid_kind_rejected(tmp_path):
+    _expect_error(tmp_path, _kind("rotation_matrix", ["a"]), "Invalid kind 'rotation_matrix'")
+
+
+@pytest.mark.parametrize(("kind", "select"), [("continuous", QUATERNION_FIELDS), (None, ["pose.quat_w"])])
+def test_untagged_rotation_warns(kind, select, tmp_path):
+    with pytest.warns(UserWarning, match="looks like a quaternion"):
+        _load(tmp_path, _kind(kind, select))
+
+
+@pytest.mark.parametrize(
+    ("kind", "select"),
+    [("continuous", ["position.j1", "position.j2", "position.j3"]), ("quaternion", QUATERNION_FIELDS)],
+)
+def test_no_warning_for_plain_joints_or_tagged_rotations(kind, select, tmp_path):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _load(tmp_path, _kind(kind, select))
+
+
+# ---------------------------------------------------------------------------
+# Spec resolution runs eagerly in load: its errors surface here, not at first frame
+# ---------------------------------------------------------------------------
+
+
+def test_image_without_resize_rejected_at_load(tmp_path):
+    image = f"  observation.images.cam:\n    channel: {{topic: /cam, type: fake/Vector}}\n    align: {ALIGN}\nactions:"
+    _expect_error(tmp_path, BASE.replace("actions:", image, 1), "output geometry")
+
+
+def test_unencodable_action_type_rejected_at_load(tmp_path):
+    """fake/Text decodes but has no encoder; as an action it must fail at load, not first publish."""
+    text = BASE.replace(ACT_CHANNEL, "channel: {topic: /cmd, type: fake/Text}")
+    _expect_error(tmp_path, text, "No encoder registered for 'fake/Text'")
+
+
+# ---------------------------------------------------------------------------
 # Extended sections: dtype mandatory, never images
 # ---------------------------------------------------------------------------
 
@@ -547,6 +621,8 @@ def test_qos_anchor_alias_supported_and_not_shared(tmp_path):
     ("path", "match"),
     [
         pytest.param("nofunc", "Expected format", id="no-colon"),
+        pytest.param("'m:'", "Expected format", id="no-function"),
+        pytest.param("':f'", "Expected format", id="no-module"),
         pytest.param("no_such_module_xyz:f", "Cannot import", id="unimportable-module"),
         pytest.param("json:nope", "not found", id="missing-attribute"),
     ],
@@ -573,6 +649,16 @@ def test_malformed_apply_rejected(apply_yaml, match, tmp_path):
     _expect_error(tmp_path, BASE.replace(OBS_SELECT, f"    select: [a]\n    {apply_yaml}\nactions:", 1), match)
 
 
+def test_action_apply_with_serveable_operator_loads(tmp_path):
+    text = BASE + "    apply: [{clamp: {min: -1.0, max: 1.0}}]\n"
+    assert _load(tmp_path, text).actions[0].sources[0].apply == (("clamp", {"min": -1.0, "max": 1.0}),)
+
+
+def test_action_apply_with_forward_only_operator_rejected(tmp_path):
+    """An action's pipeline runs in the serve direction; resize has none."""
+    _expect_error(tmp_path, BASE + "    apply: [{resize: [2, 2]}]\n", "Operator 'resize'.*cannot be used on an action")
+
+
 # ---------------------------------------------------------------------------
 # The interface attests types, including on bare channels
 # ---------------------------------------------------------------------------
@@ -593,7 +679,7 @@ def test_malformed_apply_rejected(apply_yaml, match, tmp_path):
 def test_unknown_type_rejected_at_load(text, tmp_path):
     """Every channel, aligned or bare, gets its type checked by the interface,
     so a typo'd type fails at load, not at subscription time."""
-    _expect_error(tmp_path, text, "fake/Nope")
+    _expect_error(tmp_path, text, "Unknown message type 'fake/Nope'")
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +698,6 @@ def test_unknown_type_rejected_at_load(text, tmp_path):
         ("timeline: arrival}\n    select", "timeline: ' arrival'}\n    select", "timeline"),
         ("timeline: arrival}\n    select", "timeline: Arrival}\n    select", "Arrival"),
         (OBS_SELECT, "    select: [a]\n    kind: Continuous\nactions:", "kind"),
-        ("type: fake/Vector}", "type: fake/Vector, dtype: FLOAT64}", "dtype"),
         ("  observation.state:", "  1:", "frame key"),
         (OBS_SELECT, "    select: [a]\n    apply: [{1: null}]\nactions:", "operator name"),
     ],

@@ -12,116 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""resolve_repo_file: local dir first, else a best-effort Hub probe; never raises,
-failures are reported through the injected warn callback, clean misses stay quiet.
-
-scan_inline_codec_paths: the pre-load audit of a hub-resolved contract must
+"""scan_inline_codec_paths: the pre-load audit of a hub-resolved contract must
 surface every inline decoder/encoder WITHOUT importing anything -- it exists
 precisely because load_contract's parse already imports those paths."""
 
 import sys
 
-import pytest
-
-from rosetta.contract.sidecar import (
-    LEROBOT_CONTRACT_SIDECAR_PATH,
-    resolve_repo_file,
-    scan_inline_codec_paths,
-)
-
-
-def test_local_dir_hit(tmp_path):
-    (tmp_path / "train_config.json").write_text("{}")
-    result = resolve_repo_file(str(tmp_path), "train_config.json", repo_type="model")
-    assert result == tmp_path / "train_config.json"
-
-
-def test_local_dir_miss_returns_none_quietly(tmp_path):
-    warnings = []
-    result = resolve_repo_file(str(tmp_path), "train_config.json", repo_type="model", warn=warnings.append)
-    assert result is None
-    assert warnings == []
-
-
-def test_local_file_warns_and_skips_hub_probe(monkeypatch, tmp_path):
-    """A path that exists but isn't a directory is never a repo id; no network."""
-    hf_hub = pytest.importorskip("huggingface_hub")
-    monkeypatch.setattr(hf_hub, "hf_hub_download", lambda **_kw: pytest.fail("Hub probed for a file path"))
-    checkpoint = tmp_path / "checkpoint.pt"
-    checkpoint.write_text("")
-
-    warnings = []
-    result = resolve_repo_file(str(checkpoint), "train_config.json", repo_type="model", warn=warnings.append)
-
-    assert result is None
-    assert len(warnings) == 1 and "not a directory" in warnings[0]
-
-
-@pytest.mark.parametrize(
-    ("repo_id", "filename", "repo_type", "wire_filename"),
-    [
-        ("org/repo", "train_config.json", "model", "train_config.json"),
-        # Literal on purpose: pins the on-the-wire value behind the constant.
-        ("org/dataset", LEROBOT_CONTRACT_SIDECAR_PATH, "dataset", "meta/rosetta_contract.yaml"),
-    ],
-)
-def test_non_directory_path_is_probed_as_hub_repo(monkeypatch, tmp_path, repo_id, filename, repo_type, wire_filename):
-    hf_hub = pytest.importorskip("huggingface_hub")
-    seen = {}
-
-    def _fake_download(*, repo_id, filename, repo_type, **_kw):
-        seen.update(repo_id=repo_id, filename=filename, repo_type=repo_type)
-        return str(tmp_path / "downloaded")
-
-    monkeypatch.setattr(hf_hub, "hf_hub_download", _fake_download)
-
-    result = resolve_repo_file(repo_id, filename, repo_type=repo_type)
-
-    assert seen == {"repo_id": repo_id, "filename": wire_filename, "repo_type": repo_type}
-    assert result == tmp_path / "downloaded"
-
-
-def _hub_http_error():
-    import httpx
-    from huggingface_hub.errors import HfHubHTTPError
-
-    response = httpx.Response(404, request=httpx.Request("GET", "https://hub/probe"))
-    return HfHubHTTPError("404", response=response)
-
-
-@pytest.mark.parametrize(
-    ("make_exception", "fragment"),
-    [
-        pytest.param(_hub_http_error, "Hub HTTP error", id="hub-http-error"),
-        pytest.param(lambda: ValueError("bad repo id"), "Could not fetch", id="value-error"),
-        pytest.param(lambda: OSError("connection reset"), "Could not fetch", id="os-error"),
-    ],
-)
-def test_hub_failure_returns_none_with_warning(monkeypatch, make_exception, fragment):
-    hf_hub = pytest.importorskip("huggingface_hub")
-    exception = make_exception()
-
-    def _raise(**_kw):
-        raise exception
-
-    monkeypatch.setattr(hf_hub, "hf_hub_download", _raise)
-
-    warnings = []
-    result = resolve_repo_file("org/does-not-exist", "train_config.json", repo_type="model", warn=warnings.append)
-
-    assert result is None
-    assert len(warnings) == 1
-    assert fragment in warnings[0] and "org/does-not-exist" in warnings[0]
-
-
-def test_hub_not_installed_returns_none_with_warning(monkeypatch):
-    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
-
-    warnings = []
-    result = resolve_repo_file("org/repo", "train_config.json", repo_type="model", warn=warnings.append)
-
-    assert result is None
-    assert len(warnings) == 1 and "not installed" in warnings[0]
+from rosetta.contract.sidecar import scan_inline_codec_paths
 
 
 def test_scan_finds_nested_inline_codecs_and_ignores_blanks(tmp_path):

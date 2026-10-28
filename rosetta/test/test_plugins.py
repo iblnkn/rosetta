@@ -23,8 +23,6 @@ from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.operators import OPERATOR_ENTRY_POINT_GROUP, discover_operators
 from rosetta.frames.codecs import CODEC_ENTRY_POINT_GROUP, discover_codecs
 
-GROUP = "rosetta.test_plugins"
-
 
 class _EP:
     def __init__(self, name, load):
@@ -61,16 +59,16 @@ def test_discovery_loads_its_entry_point_group(entry_points, fake_interface, dis
 
 def test_plugins_load_once_per_process(entry_points):
     loaded = []
-    entry_points[GROUP] = [_EP("counter", lambda: loaded.append(1))]
-    plugins.load_entry_point_plugins(GROUP, "test")
-    plugins.load_entry_point_plugins(GROUP, "test")
+    entry_points[OPERATOR_ENTRY_POINT_GROUP] = [_EP("counter", lambda: loaded.append(1))]
+    discover_operators()
+    discover_operators()
     assert loaded == [1]
 
 
 def test_failed_load_names_the_plugin(entry_points):
-    entry_points[GROUP] = [_EP("bad", _fail)]
-    with pytest.raises(ContractValidationError, match="test plugin 'bad'.*boom"):
-        plugins.load_entry_point_plugins(GROUP, "test")
+    entry_points[OPERATOR_ENTRY_POINT_GROUP] = [_EP("bad", _fail)]
+    with pytest.raises(ContractValidationError, match="operator plugin 'bad'.*boom"):
+        discover_operators()
 
 
 def test_failed_load_is_latched(entry_points):
@@ -78,11 +76,11 @@ def test_failed_load_is_latched(entry_points):
     # could not recover: a plugin that registered something before failing would
     # hit the duplicate-registration guard on re-import and hide the real error.
     loaded = []
-    entry_points[GROUP] = [_EP("bad", _fail)]
+    entry_points[OPERATOR_ENTRY_POINT_GROUP] = [_EP("bad", _fail)]
     with pytest.raises(ContractValidationError) as first:
-        plugins.load_entry_point_plugins(GROUP, "test")
-    entry_points[GROUP] = [_EP("good", lambda: loaded.append(1))]
+        discover_operators()
+    entry_points[OPERATOR_ENTRY_POINT_GROUP] = [_EP("good", lambda: loaded.append(1))]
     with pytest.raises(ContractValidationError) as second:
-        plugins.load_entry_point_plugins(GROUP, "test")
+        discover_operators()
     assert second.value is first.value
     assert loaded == []

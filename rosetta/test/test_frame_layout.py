@@ -327,7 +327,7 @@ def test_mixed_role_shared_key_rejected():
         FrameLayout([obs_spec("foo", ["a"]), act_spec("foo", ["b"])])
 
 
-def test_key_layout_is_action():
+def test_role_comes_from_section_not_key_name():
     """Role comes from the spec's TYPE (which section declared it), never the
     key's spelling: an observation named 'action_history' is not an action."""
     layout = FrameLayout(
