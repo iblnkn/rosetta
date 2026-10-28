@@ -27,7 +27,7 @@ def _params(tmp_path, text):
 
 @pytest.mark.parametrize("key", ["policy_runner", "/policy_runner", "/**", "/**/policy_runner", "/robot/policy_runner"])
 def test_every_section_ros_applies_is_read(tmp_path, key):
-    assert _params(tmp_path, f"{key}:\n  ros__parameters:\n    policy_type: act\n") == {"policy_type": "act"}
+    assert _params(tmp_path, f"{key}:\n  ros__parameters:\n    policy_device: cuda\n") == {"policy_device": "cuda"}
 
 
 def test_the_more_specific_section_wins(tmp_path):

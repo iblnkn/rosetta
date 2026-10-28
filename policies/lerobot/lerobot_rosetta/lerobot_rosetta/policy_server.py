@@ -19,18 +19,21 @@ The stock server reloads the policy (from_pretrained + .to(device)) on every
 client handshake, and only ever loads on a handshake — so the first RunPolicy
 goal pays torch import, CUDA init, and the full weight load. This wrapper:
 
-- preloads the policy before binding the gRPC port when --policy-type,
+- preloads the policy before binding the gRPC port when
   --pretrained-name-or-path and --policy-device are given, so "port accepts
   connections" (what LeRobotPolicyRunner polls for) means "model loaded";
 - caches the loaded policy across handshakes, skipping the reload when the
-  requested (policy_type, pretrained_name_or_path, device) is unchanged.
+  requested (pretrained_name_or_path, device) is unchanged;
+- reads the policy type from the checkpoint's config.json and ignores the
+  policy_type the client sends, which LeRobot's protocol requires but the
+  checkpoint already records.
 
 Pre/post processors are still rebuilt on every handshake: they are cheap and
 depend on the client-sent rename_map.
 
 Usage:
     python -m lerobot_rosetta.policy_server --host=127.0.0.1 --port=8080 \
-        --policy-type=act --pretrained-name-or-path=user/repo --policy-device=cuda
+        --pretrained-name-or-path=user/repo --policy-device=cuda
 """
 
 import argparse
@@ -48,6 +51,7 @@ from lerobot.async_inference.constants import (
 )
 from lerobot.async_inference.helpers import RemotePolicyConfig
 from lerobot.async_inference.policy_server import PolicyServer
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.policies import get_policy_class, make_pre_post_processors
 from lerobot.transport import (
     services_pb2,  # type: ignore
@@ -62,14 +66,14 @@ class RosettaPolicyServer(PolicyServer):
 
     def __init__(self, config: PolicyServerConfig):
         super().__init__(config)
-        # (policy_type, pretrained_name_or_path, device) of the loaded policy.
-        self._loaded_key: tuple[str, str, str] | None = None
+        # (pretrained_name_or_path, device) of the loaded policy.
+        self._loaded_key: tuple[str, str] | None = None
 
-    def preload(self, policy_type: str, pretrained_name_or_path: str, device: str) -> None:
+    def preload(self, pretrained_name_or_path: str, device: str) -> None:
         """Load the policy ahead of any client (call before binding the port)."""
-        self._ensure_policy(policy_type, pretrained_name_or_path, device)
+        self._ensure_policy(pretrained_name_or_path, device)
 
-    def _ensure_policy(self, policy_type: str, pretrained_name_or_path: str, device: str) -> bool:
+    def _ensure_policy(self, pretrained_name_or_path: str, device: str) -> bool:
         """Load the policy iff it differs from what is loaded. Returns True on load.
 
         ``device`` is the client's request; this host resolves it and sets
@@ -79,13 +83,11 @@ class RosettaPolicyServer(PolicyServer):
         if self.device != device:
             self.logger.warning(f"Policy device '{device}' is unavailable on this host; using '{self.device}'")
         device = self.device
-        if policy_type not in SUPPORTED_POLICIES:
-            raise ValueError(f"Policy type {policy_type} not supported. Supported policies: {SUPPORTED_POLICIES}")
 
-        key = (policy_type, pretrained_name_or_path, device)
+        key = (pretrained_name_or_path, device)
         if self._loaded_key == key:
             self.logger.info(
-                f"Reusing loaded policy (type={policy_type}, path={pretrained_name_or_path}, device={device})"
+                f"Reusing loaded policy (type={self.policy_type}, path={pretrained_name_or_path}, device={device})"
             )
             return False
 
@@ -93,10 +95,17 @@ class RosettaPolicyServer(PolicyServer):
         # next identical request look cached.
         self._loaded_key = None
         start = time.perf_counter()
-        policy_class = get_policy_class(policy_type)
-        policy = policy_class.from_pretrained(pretrained_name_or_path)
+        config = PreTrainedConfig.from_pretrained(pretrained_name_or_path)
+        policy_type = config.type
+        if policy_type not in SUPPORTED_POLICIES:
+            raise ValueError(
+                f"Checkpoint {pretrained_name_or_path} is a '{policy_type}' policy, which LeRobot's async "
+                f"inference does not support. Supported policies: {SUPPORTED_POLICIES}"
+            )
+        policy = get_policy_class(policy_type).from_pretrained(pretrained_name_or_path, config=config)
         policy.to(device)
         self.policy = policy
+        self.policy_type = policy_type
         self._loaded_key = key
         self.logger.info(
             f"Policy loaded on {device} in {time.perf_counter() - start:.2f}s "
@@ -120,24 +129,20 @@ class RosettaPolicyServer(PolicyServer):
         if not isinstance(policy_specs, RemotePolicyConfig):
             raise TypeError(f"Policy specs must be a RemotePolicyConfig. Got {type(policy_specs)}")
 
+        # policy_specs.policy_type is ignored: LeRobot's client requires one,
+        # but the checkpoint records the real type and _ensure_policy reads it.
         self.logger.info(
             f"Receiving policy instructions from {client_id} | "
-            f"Policy type: {policy_specs.policy_type} | "
             f"Pretrained name or path: {policy_specs.pretrained_name_or_path} | "
             f"Actions per chunk: {policy_specs.actions_per_chunk} | "
             f"Device: {policy_specs.device}"
         )
 
-        self.policy_type = policy_specs.policy_type
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk
 
         start = time.perf_counter()
-        loaded = self._ensure_policy(
-            policy_specs.policy_type,
-            policy_specs.pretrained_name_or_path,
-            policy_specs.device,
-        )
+        loaded = self._ensure_policy(policy_specs.pretrained_name_or_path, policy_specs.device)
 
         # Processors are rebuilt every handshake: cheap, and rename_map comes
         # from the client.
@@ -168,7 +173,6 @@ def main():
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--inference-latency", type=float, default=DEFAULT_INFERENCE_LATENCY)
     parser.add_argument("--obs-queue-timeout", type=float, default=DEFAULT_OBS_QUEUE_TIMEOUT)
-    parser.add_argument("--policy-type", default="", help="Preload: policy architecture")
     parser.add_argument("--pretrained-name-or-path", default="", help="Preload: weights path/repo")
     parser.add_argument("--policy-device", default="", help="Preload: inference device")
     args = parser.parse_args()
@@ -182,13 +186,13 @@ def main():
     )
     policy_server = RosettaPolicyServer(config)
 
-    preload = (args.policy_type, args.pretrained_name_or_path, args.policy_device)
+    preload = (args.pretrained_name_or_path, args.policy_device)
     if all(preload):
         policy_server.logger.info("Preloading policy before binding port...")
         policy_server.preload(*preload)
     elif any(preload):
         policy_server.logger.warning(
-            "Preload needs --policy-type, --pretrained-name-or-path and --policy-device together; skipping preload."
+            "Preload needs --pretrained-name-or-path and --policy-device together; skipping preload."
         )
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))

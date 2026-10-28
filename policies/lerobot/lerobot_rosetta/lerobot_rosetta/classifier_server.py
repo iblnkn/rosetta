@@ -27,12 +27,12 @@ as the rest of the LeRobot backend.
 
 Usage:
     python -m lerobot_rosetta.classifier_server --host=127.0.0.1 --port=8081 \
-        [--policy-type=reward_classifier --pretrained-name-or-path=user/repo \
-         --policy-device=cuda]
+        [--pretrained-name-or-path=user/repo --policy-device=cuda]
 
 The optional preload flags load the model before the port is bound, so a
 socket-level readiness check implies the model is ready; later handshakes
-requesting the same (type, path, device) reuse the loaded model.
+requesting the same (path, device) reuse the loaded model. The model is
+always a reward_classifier; the policy_type a client sends is ignored.
 """
 
 import argparse
@@ -53,7 +53,6 @@ from lerobot.async_inference.helpers import (
     raw_observation_to_observation,
 )
 from lerobot.configs.types import FeatureType
-from lerobot.policies.factory import get_policy_class
 from lerobot.rewards.factory import get_reward_model_class
 from lerobot.transport import (
     services_pb2,  # type: ignore
@@ -73,8 +72,6 @@ OBS_QUEUE_TIMEOUT = 2.0
 # a whole video against a task instruction and have no per-step, image-only
 # inference method — they're offline dataset-labeling tools, not online
 # classifiers, so they don't fit this gRPC-per-observation server at all.
-# Anything else falls through to get_policy_class, for classifiers saved as a
-# plain pre-0.6.0 PreTrainedPolicy.
 REWARD_CLASSIFIER_TYPE = "reward_classifier"
 
 
@@ -95,8 +92,8 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         self.device = None
         self.lerobot_features = None
         self._image_size = None  # (H, W), from config input_features (fallback: kernel heuristic)
-        # (policy_type, pretrained_name_or_path, device) of the loaded model.
-        self._loaded_key: tuple[str, str, str] | None = None
+        # (pretrained_name_or_path, device) of the loaded model.
+        self._loaded_key: tuple[str, str] | None = None
 
     @property
     def running(self):
@@ -129,18 +126,14 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.lerobot_features = policy_specs.lerobot_features
 
-        self._ensure_classifier(
-            policy_specs.policy_type,
-            policy_specs.pretrained_name_or_path,
-            policy_specs.device,
-        )
+        self._ensure_classifier(policy_specs.pretrained_name_or_path, policy_specs.device)
         return services_pb2.Empty()
 
-    def preload(self, policy_type: str, pretrained_name_or_path: str, device: str) -> None:
+    def preload(self, pretrained_name_or_path: str, device: str) -> None:
         """Load the model ahead of any client (call before binding the port)."""
-        self._ensure_classifier(policy_type, pretrained_name_or_path, device)
+        self._ensure_classifier(pretrained_name_or_path, device)
 
-    def _ensure_classifier(self, policy_type: str, pretrained_name_or_path: str, device: str) -> bool:
+    def _ensure_classifier(self, pretrained_name_or_path: str, device: str) -> bool:
         """Load the model iff it differs from what is loaded. Returns True on load.
 
         ``device`` is the client's request; this host resolves it and sets
@@ -150,24 +143,18 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         if self.device != device:
             logger.warning(f"Classifier device '{device}' is unavailable on this host; using '{self.device}'")
         device = self.device
-        key = (policy_type, pretrained_name_or_path, device)
+        key = (pretrained_name_or_path, device)
         if self._loaded_key == key:
-            logger.info(
-                f"Reusing loaded classifier (type={policy_type}, path={pretrained_name_or_path}, device={device})"
-            )
+            logger.info(f"Reusing loaded classifier (path={pretrained_name_or_path}, device={device})")
             return False
 
         # Clear first: a failed load must not leave a stale key that makes the
         # next identical request look cached.
         self._loaded_key = None
-        logger.info(f"Loading classifier: type={policy_type}, path={pretrained_name_or_path}, device={device}")
+        logger.info(f"Loading classifier: path={pretrained_name_or_path}, device={device}")
 
         start = time.perf_counter()
-        if policy_type == REWARD_CLASSIFIER_TYPE:
-            policy_class = get_reward_model_class(policy_type)
-        else:
-            policy_class = get_policy_class(policy_type)
-        self.classifier = policy_class.from_pretrained(pretrained_name_or_path)
+        self.classifier = get_reward_model_class(REWARD_CLASSIFIER_TYPE).from_pretrained(pretrained_name_or_path)
         self.classifier.to(device)
         self.classifier.eval()
         self._image_size = self._detect_image_size()
@@ -331,21 +318,18 @@ def main():
     parser = argparse.ArgumentParser(description="Reward classifier gRPC server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--policy-type", default="", help="Preload: reward model type")
     parser.add_argument("--pretrained-name-or-path", default="", help="Preload: weights path/repo")
     parser.add_argument("--policy-device", default="", help="Preload: inference device")
     args = parser.parse_args()
 
     classifier_server = ClassifierServer()
 
-    preload = (args.policy_type, args.pretrained_name_or_path, args.policy_device)
+    preload = (args.pretrained_name_or_path, args.policy_device)
     if all(preload):
         logger.info("Preloading classifier before binding port...")
         classifier_server.preload(*preload)
     elif any(preload):
-        logger.warning(
-            "Preload needs --policy-type, --pretrained-name-or-path and --policy-device together; skipping preload."
-        )
+        logger.warning("Preload needs --pretrained-name-or-path and --policy-device together; skipping preload.")
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     services_pb2_grpc.add_AsyncInferenceServicer_to_server(classifier_server, server)

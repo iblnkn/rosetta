@@ -20,8 +20,7 @@ Add a `teleop` section to your contract (this package's
 ```bash
 ros2 launch rosetta_ros_hil hil_launch.py \
     contract_path:=robot_hil.yaml \
-    pretrained_name_or_path:=<checkpoint> \
-    policy_type:=act
+    pretrained_name_or_path:=<checkpoint>
 ```
 
 `hil_launch.py` includes `rosetta_ros`'s `policy_runner_launch.py` (in

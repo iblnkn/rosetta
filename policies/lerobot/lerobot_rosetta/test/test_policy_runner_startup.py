@@ -23,6 +23,7 @@ monkeypatched. The contract is the bundled so_101.yaml.
 import threading
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from ament_index_python.packages import get_package_share_directory
@@ -91,6 +92,20 @@ def spawned(monkeypatch, tmp_path):
     return procs
 
 
+@pytest.fixture(autouse=True)
+def checkpoint_types(monkeypatch):
+    """Checkpoint path -> the type its config.json records; a path not listed has no readable config."""
+    types = {"user/repo": "act"}
+
+    def from_pretrained(path):
+        if path not in types:
+            raise FileNotFoundError(f"config.json not found in {path}")
+        return SimpleNamespace(type=types[path])
+
+    monkeypatch.setattr(pr, "PreTrainedConfig", SimpleNamespace(from_pretrained=from_pretrained))
+    return types
+
+
 def _setup_runner(param_overrides=None):
     params = {"contract_path": str(CONTRACT), "is_classifier": False}
     params.update(param_overrides or {})
@@ -107,7 +122,6 @@ def test_setup_spawns_server_with_preload_args(spawned):
     assert len(spawned) == 1
     argv = spawned[0].argv
     assert "-m" in argv and "lerobot_rosetta.policy_server" in argv
-    assert "--policy-type=act" in argv
     assert "--pretrained-name-or-path=user/repo" in argv
     assert "--policy-device=cuda" in argv
 
@@ -120,7 +134,6 @@ def test_classifier_flag_picks_classifier_module(spawned):
 def test_empty_pretrained_spawns_without_preload(spawned):
     _runner, host = _setup_runner()  # pretrained_name_or_path defaults to ''
     argv = spawned[0].argv
-    assert not any(a.startswith("--policy-type") for a in argv)
     assert not any(a.startswith("--pretrained-name-or-path") for a in argv)
     assert any("load the model on the first goal" in w for w in host.logger.warnings)
 
@@ -174,6 +187,26 @@ def test_client_fps_is_contract_fps_unless_sim_time_lifts_it(spawned, use_sim_ti
     )
     config = runner._build_client_config(_robot_config(fps=30), task="t")
     assert config.fps == fps
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"pretrained_name_or_path": "user/repo"}, "act"),
+        ({"pretrained_name_or_path": "user/repo", "policy_type": "diffusion"}, "diffusion"),
+        ({"pretrained_name_or_path": "user/classifier", "is_classifier": True}, "reward_classifier"),
+    ],
+    ids=["from_checkpoint", "parameter_wins", "classifier"],
+)
+def test_client_config_carries_the_policy_type(spawned, overrides, expected):
+    runner, _host = _setup_runner(overrides)
+    assert runner._build_client_config(_robot_config(), task="t").policy_type == expected
+
+
+def test_unreadable_checkpoint_fails_setup_naming_policy_type(spawned):
+    # A checkpoint only on a remote policy server: the robot can't read its type.
+    with pytest.raises(RuntimeError, match="set policy_type"):
+        _setup_runner({"pretrained_name_or_path": "/gpu_host/only/pretrained_model"})
 
 
 def test_client_config_forwards_the_requested_device(spawned):

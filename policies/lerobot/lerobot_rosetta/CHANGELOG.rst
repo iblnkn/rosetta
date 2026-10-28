@@ -2,6 +2,18 @@
 Changelog for package lerobot_rosetta
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* ``policy_type`` defaults to empty, which reads the type from the
+  checkpoint's ``config.json`` the way LeRobot does
+  (``PreTrainedConfig.from_pretrained``), or uses ``reward_classifier`` with
+  ``is_classifier``. Set it only when the runner can't read the checkpoint.
+* Breaking: both servers drop ``--policy-type``. The policy server loads the
+  type the checkpoint records, so a checkpoint can't be loaded as the wrong
+  policy class, and the classifier server always loads a
+  ``reward_classifier``. The model cache is keyed on
+  ``(pretrained_name_or_path, device)``.
+
 0.2.0 (2026-07-24)
 ------------------
 * First release. The package was split out of ``rosetta`` so the core imports

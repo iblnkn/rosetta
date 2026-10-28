@@ -39,11 +39,13 @@ from typing import Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
+from lerobot.configs.policies import PreTrainedConfig
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import GATE_SLICE_SEC
+from lerobot_rosetta.classifier_server import REWARD_CLASSIFIER_TYPE
 from rosetta.contract.schema import Contract
 from rosetta.frames.protocols import FrameIO
 from rosetta.policies import RunnerFeedback, RunnerResult
@@ -64,6 +66,7 @@ class LeRobotPolicyRunner:
         self._server_process: Optional[subprocess.Popen] = None
         self._server_log = None  # file handle for the server subprocess output
         self._server_log_path: str = ""
+        self._policy_type: str = ""  # sent in LeRobot's handshake; see _resolve_policy_type
 
     # -------------------- Lifecycle --------------------
 
@@ -83,7 +86,13 @@ class LeRobotPolicyRunner:
         _p = host.declare
         _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
         _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
-        _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
+        _p(
+            "policy_type",
+            "",
+            "Policy architecture (act, diffusion, ...). Empty reads it from the checkpoint; "
+            "set it only when this machine can't read the checkpoint",
+            True,
+        )
         _p(
             "policy_device",
             "cuda",
@@ -104,6 +113,8 @@ class LeRobotPolicyRunner:
             "model preload; raise it if the first launch must download weights.",
             True,
         )
+
+        self._policy_type = self._resolve_policy_type()
 
         # Warm start: pay subprocess spawn + torch/CUDA init + model preload at
         # configure time so the first goal costs the same as any other. A
@@ -237,7 +248,7 @@ class LeRobotPolicyRunner:
         config_kwargs = {
             "robot": robot_config,
             "server_address": host.get("server_address"),
-            "policy_type": host.get("policy_type"),
+            "policy_type": self._policy_type,
             "pretrained_name_or_path": host.get("pretrained_name_or_path"),
             "policy_device": host.get("policy_device"),
             "task": task,
@@ -258,6 +269,28 @@ class LeRobotPolicyRunner:
 
         return RobotClientConfig(**config_kwargs)
 
+    def _resolve_policy_type(self) -> str:
+        """The policy type LeRobot's handshake carries: the parameter, else the checkpoint's own.
+
+        Read the way LeRobot reads it (PreTrainedConfig.from_pretrained). Empty
+        when there is no checkpoint yet; the run then fails on the empty path.
+        """
+        host = self._host
+        if host.get("policy_type"):
+            return host.get("policy_type")
+        if host.get("is_classifier"):
+            return REWARD_CLASSIFIER_TYPE
+        path = host.get("pretrained_name_or_path")
+        if not path:
+            return ""
+        try:
+            return PreTrainedConfig.from_pretrained(path).type
+        except Exception as e:
+            raise RuntimeError(
+                f"Could not read the policy type from checkpoint {path!r} ({e}). If the checkpoint is only "
+                "on the policy server's machine, set policy_type."
+            ) from e
+
     def _start_policy_server(self) -> None:
         """Launch the local policy server subprocess (idempotent while running)."""
         if self._server_process is not None and self._server_process.poll() is None:
@@ -276,7 +309,6 @@ class LeRobotPolicyRunner:
         pretrained = cfg.get("pretrained_name_or_path")
         if pretrained:
             cmd += [
-                f"--policy-type={cfg.get('policy_type')}",
                 f"--pretrained-name-or-path={pretrained}",
                 f"--policy-device={cfg.get('policy_device')}",
             ]

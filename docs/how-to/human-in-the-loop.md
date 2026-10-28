@@ -59,13 +59,12 @@ the message's `data` field, so declare rewards with a type like
 ```bash
 ros2 launch rosetta_ros_hil hil_launch.py \
     contract_path:=robot_hil.yaml \
-    pretrained_name_or_path:=<checkpoint> \
-    policy_type:=act
+    pretrained_name_or_path:=<checkpoint>
 ```
 
 `robot_hil.yaml` is your contract. It defaults to the package's
 `so_101_hil.yaml`. `<checkpoint>` is the trained policy, a local path or a
-Hugging Face Hub repo ID, and `policy_type` must match it. Run
+Hugging Face Hub repo ID. Run
 `ros2 launch rosetta_ros_hil hil_launch.py --show-args` for every argument.
 
 The launch file starts these nodes and configures and activates each:
@@ -106,7 +105,7 @@ To add the reward classifier, also pass:
 
 `<classifier>` is the trained reward classifier. The classifier uses
 `contract_path` unless you set `reward_classifier_contract_path`. Its params
-file sets `policy_type` to `reward_classifier` and `server_address` to
+file sets `server_address` to
 `127.0.0.1:8081`, next to the policy's `127.0.0.1:8080`.
 
 ## Run an episode

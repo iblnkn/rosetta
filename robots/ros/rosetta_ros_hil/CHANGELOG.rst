@@ -4,6 +4,8 @@ Changelog for package rosetta_ros_hil
 
 Forthcoming
 -----------
+* Breaking: ``hil_launch.py`` drops ``reward_classifier_policy_type``. The
+  classifier is always a ``reward_classifier``.
 * Renamed from ``rosetta_hil``: a ROS app built on ``rosetta_ros``, named like
   MoveIt's ``moveit_ros_*`` packages. ``ros2 launch rosetta_ros_hil hil_launch.py``.
 * Breaking: ``action_remap_from`` and ``reward_remap_from`` are gone. The policy

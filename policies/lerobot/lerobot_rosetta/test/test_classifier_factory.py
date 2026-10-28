@@ -130,13 +130,12 @@ def _patch_factories(monkeypatch):
         return factory
 
     monkeypatch.setattr(cs, "get_reward_model_class", _fake_factory("reward"))
-    monkeypatch.setattr(cs, "get_policy_class", _fake_factory("policy"))
     return loads
 
 
-def _handshake(server, policy_type="reward_classifier", path="user/repo", device="cpu"):
+def _handshake(server, path="user/repo", device="cpu"):
     spec = RemotePolicyConfig(
-        policy_type=policy_type,
+        policy_type="checkpoint",  # what the runner sends; the server ignores it
         pretrained_name_or_path=path,
         lerobot_features={},
         actions_per_chunk=1,
@@ -158,19 +157,19 @@ def test_identical_handshakes_load_once(monkeypatch):
 def test_preload_makes_handshake_a_cache_hit(monkeypatch):
     loads = _patch_factories(monkeypatch)
     server = cs.ClassifierServer()
-    server.preload("reward_classifier", "user/repo", "cpu")
+    server.preload("user/repo", "cpu")
     _handshake(server)
     assert loads == [("reward", "reward_classifier", "user/repo")]
     assert server.device == "cpu"
     assert server.classifier is not None
 
 
-def test_changed_key_reloads_and_non_reward_routes_to_policy(monkeypatch):
+def test_changed_path_reloads(monkeypatch):
     loads = _patch_factories(monkeypatch)
     server = cs.ClassifierServer()
     _handshake(server)
-    _handshake(server, policy_type="act", path="user/other")
+    _handshake(server, path="user/other")
     assert loads == [
         ("reward", "reward_classifier", "user/repo"),
-        ("policy", "act", "user/other"),
+        ("reward", "reward_classifier", "user/other"),
     ]
