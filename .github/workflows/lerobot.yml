@@ -42,6 +42,8 @@ jobs:
       # industrial_ci treats any unresolved key as fatal.
       ROSDEP_SKIP_KEYS: ament_python
       TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
+      # The ROS image has no git, which pip needs to install LeRobot main.
+      ADDITIONAL_DEBS: git
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       BEFORE_BUILD_TARGET_WORKSPACE: >-
         pip install --break-system-packages --ignore-installed '${{ matrix.spec }}' torch
