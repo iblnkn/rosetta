@@ -1,27 +1,42 @@
 # rosetta
 
-Rosetta's core: the contract loader, the frame pipeline, and the protocols and
-registries the two kinds of plugin package implement. Robot interfaces such as
-[`rosetta_ros`](../robots/ros/rosetta_ros) turn a robot's middleware into frames.
-Framework adapters such as `lerobot_rosetta` turn frames into datasets and
-policy actions. Core imports no ROS, so it installs and tests without it. It has no nodes:
-on ROS 2, install [`rosetta_ros`](../robots/ros/rosetta_ros), which brings
-this package with it.
+Rosetta's core: the contract loader, the frame pipeline, and the protocols
+and registries that robot interfaces and framework adapters implement. A
+robot interface such as [`rosetta_ros`](../robots/ros/rosetta_ros) turns a
+robot's middleware into frames. A framework adapter such as
+[`lerobot_rosetta`](../policies/lerobot/lerobot_rosetta) turns frames into
+datasets and policy actions. Both register through entry points, so core
+imports neither.
 
-The public modules are listed on the
-[Python API reference](https://iblnkn.github.io/rosetta/reference/python-api.html)
-page.
+Core imports no ROS. It needs Python 3.12 or newer, `numpy` and `pyyaml`,
+and installs and tests as a plain Python package. It has no nodes. Loading a
+contract needs the robot interface it names installed: `robot_interface: ros2`
+comes from `rosetta_ros`, which brings this package with it.
 
 ## Build
+
+In a ROS 2 workspace:
 
 ```bash
 colcon build --packages-up-to rosetta
 source install/setup.bash
 ```
 
+Without ROS, from the repository root:
+
+```bash
+pip install ./rosetta
+```
+
 ## Documentation
 
-Full Rosetta documentation: **https://iblnkn.github.io/rosetta/**
+- [Python API](https://iblnkn.github.io/rosetta/reference/python-api.html):
+  the public modules
+- [Contract](https://iblnkn.github.io/rosetta/reference/contract.html): the
+  contract schema
+- [Add a robot interface](https://iblnkn.github.io/rosetta/how-to/add-a-robot-interface.html)
+  and [Add a framework](https://iblnkn.github.io/rosetta/how-to/add-a-framework.html)
+- Full Rosetta documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)
 
 ## License
 

@@ -1,6 +1,6 @@
 # Install
 
-Three ways to get Rosetta. Pick by what you already have.
+Install Rosetta one of three ways. Pick by what you already have.
 
 | You have | Use |
 |---|---|
@@ -8,10 +8,8 @@ Three ways to get Rosetta. Pick by what you already have.
 | Nothing, and you have your own robot | [rosetta_ws](#rosetta_ws) |
 | A ROS 2 workspace already | [An existing workspace](#an-existing-workspace) |
 
-`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
-Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
-the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
-the first ROS release.
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). CI runs no other
+distro.
 
 ## The demos workspace
 
@@ -34,12 +32,16 @@ Zenoh router has to be up first, in its own terminal:
 pixi run zenoh-router
 ```
 
+The demos pin their own Rosetta commits in `pai.repos`. Those commits
+predate the `rosetta_ros` package these docs use, so commands such as
+`ros2 launch rosetta_ros ...` fail there until the demos update their pins.
+
 ## rosetta_ws
 
 [rosetta_ws](https://github.com/iblnkn/rosetta_ws) installs ROS 2 Jazzy
-through [RoboStack](https://robostack.github.io/), LeRobot 0.6.1 and every
-Rosetta package with [pixi](https://pixi.sh). Linux x86_64, Linux aarch64 and
-macOS arm64.
+through [RoboStack](https://robostack.github.io/), LeRobot 0.6.1, torch and
+every Rosetta package with [pixi](https://pixi.sh). It runs on Linux x86_64,
+Linux aarch64 and macOS arm64.
 
 ```bash
 git clone https://github.com/iblnkn/rosetta_ws.git && cd rosetta_ws
@@ -47,10 +49,13 @@ pixi run --frozen setup    # clone the packages, install the environment
 pixi run build             # colcon build into install/
 ```
 
-Use `--frozen` the first time, before LeRobot's checkout exists. After that,
-plain `pixi run` works. Run ROS commands inside `pixi shell`, or prefix them
-with `pixi run`. The workspace uses `rmw_zenoh_cpp`, so start the router in
-its own terminal:
+Use `--frozen` the first time. Without it, pixi checks the whole lockfile
+before LeRobot's checkout under `libs/` exists, and fails. After setup, plain
+`pixi run` works.
+
+Run ROS commands inside `pixi shell`, or prefix them with `pixi run`. The
+environment sets `RMW_IMPLEMENTATION=rmw_zenoh_cpp`, so start the Zenoh
+router in its own terminal and leave it running:
 
 ```bash
 pixi run start-zenoh
@@ -58,41 +63,51 @@ pixi run start-zenoh
 
 ## An existing workspace
 
-Import the packages listed in
-[`rosetta_ws/repos/src.repos`](https://github.com/iblnkn/rosetta_ws/blob/main/repos/src.repos)
-into your `src/`, then:
+1. Clone the repository into your workspace's `src/`, install the ROS
+   dependencies, and build `rosetta_ros` with what it depends on:
 
-```bash
-rosdep install --from-paths src --ignore-src -y --skip-keys ament_python
-colcon build --packages-up-to rosetta_ros
-```
+   ```bash
+   git clone https://github.com/iblnkn/rosetta.git src/rosetta
+   rosdep install --from-paths src --ignore-src -y --skip-keys ament_python
+   colcon build --packages-up-to rosetta_ros
+   source install/setup.bash
+   ```
 
-On ROS 2, `rosetta_ros` is the package to build and install: it has the nodes,
-launch files and `rosetta_port`, and brings `rosetta` and `rosetta_interfaces`
-with it. `rosetta` alone is the core library, with no nodes. Add
-`rosetta_ros_hil` for human-in-the-loop episodes, and the LeRobot packages for
-LeRobot.
+   `ament_python` has no rosdep key, so rosdep stops on it unless you skip
+   it. `rosetta_ros` has the nodes, launch files and `rosetta_port`, and
+   brings `rosetta` and `rosetta_interfaces` with it. To build everything,
+   including `rosetta_ros_hil` and the LeRobot packages, drop
+   `--packages-up-to rosetta_ros`.
 
-`rosetta` itself doesn't import a learning framework. For `rosetta_port`
-with the LeRobot writer, `policy_runner_node` and the LeRobot plugins, install
-into the same Python:
+2. For LeRobot, install it into the same Python that ROS uses. `rosetta_port`
+   with the LeRobot writer, `policy_runner_node` with the LeRobot runner, and
+   the LeRobot plugins all need it:
 
-```bash
-pip install "lerobot[dataset,async]<0.6.2" torch grpcio
-```
+   ```bash
+   pip install "lerobot[dataset,async]<0.6.2"
+   ```
 
-LeRobot 0.6.2 removes the async inference that the LeRobot policy runner is
-built on, so the version is capped until the runner moves to LeRobot's new
-inference engines. CI tests the newest release under the cap, and LeRobot's
-main branch as an early warning.
+   LeRobot 0.6.2 removes `lerobot.async_inference`, which the LeRobot policy
+   runner is built on, so the LeRobot packages require `lerobot<0.6.2`. CI
+   tests the newest release under that cap, and LeRobot's `main` branch as an
+   early warning. Add the `training` extra if you'll run `lerobot-train`.
 
-Add the `training` extra if you'll run `lerobot-train`.
+   Ubuntu 24.04 marks its system Python as externally managed, so pip there
+   stops with `error: externally-managed-environment`. Rosetta's CI passes
+   `--break-system-packages`, which installs into the system Python anyway.
 
-## Check
+## Check the install
+
+List the recorder's launch arguments, then load a bundled contract:
 
 ```bash
 ros2 launch rosetta_ros episode_recorder_launch.py --show-args
-python -c "from rosetta.contract.schema import load_contract; load_contract('$(ros2 pkg prefix rosetta_ros)/share/rosetta_ros/contracts/so_101.yaml'); print('OK')"
+python3 -c "from rosetta.contract.schema import load_contract; load_contract('$(ros2 pkg prefix rosetta_ros)/share/rosetta_ros/contracts/so_101.yaml'); print('OK')"
 ```
 
-The second command prints `OK`.
+The first command lists arguments from `params_file` to `activate`. The
+second prints `OK`.
+
+With `lerobot_rosetta` built, `ros2 run rosetta_ros rosetta_port --help`
+lists `lerobot` after `Installed:` under `--framework`. That list comes from
+the built adapters and does not check that LeRobot itself imports.
