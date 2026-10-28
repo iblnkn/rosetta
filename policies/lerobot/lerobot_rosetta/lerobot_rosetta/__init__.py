@@ -20,13 +20,8 @@ name 'lerobot'). Deliberately NOT named with a 'lerobot_robot_*'/
 'lerobot_teleoperator_*' prefix so LeRobot's register_third_party_plugins()
 does not import it; the LeRobot-discovered Robot plugin lives in
 lerobot_robot_rosetta.
+
+Import from the submodules. This module imports nothing, so the inference
+servers (``python -m lerobot_rosetta.policy_server``) load without ROS and can
+run on a GPU host that has none.
 """
-
-from .dataset_writer import LeRobotDatasetWriter, build_lerobot_features
-from .policy_runner import LeRobotPolicyRunner
-
-__all__ = [
-    "LeRobotDatasetWriter",
-    "LeRobotPolicyRunner",
-    "build_lerobot_features",
-]
