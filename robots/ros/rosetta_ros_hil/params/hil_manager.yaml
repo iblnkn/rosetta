@@ -1,0 +1,71 @@
+# hil_manager_node parameters.
+#
+# hil_launch.py includes rosetta's own launch files for the other nodes, each
+# with a params file from this directory layered over rosetta's defaults:
+#   robot_policy.yaml       the policy runner in namespace robot_policy
+#   reward_classifier.yaml  the classifier in namespace reward_classifier
+#   episode_recorder.yaml   the episode recorder
+# Pass your own with robot_policy_params_file:=..., and so on.
+
+hil_manager:
+  ros__parameters:
+    # Whether to use a reward classifier policy (requires separate contract + model).
+    # Off by default: most setups don't have a trained classifier yet, and
+    # forgetting to pass enable_reward_classifier:=false crashes the second
+    # policy_runner_node looking for a model path that doesn't exist.
+    enable_reward_classifier: false
+
+    # Whether to record episodes to a bag. Defaults true. When false, episode
+    # start/stop, labeling, and intervention all behave identically; only the
+    # bag write is skipped.
+    enable_recording: true
+
+    # Whether hil_manager owns the policy's lifecycle: send a RunPolicy goal
+    # at episode start, cancel it at episode end. False assumes a policy is
+    # already running (started some other way) and hil_manager just
+    # forwards/records/labels around it, and never sends or cancels a goal.
+    manage_policy_lifecycle: true
+
+    # Task prompt used whenever a goal, service call, or the start_episode
+    # teleop event leaves prompt empty (a button carries no text input).
+    default_prompt: ""
+
+    # Action names for child node action clients
+    # These must match the namespaced action names from the launch file
+    policy_action_name: "/robot_policy/run_policy"
+    reward_classifier_action_name: "/reward_classifier/run_policy"
+    recorder_action_name: "/record_episode"
+
+    # The robot policy publishes every contract action topic under this prefix
+    # (policy_runner_launch.py output_prefix), and the HIL manager forwards each
+    # to the real topic while the policy has control.
+    policy_remap_prefix: "/hil/policy"
+
+    # The same for the reward classifier's reward topics.
+    reward_remap_prefix: "/hil/reward"
+
+    # --- Environment reset (planned, not yet implemented) ---
+    # Between-episode reset for HIL-SERL workflows. This lived in the contract
+    # as a `reset:` section but was dead weight there (nothing consumed it);
+    # it is operational config for THIS node, so it will land here when the
+    # reset flow is built:
+    # reset_mode: "manual"            # manual | service | topic
+    # reset_service: "/environment/reset"
+    # reset_service_type: "std_srvs/srv/Trigger"
+    # reset_time_s: 5.0
+
+    # Reward values assigned when the human presses override buttons.
+    # human_reward_negative is a distinct negative sentinel, not 0.0 -- an
+    # explicit failure label must be distinguishable in the recorded reward
+    # stream from an episode nobody labeled (which stays at the neutral 0.0
+    # default), or you can't filter one from the other later.
+    human_reward_positive: 1.0
+    human_reward_negative: -1.0
+
+    # Rate at which to publish ManageEpisode feedback (Hz)
+    feedback_rate_hz: 30.0
+
+    # Default max episode duration in seconds
+    # (used when a ManageEpisode request does not specify max_duration_s)
+    # 0 (or negative) = run until stopped, no time limit
+    default_max_duration_s: 0.0

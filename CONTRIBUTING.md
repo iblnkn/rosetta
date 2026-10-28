@@ -11,3 +11,36 @@ be under the Apache 2 License, as dictated by that
    the terms of any separate license agreement you may have executed
    with Licensor regarding such Contributions.
 ~~~
+
+## Where an adapter lives
+
+Robot interfaces and framework adapters register through entry points, so
+Rosetta finds them the same way wherever they live.
+
+- **In this repository**, under `robots/<middleware>/` or
+  `policies/<framework>/`, when the adapter is maintained together with the
+  core: its CI runs on every core change, and core changes update it in the
+  same commit.
+- **In your own repository** for everything else: you choose the release
+  schedule and the dependencies, register the same entry points, and nothing
+  in Rosetta changes. Open a pull request adding it to the docs' Packages page
+  so people can find it.
+
+The how-to guides "Add a framework" and "Add a robot interface" cover both.
+
+## Supported ROS distros
+
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
+Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
+the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
+the first ROS release.
+
+## Releasing
+
+The ROS packages release through bloom, which releases every package in this
+repository at one version. The packages under `policies/` depend on libraries
+with no rosdep key (LeRobot, torch), so the ROS buildfarm can't build them:
+list them, one per line, in a `<distro>.ignored` file (e.g. `jazzy.ignored`)
+on the release repository's default branch. bloom assumes that branch is
+`master`; if yours is `main`, check that the file is honored before the first
+release. Those packages install with pip alongside a ROS 2 workspace instead.

@@ -1,0 +1,29 @@
+name: ros
+
+# industrial_ci builds and tests inside an official ROS Docker image; rosdep
+# resolves dependencies from each package.xml. TARGET_WORKSPACE builds only
+# this slice of the repository and the packages it depends on.
+on:
+  pull_request:
+    paths: [rosetta/**, robots/**, .github/workflows/ros.yml]
+  push:
+    branches: [main, dev]
+    paths: [rosetta/**, robots/**, .github/workflows/ros.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  industrial_ci:
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: jazzy
+      ROS_REPO: main
+      # ament_python has no rosdep key (it ships with base ROS), and
+      # industrial_ci treats any unresolved key as fatal.
+      ROSDEP_SKIP_KEYS: ament_python
+      TARGET_WORKSPACE: "rosetta robots/ros"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master

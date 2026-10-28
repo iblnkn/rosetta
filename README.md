@@ -40,11 +40,11 @@ Five steps. When you change the contract you redo steps 2 to 5. The bags
 from step 1 stay.
 
 ```bash
-ros2 launch rosetta episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
-$EDITOR robot.yaml                                                                # 2 define
-ros2 run rosetta rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
-lerobot-train --dataset.repo_id=my --policy.type=act                              # 4 train
-ros2 launch rosetta policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
+ros2 launch rosetta_ros episode_recorder_launch.py contract_path:=robot.yaml         # 1 record
+$EDITOR robot.yaml                                                                   # 2 define
+ros2 run rosetta_ros rosetta_port --raw-dir bags --contract robot.yaml --repo-id my  # 3 prepare
+lerobot-train --dataset.repo_id=my --policy.type=act                                 # 4 train
+ros2 launch rosetta_ros policy_runner_launch.py contract_path:=robot.yaml pretrained_name_or_path:=ckpt  # 5 deploy
 ```
 
 New here? [Install](https://iblnkn.github.io/rosetta/installation.html), then
@@ -53,13 +53,37 @@ follow
 
 ## Packages
 
+This repository holds Rosetta's core and every package maintained with it,
+organized by side. Rosetta sits between a robot and a policy, and each side
+is named after its endpoint: `robots/` holds robot interfaces, grouped by the
+middleware they adapt (ROS 2 today), and `policies/` holds framework adapters,
+grouped by the learning framework they adapt. Core's modules use the same
+names, `rosetta.robots` and `rosetta.policies`. The
+[design page](https://iblnkn.github.io/rosetta/explanation/design.html)
+explains the split.
+
 | Package | Purpose |
 |---------|---------|
-| `rosetta` (this repo) | Contract, frame pipeline, ROS 2 nodes, bag porter |
-| [`rosetta_interfaces`](https://github.com/iblnkn/rosetta_interfaces) | Action and service definitions |
-| [`lerobot_rosetta`](https://github.com/iblnkn/lerobot-rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
-| [`lerobot_robot_rosetta`](https://github.com/iblnkn/lerobot-robot-rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
-| [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/lerobot-teleoperator-rosetta) | LeRobot Teleoperator plugin (experimental) |
+| [`rosetta`](rosetta) | Core: contract, frame pipeline, and the plugin protocols for robot interfaces and framework adapters. No ROS. |
+| [`rosetta_ros`](robots/ros/rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder and policy runner nodes, bag porter, node toolkit |
+| [`rosetta_interfaces`](robots/ros/rosetta_interfaces) | Action, service and message definitions for every Rosetta ROS 2 node, HIL included |
+| [`rosetta_ros_hil`](robots/ros/rosetta_ros_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
+| [`lerobot_rosetta`](policies/lerobot/lerobot_rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
+| [`lerobot_robot_rosetta`](policies/lerobot/lerobot_robot_rosetta) | LeRobot Robot plugin, for LeRobot's own CLIs |
+| [`lerobot_teleoperator_rosetta`](policies/lerobot/lerobot_teleoperator_rosetta) | LeRobot Teleoperator plugin (experimental) |
+
+On ROS 2, install `rosetta_ros`: it has the nodes, launch files and
+`rosetta_port`, and brings `rosetta` and `rosetta_interfaces` with it.
+`rosetta` alone is the core library, with no nodes.
+
+`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
+Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
+the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
+the first ROS release.
+
+Adapters can also live in their own repositories: they register the same entry
+points, and nothing in this repository changes. [CONTRIBUTING.md](CONTRIBUTING.md)
+says which way to go.
 
 ## License
 

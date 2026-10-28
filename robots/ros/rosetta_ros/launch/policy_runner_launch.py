@@ -1,0 +1,190 @@
+# Copyright 2025 Isaac Blankenau
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+r"""
+Launch file for PolicyRunnerNode - runs LeRobot policy inference.
+
+This is a lifecycle node. By default, it auto-configures and auto-activates.
+Set configure:=false activate:=false for manual lifecycle control.
+
+Configuration is loaded from params/policy_runner.yaml (source of truth).
+Launch arguments override only deployment-specific settings (paths, server address, etc.).
+Algorithm/tuning parameters should be set in the YAML file.
+
+Usage:
+    # Launch with default params file
+    ros2 launch rosetta_ros policy_runner_launch.py
+
+    # Use custom params file
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        params_file:=/path/to/custom_params.yaml
+
+    # Override deployment-specific settings
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        contract_path:=/path/to/contract.yaml \\
+        pretrained_name_or_path:=/path/to/model \\
+        server_address:=192.168.1.100:8080
+
+    # Use the contract the checkpoint was trained with (omit contract_path)
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        pretrained_name_or_path:=/path/to/model
+
+    # Manual lifecycle control
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        configure:=false activate:=false
+
+    # Connect to remote server (don't launch local)
+    ros2 launch rosetta_ros policy_runner_launch.py \\
+        launch_local_server:=false
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import LifecycleNode
+
+from rosetta_ros.launch_utils import autostart_handlers, contract_output_remaps, typed_config, yaml_params
+
+DEFAULT_PARAMS = os.path.join(get_package_share_directory("rosetta_ros"), "params", "policy_runner.yaml")
+
+
+def launch_setup(context, *args, **kwargs):
+    """Build node with conditional parameter overrides."""
+    # Resolve launch configurations in context
+    params_file = LaunchConfiguration("params_file").perform(context)
+    contract_path = LaunchConfiguration("contract_path").perform(context)
+    pretrained_name_or_path = LaunchConfiguration("pretrained_name_or_path").perform(context)
+    policy_type = LaunchConfiguration("policy_type").perform(context)
+    policy_device = LaunchConfiguration("policy_device").perform(context)
+    server_address = LaunchConfiguration("server_address").perform(context)
+    launch_local_server = LaunchConfiguration("launch_local_server").perform(context)
+    use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
+    log_level = LaunchConfiguration("log_level").perform(context)
+    output_prefix = LaunchConfiguration("output_prefix").perform(context)
+
+    # YAML first; overrides carry only the non-empty launch args (empty =
+    # keep the params-file value). An empty contract_path everywhere makes the
+    # node fall back to the contract the checkpoint was trained with.
+    overrides = {}
+    if contract_path:
+        overrides["contract_path"] = contract_path
+    if pretrained_name_or_path:
+        overrides["pretrained_name_or_path"] = pretrained_name_or_path
+    if policy_type:
+        overrides["policy_type"] = policy_type
+    if policy_device:
+        overrides["policy_device"] = policy_device
+    if server_address:
+        overrides["server_address"] = server_address
+    if launch_local_server:
+        overrides["launch_local_server"] = typed_config(context, "launch_local_server", bool)
+    if use_sim_time:
+        overrides["use_sim_time"] = typed_config(context, "use_sim_time", bool)
+
+    policy_runner_node = LifecycleNode(
+        package="rosetta_ros",
+        executable="policy_runner_node",
+        name="policy_runner",
+        namespace="",
+        output="screen",
+        emulate_tty=True,
+        # Loaded as dicts, not a file path: a params file's top-level node key
+        # matches only the root-namespace node, so a path would be inert when
+        # this file is included under a namespace. params_file layers over the
+        # package defaults, so it only needs the keys it changes.
+        parameters=[yaml_params(DEFAULT_PARAMS, "policy_runner"), yaml_params(params_file, "policy_runner"), overrides],
+        remappings=contract_output_remaps(contract_path, output_prefix),
+        arguments=["--ros-args", "--log-level", log_level],
+    )
+
+    return [policy_runner_node, *autostart_handlers(policy_runner_node, context)]
+
+
+def generate_launch_description():
+    """Generate the launch description for the rosetta client node."""
+    # Declare launch arguments
+    # Only deployment-specific settings are exposed as launch args
+    # Algorithm/tuning parameters should be set in the params YAML file
+    launch_description = [
+        # Parameters file path - source of truth for tuning params
+        DeclareLaunchArgument(
+            "params_file",
+            default_value=DEFAULT_PARAMS,
+            description="Parameters YAML layered over the package defaults (keys under policy_runner)",
+        ),
+        # Deployment-specific paths
+        DeclareLaunchArgument(
+            "contract_path",
+            default_value="",  # Empty = params file value, else the checkpoint's contract
+            description="Path to robot contract YAML file (empty = params file value, else the checkpoint's contract)",
+        ),
+        DeclareLaunchArgument(
+            "pretrained_name_or_path",
+            default_value="",  # Empty = use value from params file
+            description="Path or HF repo ID of trained policy (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "policy_type",
+            default_value="",  # Empty = use value from params file
+            description="Policy architecture, must match the checkpoint (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "policy_device",
+            default_value="",  # Empty = use value from params file
+            description="Inference device, e.g. cuda, cuda:1, cpu (empty = use params file value)",
+        ),
+        # Server configuration
+        DeclareLaunchArgument(
+            "server_address",
+            default_value="",  # Empty = use value from params file
+            description="Policy server address host:port (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "launch_local_server",
+            default_value="",  # Empty = use value from params file
+            description="Launch local policy server (true/false, empty = use params file value)",
+        ),
+        # Runtime settings
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value="",  # Empty = use value from params file
+            description="Use simulated time from /clock topic (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "output_prefix",
+            default_value="",
+            description="Publish every contract action and reward topic under this prefix instead, "
+            "e.g. /hil/policy for a mux between the runner and the robot (empty = the contract's topics)",
+        ),
+        DeclareLaunchArgument(
+            "log_level",
+            default_value="info",
+            description="Logging level (debug, info, warn, error)",
+        ),
+        # Lifecycle control
+        DeclareLaunchArgument("configure", default_value="true", description="Auto-configure node on startup"),
+        DeclareLaunchArgument(
+            "activate",
+            default_value="true",
+            description="Auto-activate node after configure (requires configure:=true)",
+        ),
+    ]
+
+    # Use OpaqueFunction to build node with conditional parameter overrides
+    launch_description.append(OpaqueFunction(function=launch_setup))
+
+    return LaunchDescription(launch_description)

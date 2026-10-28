@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rosetta</name>
+  <version>0.2.0</version>
+  <description>Rosetta core: the contract, frames, and the protocols and registries that robot interfaces (rosetta_ros, ...) and framework adapters (lerobot_rosetta, ...) plug into. Imports no robot middleware.</description>
+  <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
