@@ -17,7 +17,6 @@
 Contract event names are open, so this plugin owns its vocabulary.
 """
 
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +25,7 @@ from lerobot.teleoperators.utils import TeleopEvents
 from lerobot_teleoperator_rosetta.rosetta_teleop import (
     DEFAULT_EVENTS,
     EVENT_NAME_TO_ENUMS,
-    _RosettaTeleopLifecycleNode,
+    merge_teleop_events,
 )
 
 SUCCESS, FAILURE, TERMINATE = TeleopEvents.SUCCESS, TeleopEvents.FAILURE, TeleopEvents.TERMINATE_EPISODE
@@ -38,11 +37,9 @@ def test_every_lerobot_event_but_rerecord_is_reachable_from_a_contract_name():
 
 
 def _apply(select, buttons, before=None):
-    """Run the node's events callback on a fake node holding ``before``; return the changed events."""
-    state = dict(DEFAULT_EVENTS) | (before or {})
-    node = SimpleNamespace(_events_lock=threading.Lock(), _events_state=state)
-    _RosettaTeleopLifecycleNode._on_events(node, SimpleNamespace(buttons=buttons), SimpleNamespace(select=select))
-    return {event: value for event, value in node._events_state.items() if value != DEFAULT_EVENTS[event]}
+    """Merge one Joy-like message into a state holding ``before``; return the changed events."""
+    state = merge_teleop_events(dict(DEFAULT_EVENTS) | (before or {}), SimpleNamespace(buttons=buttons), select)
+    return {event: value for event, value in state.items() if value != DEFAULT_EVENTS[event]}
 
 
 @pytest.mark.parametrize(

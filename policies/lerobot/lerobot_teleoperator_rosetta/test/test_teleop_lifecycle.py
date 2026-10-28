@@ -21,6 +21,7 @@ get_action(), see the contract's events, and disconnect cleanly enough to reconn
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 import rclpy
 from lerobot.teleoperators.utils import TeleopEvents
@@ -50,7 +51,7 @@ def teleop():
 def test_input_only_teleop_connects(teleop):
     teleop.connect()
     assert teleop.is_connected
-    assert not teleop._node.bridge._act_publishers  # genuinely input-only
+    assert teleop.feedback_features == {}  # genuinely input-only
 
 
 def test_connect_subscribes_to_the_contract_events(teleop, ros):
@@ -97,8 +98,9 @@ def test_get_action_returns_sampled_inputs(teleop, ros):
             action = teleop.get_action()
 
         assert action, "get_action() never returned data"
-        assert all(isinstance(v, float) for v in action.values())
-        assert len(action) == len(JOINTS)
+        # Each joint lands under its contract name, in order, after the contract's rad2deg.
+        assert list(action) == list(teleop.action_features)
+        assert list(action.values()) == pytest.approx(np.rad2deg(msg.position).tolist())
     finally:
         pub_node.destroy_node()
 
@@ -106,8 +108,7 @@ def test_get_action_returns_sampled_inputs(teleop, ros):
 def test_disconnect_clean_and_reconnectable(teleop):
     teleop.connect()
     teleop.disconnect()  # must not raise on the ACTIVE -> cleanup path
-    assert teleop._node is None
-    assert teleop._host._spin_thread is None
+    assert not teleop.is_connected
     # Full cycle: reconnect works.
     teleop.connect()
     assert teleop.is_connected

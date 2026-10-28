@@ -69,6 +69,32 @@ EVENT_NAME_TO_ENUMS: dict[str, tuple[TeleopEvents, ...]] = {
 DEFAULT_EVENTS: dict[TeleopEvents, bool] = dict.fromkeys(TeleopEvents, False)
 
 
+def merge_teleop_events(state: dict[TeleopEvents, bool], msg, select: dict[str, str]) -> dict[TeleopEvents, bool]:
+    """Return ``state`` updated by one events message.
+
+    Selectors resolve through :func:`resolve_indexed`, so Joy button/axis
+    indices (``buttons.0``) work, not only plain fields. An unmapped event
+    name is skipped. A missing or malformed field leaves that event at its
+    last value instead of killing the subscription.
+
+    Several contract events may assert the same lerobot event (``success``
+    and ``end_success`` both assert SUCCESS), so each touched lerobot event
+    gets the OR of its sources in this message.
+    """
+    touched: dict[TeleopEvents, bool] = {}
+    for event_name, selector in select.items():
+        enums = EVENT_NAME_TO_ENUMS.get(event_name)
+        if not enums:
+            continue
+        try:
+            value = bool(resolve_indexed(msg, selector))
+        except (AttributeError, IndexError, ValueError):
+            continue
+        for enum in enums:
+            touched[enum] = touched.get(enum, False) or value
+    return state | touched
+
+
 class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
     """BridgeLifecycleNode plus the teleop events subscription.
 
@@ -124,30 +150,9 @@ class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
     # -------------------- teleop surface --------------------
 
     def _on_events(self, msg, spec) -> None:
-        """Update event state from one events message. Runs on the spin thread.
-
-        Selectors resolve through :func:`resolve_indexed`, so Joy button/axis
-        indices (``buttons.0``) work, not only plain fields. An unmapped event
-        name is skipped. A missing or malformed field leaves that event at its
-        last value instead of killing the subscription.
-
-        Several contract events may assert the same lerobot event (``success``
-        and ``end_success`` both assert SUCCESS), so each touched lerobot event
-        gets the OR of its sources in this message.
-        """
+        """Update event state from one events message. Runs on the spin thread."""
         with self._events_lock:
-            touched: dict[TeleopEvents, bool] = {}
-            for event_name, selector in spec.select.items():
-                enums = EVENT_NAME_TO_ENUMS.get(event_name)
-                if not enums:
-                    continue
-                try:
-                    value = bool(resolve_indexed(msg, selector))
-                except (AttributeError, IndexError, ValueError):
-                    continue
-                for enum in enums:
-                    touched[enum] = touched.get(enum, False) or value
-            self._events_state.update(touched)
+            self._events_state = merge_teleop_events(self._events_state, msg, spec.select)
 
     def sample_action(self) -> dict[str, Any]:
         """Flatten per-spec input samples to {namespaced_name: float}.

@@ -25,7 +25,8 @@ must reject it, naming the keys the live stack would lump. A contract that
 gates without being listed fails here, as does any contract or lerobot upgrade
 that re-introduces silent lumping.
 
-The gate tests below pin what ensure_live_observation_layout rejects.
+lerobot_robot_rosetta/test/test_live_layout_gate.py pins what
+ensure_live_observation_layout rejects.
 """
 
 from pathlib import Path
@@ -37,8 +38,8 @@ from lerobot.utils.feature_utils import hw_to_dataset_features
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
 from lerobot_rosetta.dataset_writer import build_lerobot_features
-from rosetta.contract.schema import Align, Channel, Source, load_contract
-from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec, iter_action_specs, iter_observation_specs
+from rosetta.contract.schema import load_contract
+from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
@@ -92,58 +93,3 @@ def test_live_features_match_offline_or_gate_fires(contract_path):
             assert list(live_f["names"]) == list(off_f["names"]), (
                 f"{key}: live names order {live_f['names']} != offline {off_f['names']}"
             )
-
-
-# The negative cases below build specs directly (no YAML needed).
-def _obs(key, names, topic="/t"):
-    return ObservationStreamSpec(
-        key=key,
-        names=list(names),
-        fps=30,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        is_image=False,
-        image_resize=None,
-        dtype="float64",
-    )
-
-
-def _act(key, names, topic="/cmd"):
-    return ActionStreamSpec(
-        key=key,
-        names=list(names),
-        fps=30,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        dtype="float64",
-    )
-
-
-def test_gate_fires_on_second_numeric_observation_key():
-    specs = [
-        _obs("observation.state", ["a", "b"]),
-        _obs("observation.environment_state", ["e"], topic="/env"),
-    ]
-    with pytest.raises(ValueError, match="observation.environment_state"):
-        ensure_live_observation_layout(specs, [_act("action", ["x"])])
-
-
-def test_gate_fires_on_second_action_key():
-    with pytest.raises(ValueError, match="action.gripper"):
-        ensure_live_observation_layout(
-            [_obs("observation.state", ["a"])],
-            [_act("action", ["x"]), _act("action.gripper", ["g"], topic="/grip")],
-        )
-
-
-def test_gate_passes_multi_topic_single_key():
-    # Multi-topic aggregation under ONE key is the supported live pattern.
-    specs = [
-        _obs("observation.state", ["a", "b"], topic="/arm"),
-        _obs("observation.state", ["g"], topic="/gripper"),
-    ]
-    ensure_live_observation_layout(specs, [_act("action", ["x"])])

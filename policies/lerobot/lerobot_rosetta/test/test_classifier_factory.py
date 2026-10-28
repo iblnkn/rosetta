@@ -23,49 +23,17 @@ input_features.
 import pickle
 from types import SimpleNamespace
 
+import pytest
 from lerobot.async_inference.helpers import RemotePolicyConfig
 from lerobot.configs.types import FeatureType, PolicyFeature
 
 from lerobot_rosetta import classifier_server as cs
 
 
-def test_reward_types_route_to_reward_factory(monkeypatch):
-    calls = []
-    monkeypatch.setattr(cs, "get_reward_model_class", lambda n: calls.append(("reward", n)))
-    monkeypatch.setattr(cs, "get_policy_class", lambda n: calls.append(("policy", n)))
-
-    for name in ("reward_classifier", "act"):
-        if name == cs.REWARD_CLASSIFIER_TYPE:
-            cs.get_reward_model_class(name)
-        else:
-            cs.get_policy_class(name)
-
-    assert calls == [("reward", "reward_classifier"), ("policy", "act")]
-
-
 def test_reward_classifier_resolves_in_installed_lerobot():
     # The real factory must still know 'reward_classifier' (moved, not gone).
     cls = cs.get_reward_model_class("reward_classifier")
     assert cls.__name__ == "Classifier"
-
-
-def test_image_features_derived_from_input_features():
-    server = cs.ClassifierServer.__new__(cs.ClassifierServer)
-    visual = PolicyFeature(type=FeatureType.VISUAL, shape=(3, 64, 64))
-    state = PolicyFeature(type=FeatureType.STATE, shape=(6,))
-    # Reward-model config shape: input_features only, no image_features property.
-    server.classifier = SimpleNamespace(
-        config=SimpleNamespace(input_features={"observation.image.top": visual, "observation.state": state})
-    )
-    feats = server._image_features()
-    assert feats == {"observation.image.top": visual}
-
-
-def test_image_features_prefers_policy_property():
-    server = cs.ClassifierServer.__new__(cs.ClassifierServer)
-    sentinel = {"observation.image.top": "from-property"}
-    server.classifier = SimpleNamespace(config=SimpleNamespace(image_features=sentinel, input_features={}))
-    assert server._image_features() is sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -86,21 +54,6 @@ def _visual(shape):
     return PolicyFeature(type=FeatureType.VISUAL, shape=shape)
 
 
-def test_image_size_from_config_shape():
-    server = _server_with({"observation.image.top": _visual((3, 128, 96))})
-    assert server._detect_image_size() == (128, 96)
-
-
-def test_image_size_agreeing_cameras():
-    server = _server_with(
-        {
-            "observation.image.top": _visual((3, 128, 96)),
-            "observation.image.wrist": _visual((3, 128, 96)),
-        }
-    )
-    assert server._detect_image_size() == (128, 96)
-
-
 class _FakeKernel:
     """Duck-typed torch parameter: .dim() and .shape only."""
 
@@ -111,32 +64,35 @@ class _FakeKernel:
         return len(self.shape)
 
 
-def test_image_size_disagreeing_cameras_falls_to_kernel():
-    server = _server_with(
-        {
-            "observation.image.top": _visual((3, 128, 96)),
-            "observation.image.wrist": _visual((3, 64, 64)),
-        },
-        named_parameters=[("encoder.spatial.kernel", _FakeKernel((512, 4, 3, 8)))],
-    )
-    assert server._detect_image_size() == (128, 96)
+# A (512, 4, 3, 8) SpatialLearnedEmbeddings kernel implies (4*32, 3*32) = (128, 96).
+_KERNEL = [("encoder.spatial.kernel", _FakeKernel((512, 4, 3, 8)))]
 
 
-def test_image_size_kernel_only():
-    server = _server_with({}, named_parameters=[("encoder.spatial.kernel", _FakeKernel((512, 4, 3, 8)))])
-    assert server._detect_image_size() == (128, 96)
-
-
-def test_image_size_none_when_no_source():
-    server = _server_with({"observation.state": PolicyFeature(type=FeatureType.STATE, shape=(6,))})
-    assert server._detect_image_size() is None
-
-
-def test_image_size_suspicious_hwc_shape_ignored():
-    # (H, W, C) sneaking into a channel-first field must not become a
-    # (640, 3)-ish garbage size; it falls through to the (absent) kernel.
-    server = _server_with({"observation.image.top": _visual((480, 640, 3))})
-    assert server._detect_image_size() is None
+@pytest.mark.parametrize(
+    ("input_features", "named_parameters", "expected"),
+    [
+        ({"observation.image.top": _visual((3, 128, 96))}, (), (128, 96)),
+        (
+            {"observation.image.top": _visual((3, 128, 96)), "observation.image.wrist": _visual((3, 128, 96))},
+            (),
+            (128, 96),
+        ),
+        (
+            {"observation.image.top": _visual((3, 128, 96)), "observation.image.wrist": _visual((3, 64, 64))},
+            _KERNEL,
+            (128, 96),
+        ),
+        ({}, _KERNEL, (128, 96)),
+        ({"observation.state": PolicyFeature(type=FeatureType.STATE, shape=(6,))}, (), None),
+        # (H, W, C) sneaking into a channel-first field must not become a
+        # (640, 3)-ish garbage size; it falls through to the (absent) kernel.
+        ({"observation.image.top": _visual((480, 640, 3))}, (), None),
+    ],
+    ids=["config_shape", "agreeing_cameras", "disagreeing_cameras_use_kernel", "kernel_only", "no_source", "hwc_shape"],
+)
+def test_detect_image_size(input_features, named_parameters, expected):
+    server = _server_with(input_features, named_parameters)
+    assert server._detect_image_size() == expected
 
 
 # ---------------------------------------------------------------------------

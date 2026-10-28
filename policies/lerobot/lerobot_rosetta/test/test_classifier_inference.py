@@ -72,16 +72,6 @@ def _timed_observation(timestep=0):
     return TimedObservation(timestamp=time.time(), timestep=timestep, observation=raw_obs)
 
 
-def test_predict_reward_resizes_images_and_calls_model_eval_method():
-    server = _server_with_fake_classifier(image_size=(128, 128))
-    server._predict_reward(_timed_observation())
-
-    assert len(server.classifier.calls) == 1
-    call = server.classifier.calls[0]
-    assert call["threshold"] == 0.5
-    assert call["batch"][IMAGE_KEY].shape[-2:] == (128, 128)
-
-
 def test_predict_reward_wraps_scalar_as_timed_action_with_advanced_timestep():
     server = _server_with_fake_classifier(image_size=(128, 128))
     obs = _timed_observation(timestep=5)

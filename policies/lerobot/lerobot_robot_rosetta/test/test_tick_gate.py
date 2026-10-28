@@ -16,10 +16,10 @@
 
 Pure logic tests: a fake clock stands in for the node clock and the module's
 time.sleep is patched to advance it, so nothing here actually sleeps and every
-release point is deterministic.
+release point is deterministic. Pacing through the adapter (first call, one
+period, reset, stop) is covered in test_adapter.py.
 """
 
-import threading
 from types import SimpleNamespace
 
 import pytest
@@ -46,61 +46,31 @@ def _patch_sleep(monkeypatch, clock, step_ns):
     def _sleep(sec):
         assert sec == GATE_SLICE_SEC
         calls.append(sec)
+        assert len(calls) < 1000, "gate never released"
         clock.t += step_ns
 
     monkeypatch.setattr(adapter.time, "sleep", _sleep)
     return calls
 
 
-def test_no_clock_is_passthrough():
-    gate = _TickGate(None, PERIOD_NS)
-    gate.wait()
-    assert gate._last_ns is None
+@pytest.mark.parametrize(
+    "clock",
+    [
+        None,
+        _FakeClock(active=False, t=500),
+        # e.g. a plain clock double, or a non-ROSClock: getattr defaults to False
+        SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
+    ],
+    ids=["no_clock", "wall_clock", "clock_without_ros_time_attr"],
+)
+def test_gate_is_passthrough_without_ros_time(monkeypatch, clock):
+    def _sleep(sec):
+        raise AssertionError("a passthrough gate slept")
 
-
-def test_wall_clock_is_passthrough():
-    gate = _TickGate(_FakeClock(active=False, t=500), PERIOD_NS)
-    gate.wait()
-    gate.wait()
-    assert gate._last_ns is None
-
-
-def test_clock_without_ros_time_attr_is_passthrough():
-    # e.g. a plain clock double, or a non-ROSClock: getattr defaults to False
-    clock = SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0))
+    monkeypatch.setattr(adapter.time, "sleep", _sleep)
     gate = _TickGate(clock, PERIOD_NS)
     gate.wait()
-    assert gate._last_ns is None
-
-
-def test_first_gated_call_releases_immediately(monkeypatch):
-    clock = _FakeClock(t=500)
-    calls = _patch_sleep(monkeypatch, clock, step_ns=10)
-    gate = _TickGate(clock, PERIOD_NS)
-    gate.wait()
-    assert calls == []
-    assert gate._last_ns == 500
-
-
-@pytest.mark.parametrize("step_ns", [10, 30, 250])  # slow, moderate, fast sim
-def test_blocks_until_one_period_of_sim_time(monkeypatch, step_ns):
-    clock = _FakeClock(t=0)
-    calls = _patch_sleep(monkeypatch, clock, step_ns)
-    gate = _TickGate(clock, PERIOD_NS)
-    gate.wait()  # anchor at 0
-    gate.wait()  # must block until t >= 100
-    assert len(calls) > 0
-    assert clock.t >= PERIOD_NS
-
-
-def test_stop_event_releases_without_advancing_anchor():
-    clock = _FakeClock(t=0)  # frozen: a paused sim
-    stop = threading.Event()
-    stop.set()
-    gate = _TickGate(clock, PERIOD_NS, stop)
-    gate.wait()  # anchor at 0
-    gate.wait()  # would block forever without the stop escape
-    assert gate._last_ns == 0
+    gate.wait()  # a gated second call would sleep: no time has passed
 
 
 def test_stall_reanchors_without_burst(monkeypatch):
@@ -111,22 +81,23 @@ def test_stall_reanchors_without_burst(monkeypatch):
     clock.t = 1000  # sim stalled (or paused) for 10 periods
     gate.wait()
     assert calls == []  # released immediately...
-    assert gate._last_ns == 1000  # ...and re-anchored: no catch-up burst
-    gate.wait()  # next tick costs a full period again
-    assert len(calls) > 0
-    assert clock.t >= 1000 + PERIOD_NS
+    gate.wait()  # ...and the next tick costs a full period again: no catch-up burst
+    assert 1000 + PERIOD_NS <= clock.t < 1000 + PERIOD_NS + 30
 
 
 def test_on_time_cadence_is_exact(monkeypatch):
-    # Slice overshoot must not accumulate: anchors land on exact multiples of
-    # the period even though each release overshoots by up to one slice-step.
+    # Slice overshoot must not accumulate: releases stay on the period grid
+    # even though each release overshoots by up to one slice-step.
     clock = _FakeClock(t=0)
     _patch_sleep(monkeypatch, clock, step_ns=30)
     gate = _TickGate(clock, PERIOD_NS)
     gate.wait()  # anchor at 0
-    for expected_anchor in (100, 200, 300):
+    releases = []
+    for _ in range(3):
         gate.wait()
-        assert gate._last_ns == expected_anchor
+        releases.append(clock.t)
+    # Anchors 100, 200, 300; each release is the first 30ns slice at or past one.
+    assert releases == [120, 210, 300]
 
 
 def test_backwards_jump_reanchors(monkeypatch):
@@ -137,16 +108,6 @@ def test_backwards_jump_reanchors(monkeypatch):
     gate.wait()  # anchor at 1000
     clock.t = 50
     gate.wait()
-    assert calls == []
-    assert gate._last_ns == 50
-
-
-def test_reset_clears_anchor(monkeypatch):
-    clock = _FakeClock(t=500)
-    calls = _patch_sleep(monkeypatch, clock, step_ns=30)
-    gate = _TickGate(clock, PERIOD_NS)
+    assert calls == []  # released immediately, re-anchored at 50
     gate.wait()
-    gate.reset()
-    gate.wait()  # first call again: immediate
-    assert calls == []
-    assert gate._last_ns == 500
+    assert 50 + PERIOD_NS <= clock.t < 50 + PERIOD_NS + 30

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from lerobot_rosetta.dataset_writer import LeRobotDatasetWriter
 from rosetta.contract.schema import load_contract
@@ -121,12 +122,11 @@ def test_discarded_episode_does_not_leak(contract_path: Path, ds_root: Path):
 
 def test_push_to_hub_private_by_default(contract_path: Path, monkeypatch):
     """Publishing a dataset publicly must be an explicit choice."""
+    pushed = {}
+    monkeypatch.setattr(LeRobotDataset, "push_to_hub", lambda _self, **kw: pushed.update(kw))
     writer = _open_writer(contract_path, push_to_hub=True)
     writer.add_frame(_frame(0))
     writer.save_episode()
-
-    pushed = {}
-    monkeypatch.setattr(type(writer._ds), "push_to_hub", lambda _self, **kw: pushed.update(kw))
     writer.finalize()
     assert pushed["private"] is True
 

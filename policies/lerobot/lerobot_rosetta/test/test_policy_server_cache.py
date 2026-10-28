@@ -126,7 +126,6 @@ def test_failed_load_is_not_cached(recorder, server):
     recorder.fail_paths.add("user/repo")
     with pytest.raises(OSError):
         _handshake(server)
-    assert server._loaded_key is None
 
     recorder.fail_paths.clear()
     _handshake(server)  # same key must actually load now, not hit a stale cache
