@@ -40,12 +40,6 @@ An adapter can live in its own repository and register the same entry points;
 nothing in Rosetta changes. [Add a framework](../how-to/add-a-framework.md)
 and [Add a robot interface](../how-to/add-a-robot-interface.md) cover both.
 
-| Package | Contains |
-|---|---|
-| `starvla_rosetta` | The starVLA adapter: a dataset writer and a websocket policy runner. Not yet public. |
-| `vla_foundry_rosetta` | The vla_foundry adapter: a dataset writer and an in-process policy runner. Not yet public. |
-| `rerun_rosetta` | A Rerun dataset backend: trains directly from `.rrd` recordings on a Rerun catalog server. Not yet public. |
-
 ## Entry-point groups
 
 | Group | Registers | Read by |
