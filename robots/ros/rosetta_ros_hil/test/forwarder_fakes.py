@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""A node and a control switch that let a CommandForwarder run without rclpy spinning."""
+"""A node, publisher and control switch that let a CommandForwarder run without rclpy spinning."""
 
 from collections import defaultdict
 from pathlib import Path
@@ -28,6 +28,19 @@ SO_101_HIL = Path(__file__).resolve().parent.parent / "contracts" / "so_101_hil.
 STAMP_NS = 1_500_000_123
 
 
+class FakePublisher:
+    """Collects what is published; like rclpy's, raises TypeError on a message of another type."""
+
+    def __init__(self, msg_cls, published=None):
+        self.msg_cls = msg_cls
+        self.published = [] if published is None else published
+
+    def publish(self, msg):
+        if not isinstance(msg, self.msg_cls):
+            raise TypeError(f"Expected {self.msg_cls}, got {type(msg)}")
+        self.published.append(msg)
+
+
 class FakeNode:
     """Records publishers and subscription callbacks by topic; the clock reads STAMP_NS."""
 
@@ -37,7 +50,7 @@ class FakeNode:
         self.destroyed = 0
 
     def create_publisher(self, msg_cls, topic, qos):
-        return SimpleNamespace(publish=self.published[topic].append)
+        return FakePublisher(msg_cls, self.published[topic])
 
     def create_subscription(self, msg_cls, topic, callback, qos, callback_group=None):
         self.callbacks[topic].append(callback)

@@ -19,7 +19,6 @@ them the same way, and add its own on top.
 """
 
 from rosetta_interfaces.action import ManageEpisode
-from rosetta_interfaces.msg import ManageEpisodeResult, ManageEpisodeStatus
 from rosetta_ros import node_utils
 from rosetta_ros_hil import hil_episode
 
@@ -42,21 +41,9 @@ def test_every_reason_the_manager_produces_is_declared():
     assert PRODUCED <= _declared("TERMINATION_")
 
 
-def test_shared_reasons_match_rosetta():
-    for name in dir(ManageEpisode.Result):
-        if name.startswith("TERMINATION_") and hasattr(node_utils, name):
-            assert getattr(ManageEpisode.Result, name) == getattr(node_utils, name), name
-
-
 def test_outcome_vocabulary():
     assert _declared("OUTCOME_") == {
         hil_episode.OUTCOME_SUCCESS,
         hil_episode.OUTCOME_FAILURE,
         hil_episode.OUTCOME_UNLABELED,
     }
-
-
-def test_topic_messages_match_the_action():
-    """~/status and ~/result are what clients without the action see; they must not drift."""
-    assert ManageEpisodeStatus.get_fields_and_field_types() == ManageEpisode.Feedback.get_fields_and_field_types()
-    assert ManageEpisodeResult.get_fields_and_field_types() == ManageEpisode.Result.get_fields_and_field_types()

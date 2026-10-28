@@ -66,7 +66,8 @@ ros2 action send_goal /manage_episode \
 
 Hold the `is_intervention` button to take over and release it to hand back.
 Intervention also works between episodes, so you can drive the robot to a
-start pose; every episode starts with the policy in control.
+start pose. An episode starts with the policy in control, unless you are still
+holding `is_intervention`.
 Press `end_success` or `end_failure` to finish. The services do the same:
 
 ```bash

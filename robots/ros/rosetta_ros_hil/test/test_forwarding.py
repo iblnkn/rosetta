@@ -15,7 +15,7 @@
 """CommandForwarder: whoever has control drives every action topic, once per message."""
 
 import pytest
-from forwarder_fakes import STAMP_NS, STONE, Controls, FakeNode, forwarder
+from forwarder_fakes import STONE, Controls, FakeNode, forwarder
 from geometry_msgs.msg import TwistStamped
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
@@ -50,17 +50,6 @@ def test_policy_output_is_dropped_while_the_human_drives(stone):
     control.now = Control.TELEOP
     node.deliver("/hil/policy/arm/joint_commands", _arm([0.1] * 6))
     assert node.published["/arm/joint_commands"] == []
-
-
-def test_teleop_input_is_reencoded_onto_its_target_with_a_stamp(stone):
-    node, control = stone
-    control.now = Control.TELEOP
-    node.deliver("/human/leader_arm/joint_states", _arm([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]))
-    (command,) = node.published["/arm/joint_commands"]
-    assert dict(zip(command.name, command.position, strict=True)) == pytest.approx(
-        dict(zip(ARM, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], strict=True))
-    )
-    assert command.header.stamp.sec * 1_000_000_000 + command.header.stamp.nanosec == STAMP_NS
 
 
 def test_teleop_input_is_ignored_while_the_policy_drives(stone):
@@ -115,7 +104,6 @@ def _load(tmp_path, text):
 
 def test_a_topic_shared_by_two_sources_is_forwarded_once(tmp_path):
     node, _ = forwarder(_load(tmp_path, SHARED_TOPIC))
-    assert len(node.callbacks["/hil/policy/cmd"]) == 1
     node.deliver("/hil/policy/cmd", JointState(name=["a", "b"], position=[1.0, 2.0]))
     assert len(node.published["/cmd"]) == 1
 

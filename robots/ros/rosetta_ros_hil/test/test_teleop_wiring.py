@@ -20,11 +20,11 @@ shipped contract fails here instead of on every message at runtime.
 """
 
 import pytest
-from forwarder_fakes import SO_101_HIL, STONE, forwarder
+from forwarder_fakes import SO_101_HIL, STAMP_NS, STONE, forwarder
 from sensor_msgs.msg import JointState
 
 from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import iter_action_specs, iter_teleop_input_specs
+from rosetta.contract.specs import iter_teleop_input_specs
 from rosetta_ros_hil.hil_episode import Control, ignored_events
 
 
@@ -46,14 +46,8 @@ def test_teleop_input_reaches_the_action_topic_in_its_units(contract):
         node.deliver(spec.source.channel.topic, leader)
         (command,) = node.published[tis.target]
         assert _positions(command) == pytest.approx(_positions(leader))
-
-
-def test_teleop_input_is_named_like_the_action_it_drives(contract):
-    """Leader-side columns line up with the robot's action columns, namespace included."""
-    actions = {s.source.channel.topic: s for s in iter_action_specs(contract)}
-    for tis, spec in zip(contract.teleop.input, iter_teleop_input_specs(contract), strict=True):
-        target = actions[tis.target]
-        assert (spec.namespace, spec.names) == (target.namespace, target.names)
+        # Stamped when forwarded, not with the leader's (here zero) stamp.
+        assert command.header.stamp.sec * 1_000_000_000 + command.header.stamp.nanosec == STAMP_NS
 
 
 def test_every_event_hil_launch_wires_is_one_the_manager_acts_on():

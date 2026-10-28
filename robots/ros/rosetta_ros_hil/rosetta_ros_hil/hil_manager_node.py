@@ -654,7 +654,8 @@ class HilManagerNode(RosettaLifecycleNode):
         """Service: switch mux between policy (False) and teleop (True).
 
         Works between episodes too, so a person can drive the robot to a start
-        pose; every episode starts with the policy in control.
+        pose. An episode starts with the policy in control unless the
+        is_intervention button is still held.
         """
         self._set_control(Control.TELEOP if request.data else Control.POLICY)
         response.success = True

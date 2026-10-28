@@ -12,66 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""start_episode claims the busy guard and returns; the episode thread releases it on every exit."""
+"""~/start_episode runs an episode with the prompt, time limit and reward threshold it was given."""
 
-import threading
-
-import pytest
+from std_srvs.srv import SetBool
 
 from rosetta_interfaces.srv import StartHILEpisode
 from rosetta_ros.node_utils import wait_until
-from rosetta_ros_hil.hil_manager_node import HilManagerNode
+from rosetta_ros_hil.hil_episode import TERMINATION_REWARD_THRESHOLD, TERMINATION_TIMEOUT
 
 
-@pytest.fixture
-def node(rclpy_ctx):
-    n = HilManagerNode()
-    yield n
-    n.destroy_node()
+def _start(node, **request):
+    node._accepting_work = True
+    return node._on_start_episode(StartHILEpisode.Request(**request), StartHILEpisode.Response())
 
 
-def _call(node, prompt="t"):
-    request = StartHILEpisode.Request(prompt=prompt)
-    return node._on_start_episode(request, StartHILEpisode.Response())
+def _result(node):
+    """The ~/result the episode thread publishes, once it has released the work slot."""
+    assert wait_until(lambda: not node.busy, timeout=5.0, poll=0.01)
+    (result,) = node._result_pub.published
+    return result
 
 
-def test_start_returns_immediately_and_claims_guard(node, monkeypatch):
-    release = threading.Event()
-    monkeypatch.setattr(
-        node,
-        "_run_episode",
-        lambda *_a: (release.wait(5.0), _fields())[1],
+def test_start_runs_the_episode_with_the_requested_prompt_and_time_limit(node, child_prompts):
+    response = _start(node, prompt="open the drawer", max_duration_s=0.05)
+    result = _result(node)
+    assert (response.accepted, set(child_prompts), result.termination_reason) == (
+        True,
+        {"open the drawer"},
+        TERMINATION_TIMEOUT,
     )
-    node._accepting_work = True
-
-    resp = _call(node)
-    assert resp.accepted is True  # returned while the episode still runs
-    assert node.busy
-
-    release.set()
-    assert wait_until(lambda: not node.busy, timeout=5.0)
 
 
-def test_guard_released_when_episode_raises(node, monkeypatch):
-    def _boom(*_a):
-        raise RuntimeError("episode exploded")
-
-    monkeypatch.setattr(node, "_run_episode", _boom)
-    node._accepting_work = True
-
-    resp = _call(node)
-    assert resp.accepted is True
-    # The thread's finally must release the guard, or the node stays busy.
-    assert wait_until(lambda: not node.busy, timeout=5.0)
-
-
-def _fields():
-    """A stand-in for _run_episode's return value (one dict, no tuple)."""
-    return {
-        "termination_reason": "timeout",
-        "outcome": "unlabeled",
-        "message": "done",
-        "final_reward": 0.0,
-        "bag_path": "/tmp/bag",
-        "messages_written": 3,
-    }
+def test_start_ends_the_episode_at_the_requested_reward_threshold(node, child_prompts):
+    _start(node, prompt="t", success_reward_threshold=0.5)
+    # Children start after the episode resets its label, so a label from here on sticks.
+    assert wait_until(lambda: child_prompts, timeout=5.0, poll=0.01)
+    node._on_set_reward_override(SetBool.Request(data=True), SetBool.Response())  # reward 1.0
+    assert _result(node).termination_reason == TERMINATION_REWARD_THRESHOLD

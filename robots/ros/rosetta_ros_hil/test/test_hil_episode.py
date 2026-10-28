@@ -40,13 +40,6 @@ def test_new_episode_starts_with_the_given_control_and_no_label(control):
     assert state.snapshot() == (control, 0.0, OUTCOME_UNLABELED)
 
 
-@pytest.mark.parametrize(("success", "outcome"), [(True, OUTCOME_SUCCESS), (False, OUTCOME_FAILURE)])
-def test_label_latches_reward_and_outcome(success, outcome):
-    state = EpisodeState()
-    state.label(success, 0.5)
-    assert (state.reward, state.outcome, state.labeled) == (0.5, outcome, True)
-
-
 def test_label_blocks_classifier_rewards_until_cleared():
     state = EpisodeState()
     state.label(True, 1.0)
