@@ -74,6 +74,12 @@ def recorder(monkeypatch):
     return rec
 
 
+@pytest.fixture(autouse=True)
+def every_device_available(monkeypatch):
+    """Cache keys are resolved devices; pin resolution so they don't depend on this host's GPUs."""
+    monkeypatch.setattr(ps, "resolve_policy_device", lambda device: device)
+
+
 @pytest.fixture
 def server():
     return ps.RosettaPolicyServer(PolicyServerConfig(host="127.0.0.1", port=8080))
@@ -120,6 +126,13 @@ def test_changed_path_or_device_reloads(recorder, server):
         ("act", "user/other"),
         ("act", "user/other"),
     ]
+
+
+def test_server_resolves_the_requested_device_on_its_own_host(recorder, server, monkeypatch):
+    # The robot forwards its configured device; a backend this host lacks falls back here.
+    monkeypatch.setattr(ps, "resolve_policy_device", lambda device: "cpu")
+    _handshake(server, device="cuda")
+    assert server.policy.device == "cpu"
 
 
 def test_failed_load_is_not_cached(recorder, server):

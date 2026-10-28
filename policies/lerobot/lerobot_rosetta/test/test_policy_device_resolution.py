@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for _resolve_policy_device (CPU fallback for unavailable backends)."""
+"""Unit tests for resolve_policy_device (CPU fallback for unavailable backends)."""
 
 import pytest
 
-from lerobot_rosetta.policy_runner import _resolve_policy_device
+from lerobot_rosetta.device import resolve_policy_device
 
 KNOWN_BACKENDS = {"cuda", "mps", "xpu", "cpu"}
 
@@ -59,4 +59,4 @@ def fake_availability(available):
     ],
 )
 def test_resolve_policy_device(requested, available, expected):
-    assert _resolve_policy_device(requested, is_available=fake_availability(available)) == expected
+    assert resolve_policy_device(requested, is_available=fake_availability(available)) == expected

@@ -101,15 +101,15 @@ def _setup_runner(param_overrides=None):
 
 
 def test_setup_spawns_server_with_preload_args(spawned):
-    # policy_device=cpu: always available, so device resolution is a no-op and
-    # the assertion holds on GPU-less runners (CI) and CUDA machines alike.
-    _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
+    # The requested device goes through as-is, even on a robot without CUDA:
+    # the server resolves it on the host that runs the model.
+    _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cuda"})
     assert len(spawned) == 1
     argv = spawned[0].argv
     assert "-m" in argv and "lerobot_rosetta.policy_server" in argv
     assert "--policy-type=act" in argv
     assert "--pretrained-name-or-path=user/repo" in argv
-    assert "--policy-device=cpu" in argv
+    assert "--policy-device=cuda" in argv
 
 
 def test_classifier_flag_picks_classifier_module(spawned):
@@ -174,6 +174,11 @@ def test_client_fps_is_contract_fps_unless_sim_time_lifts_it(spawned, use_sim_ti
     )
     config = runner._build_client_config(_robot_config(fps=30), task="t")
     assert config.fps == fps
+
+
+def test_client_config_forwards_the_requested_device(spawned):
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cuda"})
+    assert runner._build_client_config(_robot_config(), task="t").policy_device == "cuda"
 
 
 def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):

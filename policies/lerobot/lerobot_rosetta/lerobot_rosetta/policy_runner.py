@@ -34,13 +34,11 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
 from dataclasses import fields
 from typing import Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
-from lerobot.utils.device_utils import is_torch_device_available
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
@@ -56,27 +54,6 @@ SERVER_STOP_TIMEOUT_SEC = 5.0
 THREAD_JOIN_TIMEOUT_SEC = 2.0
 
 
-def _resolve_policy_device(
-    requested_device: str | None,
-    is_available: Callable[[str], bool] = is_torch_device_available,
-) -> str:
-    """Resolve the requested policy device, falling back to CPU when its backend is unavailable.
-
-    Availability is LeRobot's call (is_torch_device_available: cuda/mps/xpu/cpu), so this
-    stays in sync with what the policy server will accept. Devices LeRobot doesn't know
-    (it raises ValueError) pass through untouched — the server's own device checks are
-    the authority there.
-    """
-    device = (requested_device or "").strip().lower()
-    if not device:
-        return "cpu"
-    try:
-        available = is_available(device.split(":", 1)[0])
-    except ValueError:
-        return device
-    return device if available else "cpu"
-
-
 class LeRobotPolicyRunner:
     """PolicyRunner backed by LeRobot's RobotClient."""
 
@@ -84,7 +61,6 @@ class LeRobotPolicyRunner:
         self._host = None
         self._contract: Optional[Contract] = None
         self._client: Optional[RobotClient] = None
-        self._policy_device: str = "cpu"
         self._server_process: Optional[subprocess.Popen] = None
         self._server_log = None  # file handle for the server subprocess output
         self._server_log_path: str = ""
@@ -108,7 +84,13 @@ class LeRobotPolicyRunner:
         _p("pretrained_name_or_path", "", "Path or HF repo ID of trained policy", True)
         _p("server_address", "127.0.0.1:8080", "Policy server address (host:port)", True)
         _p("policy_type", "act", "Policy architecture (act, diffusion, ...)", True)
-        _p("policy_device", "cuda", "Device for policy inference (cuda, xpu, mps, cpu; cpu fallback)", True)
+        _p(
+            "policy_device",
+            "cuda",
+            "Device for policy inference (cuda, xpu, mps, cpu). The server resolves it: "
+            "a backend its host lacks falls back to cpu",
+            True,
+        )
         _p("actions_per_chunk", 50, "Number of actions to request per chunk")
         _p("chunk_size_threshold", 0.5, "Queue threshold ratio to request new chunk (0.0-1.0)")
         _p("aggregate_fn_name", "weighted_average", "Action aggregation function")
@@ -122,16 +104,6 @@ class LeRobotPolicyRunner:
             "model preload; raise it if the first launch must download weights.",
             True,
         )
-
-        # Resolve once at configure time (the parameter is read-only): both the
-        # client config and the server subprocess args use the resolved device.
-        requested_device = host.get("policy_device")
-        self._policy_device = _resolve_policy_device(requested_device)
-        if self._policy_device != requested_device:
-            host.logger.warning(
-                f"Requested policy device '{requested_device}' but the requested backend "
-                f"is unavailable; using '{self._policy_device}' instead."
-            )
 
         # Warm start: pay subprocess spawn + torch/CUDA init + model preload at
         # configure time so the first goal costs the same as any other. A
@@ -267,7 +239,7 @@ class LeRobotPolicyRunner:
             "server_address": host.get("server_address"),
             "policy_type": host.get("policy_type"),
             "pretrained_name_or_path": host.get("pretrained_name_or_path"),
-            "policy_device": self._policy_device,
+            "policy_device": host.get("policy_device"),
             "task": task,
             "fps": control_loop_fps,
             "actions_per_chunk": host.get("actions_per_chunk"),
@@ -306,7 +278,7 @@ class LeRobotPolicyRunner:
             cmd += [
                 f"--policy-type={cfg.get('policy_type')}",
                 f"--pretrained-name-or-path={pretrained}",
-                f"--policy-device={self._policy_device}",
+                f"--policy-device={cfg.get('policy_device')}",
             ]
         else:
             cfg.logger.warning(

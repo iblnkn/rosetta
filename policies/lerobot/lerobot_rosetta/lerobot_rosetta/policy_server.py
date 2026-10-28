@@ -54,6 +54,8 @@ from lerobot.transport import (
     services_pb2_grpc,  # type: ignore
 )
 
+from lerobot_rosetta.device import resolve_policy_device
+
 
 class RosettaPolicyServer(PolicyServer):
     """PolicyServer that loads the policy once and reuses it across handshakes."""
@@ -68,7 +70,15 @@ class RosettaPolicyServer(PolicyServer):
         self._ensure_policy(policy_type, pretrained_name_or_path, device)
 
     def _ensure_policy(self, policy_type: str, pretrained_name_or_path: str, device: str) -> bool:
-        """Load the policy iff it differs from what is loaded. Returns True on load."""
+        """Load the policy iff it differs from what is loaded. Returns True on load.
+
+        ``device`` is the client's request; this host resolves it and sets
+        ``self.device``, so a robot without CUDA still gets a GPU server.
+        """
+        self.device = resolve_policy_device(device)
+        if self.device != device:
+            self.logger.warning(f"Policy device '{device}' is unavailable on this host; using '{self.device}'")
+        device = self.device
         if policy_type not in SUPPORTED_POLICIES:
             raise ValueError(f"Policy type {policy_type} not supported. Supported policies: {SUPPORTED_POLICIES}")
 
@@ -118,7 +128,6 @@ class RosettaPolicyServer(PolicyServer):
             f"Device: {policy_specs.device}"
         )
 
-        self.device = policy_specs.device
         self.policy_type = policy_specs.policy_type
         self.lerobot_features = policy_specs.lerobot_features
         self.actions_per_chunk = policy_specs.actions_per_chunk

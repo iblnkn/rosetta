@@ -61,6 +61,8 @@ from lerobot.transport import (
 )
 from lerobot.transport.utils import receive_bytes_in_chunks
 
+from lerobot_rosetta.device import resolve_policy_device
+
 logger = get_logger("classifier_server")
 
 OBS_QUEUE_TIMEOUT = 2.0
@@ -125,7 +127,6 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         if not isinstance(policy_specs, RemotePolicyConfig):
             raise TypeError(f"Expected RemotePolicyConfig, got {type(policy_specs)}")
 
-        self.device = policy_specs.device
         self.lerobot_features = policy_specs.lerobot_features
 
         self._ensure_classifier(
@@ -137,11 +138,18 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
 
     def preload(self, policy_type: str, pretrained_name_or_path: str, device: str) -> None:
         """Load the model ahead of any client (call before binding the port)."""
-        self.device = device
         self._ensure_classifier(policy_type, pretrained_name_or_path, device)
 
     def _ensure_classifier(self, policy_type: str, pretrained_name_or_path: str, device: str) -> bool:
-        """Load the model iff it differs from what is loaded. Returns True on load."""
+        """Load the model iff it differs from what is loaded. Returns True on load.
+
+        ``device`` is the client's request; this host resolves it and sets
+        ``self.device``, so a robot without CUDA still gets a GPU server.
+        """
+        self.device = resolve_policy_device(device)
+        if self.device != device:
+            logger.warning(f"Classifier device '{device}' is unavailable on this host; using '{self.device}'")
+        device = self.device
         key = (policy_type, pretrained_name_or_path, device)
         if self._loaded_key == key:
             logger.info(
