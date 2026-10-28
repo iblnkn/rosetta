@@ -22,7 +22,7 @@ rather than restating them -- so what is left to check is coverage: that
 
 import pytest
 
-from rosetta_interfaces.action import RecordEpisode, RunPolicy
+from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
 from rosetta_ros import node_utils
 
 # What each action's server can produce, as the node code decides it.
@@ -48,13 +48,15 @@ def _declared(result_type, prefix):
     return {getattr(result_type, name) for name in dir(result_type) if name.startswith(prefix)}
 
 
-@pytest.mark.parametrize("result_type", list(PRODUCED))
+@pytest.mark.parametrize("result_type", [RunPolicy.Result, ManageEpisode.Result], ids=["RunPolicy", "ManageEpisode"])
 def test_a_shared_reason_has_the_same_value_in_every_action(result_type):
     # Each .action declares its own string literals, so `timeout` could easily
-    # become `timed_out` in one of them. node_utils sources each name from one
-    # action; this is what stops the others drifting from it.
+    # become `timed_out` in one of them. node_utils binds each shared name from
+    # RecordEpisode (`completed` from RunPolicy), so comparing RecordEpisode
+    # with it proves nothing; this stops the other actions drifting from it.
+    # ManageEpisode is here because the HIL manager reports node_utils' values.
     for name in dir(result_type):
-        if not name.startswith(("TERMINATION_", "OUTCOME_")):
+        if not name.startswith("TERMINATION_") or not hasattr(node_utils, name):
             continue
         assert getattr(result_type, name) == getattr(node_utils, name), (
             f"{result_type.__name__}.{name} disagrees with node_utils.{name}"

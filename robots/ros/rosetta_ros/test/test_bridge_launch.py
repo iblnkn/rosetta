@@ -17,8 +17,9 @@
 This is the repo's template for ROS2-idiomatic integration
 tests (docs.ros.org Jazzy "Integration testing with launch_testing"): a launch
 description brings up fixture processes and active tests run against the live
-graph. Run via colcon test or
-``launch_test test/test_bridge_launch.py``.
+graph. Run via colcon test or, from the package root,
+``PYTHONPATH=test:$PYTHONPATH launch_test test/test_bridge_launch.py`` (the
+test dir must be importable for ``bridge_helpers``).
 
 The scenario pins the shared-key path end to end: an external ``ros2 topic
 pub`` process feeds one JointState topic read by two specs sharing
@@ -32,9 +33,7 @@ import launch
 import launch_testing.actions
 import numpy as np
 import pytest
-
-from rosetta.contract.schema import Align, Channel, Source
-from rosetta.contract.specs import ObservationStreamSpec
+from bridge_helpers import obs_spec
 
 TOPIC = "/launch_test/js"
 
@@ -71,21 +70,6 @@ def generate_test_description():
     return launch.LaunchDescription(actions)
 
 
-def _obs(key, names, topic):
-    return ObservationStreamSpec(
-        key=key,
-        names=list(names),
-        fps=30,
-        source=Source(
-            channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"),
-            align=Align("hold", "receive"),
-        ),
-        is_image=False,
-        image_resize=None,
-        dtype="float64",
-    )
-
-
 class TestBridgeAgainstLiveGraph(unittest.TestCase):
     # launch_testing runs these cases outside pytest's fixture machinery, so
     # conftest's session-scoped rclpy_ctx never fires here: init ourselves,
@@ -112,14 +96,14 @@ class TestBridgeAgainstLiveGraph(unittest.TestCase):
         from rosetta_ros.topic_bridge import TopicBridge
 
         specs = [
-            _obs("observation.state", ["position.j1", "position.j2"], TOPIC),
-            _obs("observation.state", ["velocity.j1"], TOPIC),
+            obs_spec("observation.state", ["position.j1", "position.j2"], TOPIC),
+            obs_spec("observation.state", ["velocity.j1"], TOPIC),
         ]
         node = LifecycleNode("launch_test_bridge_host")
         executor = SingleThreadedExecutor()
         executor.add_node(node)
+        bridge = TopicBridge(specs, [], fps=30)
         try:
-            bridge = TopicBridge(specs, [], fps=30)
             bridge.setup(node)
 
             frame = None
@@ -131,7 +115,7 @@ class TestBridgeAgainstLiveGraph(unittest.TestCase):
                     break
 
             np.testing.assert_allclose(frame["observation.state"], [0.1, 0.2, 1.5])
-            bridge.teardown()
         finally:
+            bridge.teardown()
             executor.remove_node(node)
             node.destroy_node()

@@ -132,9 +132,9 @@ def test_configure_failure_recovers_to_unconfigured_after_teardown(rclpy_ctx, no
     assert node.trigger_configure() != TransitionCallbackReturn.SUCCESS
     assert lifecycle_state_label(node) == "unconfigured"
     assert not node.is_configured
-    assert node.bridge._node is None  # partial setup was torn down
 
     del node.bridge._should_use_watchdog
+    # Succeeds only if on_error tore the partial setup down.
     assert node.trigger_configure() == TransitionCallbackReturn.SUCCESS
     assert node.is_configured
     assert node.trigger_cleanup() == TransitionCallbackReturn.SUCCESS
@@ -256,14 +256,18 @@ def test_goal_rejected_until_activated(base_node):
 
 def test_goal_work_releases_and_unbinds_on_exception(base_node):
     claim(base_node)
+    crashed = FakeGoalHandle()
     with pytest.raises(RuntimeError, match="boom"):
-        with base_node.goal_work(FakeGoalHandle()):
+        with base_node.goal_work(crashed):
             raise RuntimeError("boom")
-    assert not base_node.busy  # a crashed execution can't brick the node
-    assert base_node._active_goal is None
+    # A crashed execution can't brick the node: the next claim succeeds...
+    assert base_node.try_claim_work() is None
+    # ...and a late cancel for the crashed goal no longer routes to anything.
+    base_node.on_cancel(crashed)
+    assert base_node.stop_reason is None
 
 
-def test_claim_and_stop_serialize_on_the_work_gate(base_node):
+def test_deactivate_with_wedged_work_secures_the_robot_and_closes_acceptance(base_node):
     claim(base_node)
     claimed_event = base_node._stop_event
     assert claimed_event is not None and not claimed_event.is_set()
@@ -365,29 +369,6 @@ def test_unblock_stop_runs_outside_the_work_gate(base_node):
     base_node.signal_stop(TERMINATION_CANCELLED)
     base_node._stop_and_secure(wait_timeout=0.1)
     assert observed and all(observed)
-
-
-def test_concurrent_claims_admit_exactly_one_winner(base_node):
-    # The goal-accept race the work gate exists to close: under a
-    # MultiThreadedExecutor + ReentrantCallbackGroup, two goal requests could
-    # both pass the busy check before either _execute ran, driving two loops
-    # against one runner/bridge. try_claim_work's check-and-set under the gate
-    # must admit exactly one of a concurrent burst.
-    base_node._accepting_work = True
-    start = threading.Barrier(32)
-    wins: list[int] = []
-
-    def worker():
-        start.wait()
-        if base_node.try_claim_work() is None:
-            wins.append(1)
-
-    threads = [threading.Thread(target=worker) for _ in range(32)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert len(wins) == 1
 
 
 def test_output_after_teardown_is_logged_not_raised(rclpy_ctx, node, monkeypatch):

@@ -22,6 +22,7 @@ other publisher's messages from the bag.
 
 from types import SimpleNamespace
 
+import pytest
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from rosetta_ros.bag_topics import adapt_publisher_qos
@@ -31,38 +32,30 @@ def _pub(reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOL
     return SimpleNamespace(qos_profile=QoSProfile(depth=depth, reliability=reliability, durability=durability))
 
 
-def test_all_reliable_stays_reliable():
-    qos = adapt_publisher_qos([_pub(), _pub()])
-    assert qos.reliability == ReliabilityPolicy.RELIABLE
+_RELIABLE = _pub()
+_BEST_EFFORT = _pub(reliability=ReliabilityPolicy.BEST_EFFORT)
+_LATCHED = _pub(durability=DurabilityPolicy.TRANSIENT_LOCAL)
+_VOLATILE = _pub()
 
 
-def test_mixed_reliability_downgrades_to_best_effort():
-    qos = adapt_publisher_qos([_pub(), _pub(reliability=ReliabilityPolicy.BEST_EFFORT)])
-    assert qos.reliability == ReliabilityPolicy.BEST_EFFORT
+@pytest.mark.parametrize(
+    ("pubs", "field", "expected"),
+    [
+        ([_RELIABLE, _RELIABLE], "reliability", ReliabilityPolicy.RELIABLE),
+        ([_RELIABLE, _BEST_EFFORT], "reliability", ReliabilityPolicy.BEST_EFFORT),
+        ([_LATCHED], "durability", DurabilityPolicy.TRANSIENT_LOCAL),
+        ([_LATCHED, _VOLATILE], "durability", DurabilityPolicy.VOLATILE),
+    ],
+    ids=["all-reliable", "mixed-reliability", "all-latched", "mixed-durability"],
+)
+def test_policy_is_requested_only_when_every_publisher_offers_it(pubs, field, expected):
+    assert getattr(adapt_publisher_qos(pubs), field) == expected
 
 
-def test_all_latched_stays_transient_local():
-    qos = adapt_publisher_qos([_pub(durability=DurabilityPolicy.TRANSIENT_LOCAL)])
-    assert qos.durability == DurabilityPolicy.TRANSIENT_LOCAL
-
-
-def test_mixed_durability_downgrades_to_volatile():
-    qos = adapt_publisher_qos(
-        [_pub(durability=DurabilityPolicy.TRANSIENT_LOCAL), _pub(durability=DurabilityPolicy.VOLATILE)]
-    )
-    assert qos.durability == DurabilityPolicy.VOLATILE
-
-
-def test_no_publishers_gets_default_profile():
-    qos = adapt_publisher_qos([])
-    assert qos.depth == 10
-
-
-def test_depth_takes_widest_publisher():
-    qos = adapt_publisher_qos([_pub(depth=5), _pub(depth=25)])
-    assert qos.depth == 25
-
-
-def test_depth_never_below_default():
-    qos = adapt_publisher_qos([_pub(depth=1)])
-    assert qos.depth == 10
+@pytest.mark.parametrize(
+    ("depths", "expected"),
+    [([], 10), ([5, 25], 25), ([1], 10)],
+    ids=["no-publishers", "widest-publisher", "never-below-default"],
+)
+def test_depth_is_the_widest_publisher_but_never_below_default(depths, expected):
+    assert adapt_publisher_qos([_pub(depth=d) for d in depths]).depth == expected

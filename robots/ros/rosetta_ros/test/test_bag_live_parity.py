@@ -29,11 +29,9 @@ Pinned behaviors:
 - a routed observation topic with zero messages -> RuntimeError;
 - a spec whose type is encode-only (no decoder) -> RuntimeError before any
   message is read (porting it could only record zeros);
-- an unstamped message on a header-timeline stream is dropped (warn-once)
-  and a stamped one recovers, same as the live ingest guard.
+- an unstamped message on a header-timeline stream is dropped and a
+  stamped one recovers, same as the live ingest guard.
 """
-
-import logging
 
 import numpy as np
 import pytest
@@ -139,14 +137,9 @@ def test_warmup_skips_until_all_observations_present(bag_dir):
     np.testing.assert_array_equal(ported[0]["observation.env"], [7.0])
     # Late /cmd stream did not gate warmup; it zero-fills until its message.
     np.testing.assert_array_equal(ported[0]["action"], [0.0])
-
-
-def test_message_at_exact_tick_is_included(bag_dir):
-    # /obs_a publishes [5, 6] with receive time exactly T0+300ms (tick 3):
-    # live sample(t) includes ts <= t, so the ported frame for that tick must too.
-    ported = list(iter_bag_frames(bag_dir, SPECS, warmup_keys=WARMUP_KEYS))
-    frame_at_300 = ported[1]  # +200, +300, +400
-    np.testing.assert_array_equal(frame_at_300["observation.state"], [5.0, 6.0])
+    # /obs_a's [5, 6] arrives exactly at +300ms: sample(t) includes ts <= t,
+    # so the +300ms frame carries it.
+    np.testing.assert_array_equal(ported[1]["observation.state"], [5.0, 6.0])
 
 
 def test_observation_stream_with_no_messages_raises(tmp_path):
@@ -199,10 +192,11 @@ def test_undecodable_spec_fails_fast(bag_dir):
         next(iter_bag_frames(bag_dir, [*SPECS, encode_only], warmup_keys=WARMUP_KEYS))
 
 
-def test_header_timeline_drop_and_recovery_offline(tmp_path, caplog):
+def test_header_timeline_drop_and_recovery_offline(tmp_path):
     # Offline twin of the live ingest guard: an unstamped message on a
-    # header-timeline stream is dropped (warn-once), a stamped one recovers,
-    # and porting continues instead of dying or fabricating a timestamp.
+    # header-timeline stream is dropped, a stamped one recovers, and porting
+    # continues instead of dying or fabricating a timestamp. The warn-once
+    # itself is test_ingest_timeline's.
     spec = obs_spec("observation.h", ["position.j1"], "/obs_h", fps=FPS, align=Align("hold", "header"))
     events = [
         ("/obs_h", T0, joint_state(["j1"], [1.0])),  # zero stamp -> dropped
@@ -212,11 +206,8 @@ def test_header_timeline_drop_and_recovery_offline(tmp_path, caplog):
     d = tmp_path / "bag_header"
     write_bag(d, events)
 
-    with caplog.at_level(logging.WARNING):
-        frames = list(iter_bag_frames(d, [spec], warmup_keys={"observation.h"}))
+    frames = list(iter_bag_frames(d, [spec], warmup_keys={"observation.h"}))
 
-    drops = [r for r in caplog.records if "missing its 'header' timeline" in r.getMessage()]
-    assert len(drops) == 1
     # Tick 0 (T0) is a warmup skip (its only message was dropped); the first
     # emitted frame carries the recovered, stamped value.
     np.testing.assert_array_equal(frames[0]["observation.h"], [2.0])

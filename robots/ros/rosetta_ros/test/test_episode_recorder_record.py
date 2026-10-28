@@ -126,11 +126,10 @@ def test_clean_stop_succeeds_and_reconciles(make_recorder):
     assert result.message == ""
     # Provenance: the bag names the goal that produced it, in canonical hex.
     assert rec.custom_data()[BAG_GOAL_ID_KEY] == "00010203-0405-0607-0809-0a0b0c0d0e0f"
-    assert rec._last_bag_dir == rec.bag_dir
     _assert_reconciled(rec)
 
 
-def test_service_start_has_no_goal_transitions(make_recorder):
+def test_service_start_reports_its_reason_and_records_no_goal_id(make_recorder):
     rec = make_recorder()
     result = rec._record("pick up cube")
     # The service path gets a fully populated reason too: _record's return value
@@ -142,24 +141,23 @@ def test_service_start_has_no_goal_transitions(make_recorder):
     _assert_reconciled(rec)
 
 
-def test_goal_max_duration_overrides_the_node_default(make_recorder):
-    # The point of the goal field: a timed recording without a `ros2 param set`
-    # first, and without racing another client's parameter write.
-    rec = make_recorder(running=True)  # node default: no limit
+@pytest.mark.parametrize(
+    ("node_default", "goal_max_duration"),
+    [
+        # The point of the goal field: a timed recording without a `ros2 param set`
+        # first, and without racing another client's parameter write.
+        (0.0, 0.01),
+        # The node default applies when the goal leaves max_duration unset.
+        (0.01, 0.0),
+    ],
+    ids=["goal", "node_default"],
+)
+def test_timeout_reports_timeout_and_succeeds(make_recorder, node_default, goal_max_duration):
+    rec = make_recorder(running=True, default_max_duration_s=node_default)
     handle = FakeGoalHandle()
-    result = rec._record("p", handle, max_duration=0.01)
-    assert result.termination_reason == TERMINATION_TIMEOUT
-    assert handle.calls == ["succeed"]
-
-
-def test_timeout_reports_timeout_and_succeeds(make_recorder):
-    # The node default applies when the goal leaves max_duration unset.
-    rec = make_recorder(running=True, default_max_duration_s=0.01)
-    handle = FakeGoalHandle()
-    result = rec._record("p", handle, max_duration=0.0)
+    result = rec._record("p", handle, max_duration=goal_max_duration)
     assert handle.calls == ["succeed"]
     assert result.termination_reason == TERMINATION_TIMEOUT
-    assert rec.stop_reason is None  # loop-decided, not signalled
     _assert_reconciled(rec)
 
 
@@ -171,7 +169,7 @@ def test_open_writer_failure_aborts_without_metadata(make_recorder):
     assert result.termination_reason == TERMINATION_ERROR
     assert "disk full" in result.message
     assert not rec.bag_dir.exists()  # writer never opened: nothing to annotate
-    assert rec._last_bag_dir is None  # no bag dir on disk
+    assert _delete_last_bag(rec).success is False  # no bag dir on disk
     _assert_reconciled(rec)
 
 
@@ -183,9 +181,10 @@ def test_metadata_failure_fails_result_but_keeps_counts_and_bag(make_recorder):
     assert result.termination_reason == TERMINATION_ERROR
     assert "metadata.yaml" in result.message
     assert result.messages_written == 7
-    # The partial bag exists and must stay deletable via ~/delete_last_bag.
-    assert rec._last_bag_dir == rec.bag_dir
     _assert_reconciled(rec)
+    # The partial bag exists and must stay deletable via ~/delete_last_bag.
+    assert _delete_last_bag(rec).success is True
+    assert not rec.bag_dir.exists()
 
 
 def test_error_mid_recording_aborts_and_keeps_the_bag(make_recorder):
@@ -202,8 +201,9 @@ def test_error_mid_recording_aborts_and_keeps_the_bag(make_recorder):
     assert "publisher gone" in result.message
     # What was written before the error is still a bag, annotated and deletable.
     assert rec.custom_data()[BAG_PROMPT_KEY] == "p"
-    assert rec._last_bag_dir == rec.bag_dir
     _assert_reconciled(rec)
+    assert _delete_last_bag(rec).success is True
+    assert not rec.bag_dir.exists()
 
 
 def test_action_cancel_finishes_canceled(make_recorder):
@@ -287,7 +287,7 @@ def test_delete_during_recording_discards_it_when_it_ends(make_recorder, tmp_pat
     assert responses[0].success is True
     assert not rec.bag_dir.exists()
     # The discarded bag was the last one; a second delete must not reach the older bag.
-    assert rec._last_bag_dir is None
+    assert _delete_last_bag(rec).success is False
     assert previous.exists()
     _assert_reconciled(rec)
 
@@ -298,7 +298,7 @@ def test_delete_when_idle_removes_the_last_bag(make_recorder):
     response = _delete_last_bag(rec)
     assert response.success is True
     assert not rec.bag_dir.exists()
-    assert rec._last_bag_dir is None
+    assert _delete_last_bag(rec).success is False  # only the last bag, never an older one
 
 
 def test_delete_with_no_bag_fails(make_recorder):
@@ -334,21 +334,19 @@ def test_delete_after_a_recording_with_no_bag_keeps_the_previous_bag(make_record
     assert previous.exists()
 
 
-def test_service_start_publishes_status_and_its_result(make_recorder):
+@pytest.mark.parametrize(
+    ("open_error", "reason", "statuses"),
+    [(None, TERMINATION_STOPPED, 1), (RuntimeError("disk full"), TERMINATION_ERROR, 0)],
+    ids=["clean", "failed"],
+)
+def test_service_start_publishes_status_and_its_result(make_recorder, open_error, reason, statuses):
     """A service-started recording has no goal, so the topics are how a client follows it."""
-    rec = make_recorder(running=True, feedback_rate_hz=200.0)
+    rec = make_recorder(running=True, feedback_rate_hz=200.0, open_error=open_error)
     rec._status_pub = FakePublisher(on_publish=rec._stop_event.set)
     result = rec._record("p")
-    (status,) = rec._status_pub.published
-    assert status.messages_written == 7
+    assert len(rec._status_pub.published) == statuses  # a recording that never opened has no status
+    assert all(status.messages_written == 7 for status in rec._status_pub.published)
     (published,) = rec._result_pub.published
+    assert published.termination_reason == reason
     fields = ("termination_reason", "message", "bag_path", "messages_written")
     assert [getattr(published, f) for f in fields] == [getattr(result, f) for f in fields]
-
-
-def test_failed_recording_still_publishes_its_result(make_recorder):
-    rec = make_recorder(open_error=RuntimeError("disk full"))
-    rec._record("p", FakeGoalHandle())
-    (published,) = rec._result_pub.published
-    assert published.termination_reason == TERMINATION_ERROR
-    assert "disk full" in published.message

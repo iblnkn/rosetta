@@ -21,9 +21,10 @@ action goes out, so the safety action is the robot's last command on the wire.
 """
 
 import threading
+from types import SimpleNamespace
 
 import pytest
-from node_helpers import FakeGoalHandle
+from node_helpers import FakeGoalHandle, FakeRunner
 from rclpy.parameter import Parameter
 
 from rosetta_ros.nodes.policy_runner_node import PolicyRunnerNode
@@ -36,64 +37,52 @@ def node(rclpy_ctx):
     n.destroy_node()
 
 
-class _OrderedFakes:
-    """Bridge/runner fakes that record the global call order."""
-
-    def __init__(self):
-        self.calls: list[str] = []
-
-    def make_bridge(self):
-        outer = self
-
-        class Bridge:
-            def send_safety_action(self):
-                outer.calls.append("safety")
-
-        return Bridge()
-
-    def make_runner(self, on_stop=None):
-        outer = self
-
-        class Runner:
-            def request_stop(self):
-                outer.calls.append("request_stop")
-                if on_stop is not None:
-                    on_stop()
-
-        return Runner()
-
-
 def test_safety_action_sent_last_after_runner_stops(node):
-    fakes = _OrderedFakes()
-    node._bridge = fakes.make_bridge()
+    calls: list[str] = []
+    node._bridge = SimpleNamespace(send_safety_action=lambda: calls.append("safety"))
     node._stop_event = threading.Event()
-    # Goal in flight: busy releases when the runner is told to stop.
+
+    def stop_releases_the_goal():
+        # Goal in flight: busy releases when the runner is told to stop.
+        calls.append("request_stop")
+        node._busy = False
+
     node._busy = True
-    node._runner = fakes.make_runner(on_stop=lambda: setattr(node, "_busy", False))
+    node._runner = FakeRunner(on_stop=stop_releases_the_goal)
 
     node._stop_and_secure(wait_timeout=2.0)
 
     assert node._stop_event.is_set()
-    assert fakes.calls == ["request_stop", "safety"]
+    assert calls == ["request_stop", "safety"]
 
 
-def test_feedback_loop_logs_and_stops_on_adapter_error(rclpy_ctx):
+class _BrokenFeedbackRunner(FakeRunner):
+    def feedback(self):
+        raise RuntimeError("adapter bug")
+
+
+class _BrokenTeardownRunner(FakeRunner):
+    def teardown(self):
+        raise RuntimeError("boom")
+
+
+def test_feedback_loop_logs_and_stops_on_adapter_error(rclpy_ctx, monkeypatch):
     """An adapter whose feedback() raises ends the status thread (logged) rather
     than spinning on the error or publishing anything."""
     node = PolicyRunnerNode(parameter_overrides=[Parameter("feedback_rate_hz", value=50.0)])
     try:
-
-        class Runner:
-            def feedback(self):
-                raise RuntimeError("adapter bug")
-
-        node._runner = Runner()
+        errors: list[str] = []
+        monkeypatch.setattr(node, "get_logger", lambda: SimpleNamespace(error=errors.append))
+        node._runner = _BrokenFeedbackRunner()
         handle = FakeGoalHandle()
         loop = threading.Thread(target=node._feedback_loop, args=(handle, threading.Event()), daemon=True)
         loop.start()
         loop.join(timeout=2.0)
         assert not loop.is_alive(), "feedback loop kept running after feedback() raised"
         assert handle.feedback == []
+        (logged,) = errors
+        assert "Feedback loop stopped" in logged
+        assert "adapter bug" in logged  # the traceback names the adapter's error
     finally:
         node.destroy_node()
 
@@ -102,12 +91,7 @@ def test_teardown_nulls_runner_then_propagates(node):
     """Null-first keeps _teardown_runner idempotent, but the failure is NOT
     swallowed: a framework resource that failed to release (e.g. a policy
     server subprocess) must surface through the base's guarded teardown."""
-
-    class Runner:
-        def teardown(self):
-            raise RuntimeError("boom")
-
-    node._runner = Runner()
+    node._runner = _BrokenTeardownRunner()
     with pytest.raises(RuntimeError, match="boom"):
         node._teardown_runner()
     assert node._runner is None

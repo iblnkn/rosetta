@@ -37,12 +37,13 @@ def test_finds_all_bags_sorted(tmp_path):
     assert [d.name for d in dirs] == ["bag_00", "bag_01", "bag_02"]
 
 
-def test_shards_are_deterministic_disjoint_and_cover(tmp_path):
+def test_shard_i_takes_every_nth_bag_starting_at_i(tmp_path):
     _make_bags(tmp_path, 5)
-    shards = [find_bag_dirs(tmp_path, num_shards=3, shard_index=i) for i in range(3)]
-    combined = [d for shard in shards for d in shard]
-    assert sorted(combined) == find_bag_dirs(tmp_path)  # cover, no duplicates
-    assert len(combined) == len(set(combined))
+    all_bags = find_bag_dirs(tmp_path)
+    # Shard i of n takes every nth bag starting at i (docs/reference/rosetta-port.md),
+    # which is deterministic, disjoint and covering by construction.
+    for i in range(3):
+        assert find_bag_dirs(tmp_path, num_shards=3, shard_index=i) == all_bags[i::3]
 
 
 def test_valid_but_empty_shard_returns_empty_list(tmp_path):

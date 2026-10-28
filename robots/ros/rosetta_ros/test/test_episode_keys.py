@@ -27,12 +27,12 @@ def _commands(data: bytes) -> list[str]:
 @pytest.mark.parametrize(
     ("data", "expected"),
     [
-        (b"r", ["start"]),
-        (b"S", ["stop"]),
-        (b"d\x7f\x08", ["discard"] * 3),
-        (b"t", ["edit"]),
-        (b"h?", ["help", "help"]),
-        (b"q", ["quit"]),
+        (b"rR", ["start"] * 2),
+        (b"sS", ["stop"] * 2),
+        (b"dD\x7f\x08", ["discard"] * 4),
+        (b"tT", ["edit"] * 2),
+        (b"hH?", ["help"] * 3),
+        (b"qQ", ["quit"] * 2),
         (b"x1 ", []),
         (b"\x1b[C", ["start"]),
         (b"\x1b[D", ["stop"]),

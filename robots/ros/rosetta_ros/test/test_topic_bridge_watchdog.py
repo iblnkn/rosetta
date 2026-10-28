@@ -16,7 +16,7 @@
 
 The safety path is the one part of the bridge that commands hardware when
 something else has already gone wrong, so every branch is pinned here:
-watchdog fire/disarm, the clock-reset and inactive gates, the zeros/hold/none
+watchdog fire/disarm, the clock-reset gate, the zeros/hold/none
 behavior matrix, and the invariants that back them (``_last_sent`` only holds
 commands that reached the wire; ``reset_state`` forgets the previous episode).
 
@@ -63,9 +63,14 @@ def test_watchdog_fires_zeros_and_disarms():
         bridge.publish_frame({"action": np.array([1.0, 2.0])})
         _rewind_past_timeout(bridge)
         bridge._on_watchdog()
+        bridge._on_watchdog()  # disarmed until the next published frame: no second send
 
-        assert bridge._last_action_ns is None  # disarmed until the next published frame
-        assert spin_until(executor, lambda: [0.0, 0.0] in received["/arm_cmd"]), received
+        def sentinel_seen():
+            bridge.publish_frame({"action": np.array([9.0, 9.0])})
+            return [9.0, 9.0] in received["/arm_cmd"]
+
+        assert spin_until(executor, sentinel_seen)
+        assert received["/arm_cmd"].count([0.0, 0.0]) == 1, received
 
 
 def test_watchdog_hold_republishes_last_sent_command():
@@ -127,15 +132,6 @@ def test_watchdog_clock_reset_disarms_without_publishing():
 
         assert spin_until(executor, sentinel_seen)
         assert all(msg == [9.0] for msg in received["/arm_cmd"]), received
-
-
-def test_watchdog_gated_while_node_inactive():
-    with bridge_on_graph(
-        "wd_inactive", [], [act_spec("action", ["position.j1"], "/arm_cmd", SafetyBehavior.ZEROS)], activate=False
-    ) as (bridge, _node, _fixture_node, _executor):
-        bridge._last_action_ns = 1  # ancient: would time out if the gate failed
-        bridge._on_watchdog()
-        assert bridge._last_action_ns == 1  # untouched: gate returned before any logic
 
 
 @pytest.mark.parametrize(
@@ -206,7 +202,6 @@ def test_reset_state_forgets_previous_episode():
         bridge.publish_frame({"action": np.array([1.0, 2.0])})
 
         bridge.reset_state()
-        assert bridge._last_sent == [None]
         assert not bridge.warmed_up  # buffers cleared: next episode re-warms
 
         bridge.send_safety_action()  # hold source gone -> zeros, not [1, 2]

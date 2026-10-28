@@ -19,6 +19,7 @@ FAILURE: setup() raises and the base routes through on_error so partial
 construction is torn down. The chase itself is pure and covered in
 test_contract_fallback_chase.py."""
 
+from node_helpers import FakeRunner
 from rclpy.lifecycle import TransitionCallbackReturn
 from rclpy.parameter import Parameter
 
@@ -61,19 +62,6 @@ actions:
 """
 
 
-class _SetupOnlyRunner:
-    """Minimal PolicyRunner stand-in for configure/cleanup wiring tests."""
-
-    def setup(self, host, contract):
-        pass
-
-    def request_stop(self):
-        pass
-
-    def teardown(self):
-        pass
-
-
 CLASSIFIER_CONTRACT = (
     MINIMAL_CONTRACT
     + """
@@ -89,7 +77,7 @@ def test_is_classifier_publishes_to_the_reward_topics(monkeypatch, tmp_path):
     """is_classifier=True must build the bridge from the reward section, not actions."""
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text(CLASSIFIER_CONTRACT)
-    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: _SetupOnlyRunner())
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: FakeRunner())
 
     node = PolicyRunnerNode(
         parameter_overrides=[
@@ -119,7 +107,7 @@ def test_sidecar_contract_scanned_for_inline_codecs_before_load(monkeypatch, tmp
     monkeypatch.setattr(node_mod, "find_contract_for_pretrained", lambda p, *, warn: contract_path)
     monkeypatch.setattr(node_mod, "scan_inline_codec_paths", lambda p: order.append("scan") or real_scan(p))
     monkeypatch.setattr(node_mod, "load_contract", lambda p: order.append("load") or real_load(p))
-    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: _SetupOnlyRunner())
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: FakeRunner())
 
     node = PolicyRunnerNode(parameter_overrides=[Parameter("pretrained_name_or_path", value="org/ckpt")])
     try:

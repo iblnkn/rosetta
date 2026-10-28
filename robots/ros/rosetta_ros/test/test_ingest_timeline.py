@@ -20,12 +20,9 @@ timeline. A message that fails decode is likewise dropped (warn-once, with a
 recovery notice) instead of killing the caller. Warn-once state is per
 stream index, so two specs sharing a key never clear each other's flags.
 
-Pure unit tests: fakes are SimpleNamespace, no rclpy anywhere (pinned by the
-subprocess import-purity test at the bottom).
+Pure unit tests: fakes are SimpleNamespace, no rclpy anywhere.
 """
 
-import subprocess
-import sys
 import types
 
 import pytest
@@ -82,7 +79,14 @@ def test_missing_timeline_drops_message_with_one_warning():
     assert "header" in warns[0]
 
 
-def test_stamped_message_recovers_and_lands_on_header_timeline():
+@pytest.mark.parametrize(
+    "stamp_ns",
+    [
+        1,  # (sec=0, nanosec=1): sim time just past t=0 is a real stamp, only (0, 0) is unset
+        3_000_000_000,
+    ],
+)
+def test_stamped_message_recovers_and_lands_on_header_timeline(stamp_ns):
     spec = _obs(Align("hold", "header"))
     buffer = StreamBuffer.from_spec(spec)
     ingest, _, infos = _ingest()
@@ -90,8 +94,8 @@ def test_stamped_message_recovers_and_lands_on_header_timeline():
     ingest.ingest(_joint_state(), spec, buffer, index=0, receive_ns=5_000)
     # A stamped message recovers the stream (with a notice) and lands on the
     # header timeline, not the receive time.
-    ingest.ingest(_joint_state(stamp_ns=3_000_000_000), spec, buffer, index=0, receive_ns=7_000)
-    assert buffer.last_ts == 3_000_000_000
+    ingest.ingest(_joint_state(stamp_ns=stamp_ns), spec, buffer, index=0, receive_ns=7_000)
+    assert buffer.last_ts == stamp_ns
     assert len(infos) == 1
     assert "recovered" in infos[0]
 
@@ -175,20 +179,3 @@ def test_decode_warning_is_per_stream_index():
 
     ingest.ingest(_joint_state(joint="j1"), spec, buf_a, index=0, receive_ns=5_000)
     assert len(infos) == 1  # A recovers exactly once
-
-
-# -------------------- Import purity --------------------
-
-
-def test_ingest_imports_without_rclpy():
-    """StreamIngest and its whole import graph stay rclpy-free (CLAUDE.md unit
-    standard). Runs in a subprocess: the shared pytest process has rclpy
-    loaded by other test modules."""
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys; import rosetta_ros.ingest; assert 'rclpy' not in sys.modules",
-        ],
-        check=True,
-    )

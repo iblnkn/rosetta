@@ -22,7 +22,8 @@ clock object and must fail loudly before setup() binds a node.
 """
 
 import pytest
-from bridge_helpers import FakeNode
+from rclpy.lifecycle import LifecycleNode
+from rclpy.parameter import Parameter
 
 from rosetta.frames.protocols import FrameIO
 from rosetta_ros.topic_bridge import TopicBridge
@@ -38,8 +39,13 @@ def test_clock_raises_before_setup():
         _ = bridge.clock
 
 
-def test_clock_is_host_node_clock():
+def test_clock_follows_host_node_sim_time():
+    # A clock that isn't the node's own would stay on wall time here.
+    node = LifecycleNode("bridge_clock_host", parameter_overrides=[Parameter("use_sim_time", value=True)])
     bridge = TopicBridge([], [], fps=10)
-    node = FakeNode()
-    bridge._node = node
-    assert bridge.clock is node.get_clock()
+    try:
+        bridge.setup(node)
+        assert bridge.clock.ros_time_is_active
+    finally:
+        bridge.teardown()
+        node.destroy_node()

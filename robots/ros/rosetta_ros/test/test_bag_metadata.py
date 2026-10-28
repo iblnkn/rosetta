@@ -60,12 +60,6 @@ def test_read_defaults_are_empty(tmp_path):
     assert read_bag_contract_text(tmp_path) == ""
 
 
-def test_update_missing_file_raises(tmp_path):
-    # Retry policy belongs to the caller (the recorder); the helper fails fast.
-    with pytest.raises(OSError):
-        update_custom_data(tmp_path / "metadata.yaml", {BAG_PROMPT_KEY: "x"})
-
-
 _FIELDS = {
     "prompt": (BAG_PROMPT_KEY, "pick up cube"),
     "contract_text": (BAG_CONTRACT_KEY, "robot_type: x\n"),

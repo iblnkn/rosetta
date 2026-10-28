@@ -24,8 +24,9 @@ empty LaunchContext.
 
 import pytest
 from launch import LaunchContext
+from launch_ros.actions import LifecycleNode
 
-from rosetta_ros.launch_utils import _flag_condition
+from rosetta_ros.launch_utils import autostart_handlers, typed_config
 
 
 def _context_with(**flags: str) -> LaunchContext:
@@ -34,15 +35,27 @@ def _context_with(**flags: str) -> LaunchContext:
     return context
 
 
+def _node() -> LifecycleNode:
+    return LifecycleNode(package="rosetta_ros", executable="probe", name="probe", namespace="")
+
+
+def _conditions(handlers) -> list:
+    """The condition on each handler's emitted transition: configure, then activate."""
+    return [handler.event_handler.describe()[1][0].condition for handler in handlers]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [("true", True), ("True", True), ("1", True), ("false", False), ("False", False), ("0", False)],
 )
 def test_frozen_condition_survives_foreign_scope(value, expected):
-    condition = _flag_condition("configure", _context_with(configure=value))
-    assert condition.evaluate(LaunchContext()) is expected
+    handlers = autostart_handlers(_node(), _context_with(configure=value, activate=value))
+    assert [c.evaluate(LaunchContext()) for c in _conditions(handlers)] == [expected, expected]
 
 
 def test_unparseable_flag_raises_at_setup_not_silently_false():
-    with pytest.raises(Exception, match="[Cc]annot|[Ii]nvalid|convert"):
-        _flag_condition("configure", _context_with(configure="banana"))
+    # typed_config is what autostart_handlers resolves each flag with.
+    with pytest.raises(ValueError, match="Cannot convert value 'banana'"):
+        typed_config(_context_with(configure="banana"), "configure", bool)
+    with pytest.raises(ValueError, match="Cannot convert value 'banana'"):
+        autostart_handlers(_node(), _context_with(configure="banana", activate="true"))

@@ -23,10 +23,13 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
-from rosetta.contract.schema import Align, Channel, SafetyBehavior, Source
+from rosetta.contract.schema import Align, Channel, Contract, SafetyBehavior, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+from rosetta.policies.protocols import DatasetWriter
 
 JOINT_STATE = "sensor_msgs/msg/JointState"
 
@@ -66,12 +69,17 @@ class FakeLogger:
     def __init__(self):
         self.warnings: list[str] = []
         self.infos: list[str] = []
+        self.errors: list[str] = []
 
-    def warning(self, msg):
+    def warning(self, msg, **_kw):
         self.warnings.append(msg)
 
-    def info(self, msg):
+    def info(self, msg, **_kw):
         self.infos.append(msg)
+
+    def error(self, msg, **_kw):
+        # TopicBridge passes throttle_duration_sec here.
+        self.errors.append(msg)
 
 
 class FakeNode:
@@ -95,9 +103,25 @@ class StubWriter:
         self.calls: list[str] = []
         self.open_kwargs: dict = {}
 
-    def open(self, **kw):
+    def open(
+        self,
+        *,
+        contract: Contract,
+        repo_id: str,
+        root: Path | None = None,
+        contract_path: Path | None = None,
+        embed_contract: bool = True,
+        **opts: Any,
+    ) -> None:
         self.calls.append("open")
-        self.open_kwargs = kw
+        self.open_kwargs = {
+            "contract": contract,
+            "repo_id": repo_id,
+            "root": root,
+            "contract_path": contract_path,
+            "embed_contract": embed_contract,
+            **opts,
+        }
 
     def add_frame(self, _frame):
         self.calls.append("add_frame")
@@ -110,6 +134,11 @@ class StubWriter:
 
     def finalize(self):
         self.calls.append("finalize")
+
+
+# Fails at import, for every test that uses the stub, when DatasetWriter gains
+# or renames a method the stub lacks.
+assert isinstance(StubWriter(), DatasetWriter), "StubWriter no longer implements DatasetWriter"
 
 
 def spin_until(executor, predicate, timeout_s=5.0):

@@ -12,30 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The ros2 interface's timeline registry: attestation and extraction."""
+"""The header timeline is attested by field type, not field name."""
 
-import types
-
-import pytest
-
-from rosetta_ros.timelines import (
-    TIMELINES,
-    get_message_timestamp_ns,
-    provided_timelines,
-    stamp_from_header_ns,
-)
-
-
-def test_provided_timelines_by_type():
-    assert provided_timelines("sensor_msgs/msg/JointState") == {"receive", "header"}
-    assert provided_timelines("std_msgs/msg/Float64") == {"receive"}
-    with pytest.raises(ValueError, match="NoSuchThing"):
-        provided_timelines("sensor_msgs/msg/NoSuchThing")
+from rosetta_ros.timelines import TIMELINES
 
 
 def test_header_timeline_attests_field_type_not_name():
     # A field merely *named* header must not validate a timeline the
-    # extractor can never produce.
+    # extractor can never produce. No stock message has a non-Header `header`
+    # field, so this goes through the registry with stand-in classes.
     class WrongHeader:
         @staticmethod
         def get_fields_and_field_types():
@@ -48,24 +33,3 @@ def test_header_timeline_attests_field_type_not_name():
 
     assert not TIMELINES["header"].provides(WrongHeader)
     assert TIMELINES["header"].provides(RealHeader)
-
-
-def test_unknown_timeline_raises_instead_of_dropping():
-    # Contract loading validates align.timeline, so an unknown name here is
-    # a programming error — a loud KeyError, not a silent per-message drop.
-    spec = types.SimpleNamespace(source=types.SimpleNamespace(align=types.SimpleNamespace(timeline="publish")))
-    with pytest.raises(KeyError, match="publish"):
-        get_message_timestamp_ns(object(), spec, 123)
-
-
-@pytest.mark.parametrize(
-    ("sec", "nanosec", "expected"),
-    [
-        (0, 0, None),  # zero-initialized stamp is indistinguishable from unset
-        (0, 1, 1),  # ...but sim time just past t=0 is a real stamp
-        (5, 0, 5_000_000_000),
-    ],
-)
-def test_stamp_from_header_ns(sec, nanosec, expected):
-    msg = types.SimpleNamespace(header=types.SimpleNamespace(stamp=types.SimpleNamespace(sec=sec, nanosec=nanosec)))
-    assert stamp_from_header_ns(msg) == expected

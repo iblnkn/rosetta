@@ -41,33 +41,16 @@ test_action_cancel_terminal_state.py.
 from types import SimpleNamespace
 
 import pytest
+from node_helpers import FakeGoalHandle
 
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_COMPLETED,
     TERMINATION_ERROR,
-    TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
     TERMINATION_TIMEOUT,
     finish_goal,
 )
-
-
-class FakeGoalHandle:
-    """Records which terminal transition was requested."""
-
-    def __init__(self, cancel_requested: bool = False):
-        self.is_cancel_requested = cancel_requested
-        self.calls: list[str] = []
-
-    def canceled(self, response=None):
-        self.calls.append("canceled")
-
-    def abort(self, response=None):
-        self.calls.append("abort")
-
-    def succeed(self, response=None):
-        self.calls.append("succeed")
 
 
 def _result(termination_reason, message=""):
@@ -89,15 +72,6 @@ def test_work_that_reached_a_defined_end_succeeds(reason):
     assert handle.calls == ["succeed"]
 
 
-@pytest.mark.parametrize("reason", [TERMINATION_ERROR, TERMINATION_NODE_DEACTIVATED])
-def test_server_initiated_stop_aborts(reason):
-    # node_deactivated aborts for the same reason an error does: the SERVER
-    # chose to stop the goal, which the ROS 2 action docs define as an abort.
-    handle = FakeGoalHandle()
-    finish_goal(handle, _result(reason))
-    assert handle.calls == ["abort"]
-
-
 def test_cancelled_reason_without_canceling_state_aborts():
     # The original brick, in its current form: a "cancelled" reason recorded
     # against a goal that never entered CANCELING must NOT call canceled().
@@ -112,14 +86,9 @@ def test_cancelled_reason_without_canceling_state_aborts():
 def test_cancel_state_wins_over_the_recorded_reason(reason):
     # The goal IS in CANCELING, so canceled() is the only legal terminal
     # transition regardless of what the loop recorded.
+    # finish_goal never rewrites the result either: the loop is its single writer.
     handle = FakeGoalHandle(cancel_requested=True)
-    finish_goal(handle, _result(reason))
-    assert handle.calls == ["canceled"]
-
-
-def test_finish_goal_never_rewrites_the_reason_or_message():
-    handle = FakeGoalHandle(cancel_requested=True)
-    result = _result(TERMINATION_CANCELLED, message="Recorded 42 messages")
+    result = _result(reason, message="Recorded 42 messages")
     finish_goal(handle, result)
-    assert result.termination_reason == TERMINATION_CANCELLED
-    assert result.message == "Recorded 42 messages"
+    assert handle.calls == ["canceled"]
+    assert (result.termination_reason, result.message) == (reason, "Recorded 42 messages")

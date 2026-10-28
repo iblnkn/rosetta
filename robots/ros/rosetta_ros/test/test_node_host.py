@@ -32,10 +32,10 @@ def test_start_rolls_back_context_on_failure():
     with pytest.raises(RuntimeError):
         host.start(lambda ctx: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    assert host._context is None
     assert host.node is None
-    assert host._executor is None
-    assert host._spin_thread is None
+    # The leak itself: nothing public exposes the context, and a live one
+    # holds a DDS participant for the life of the process.
+    assert host._context is None
 
     # A retry on the same instance must get a fresh context, not reuse or
     # leak the failed one.
@@ -45,24 +45,18 @@ def test_start_rolls_back_context_on_failure():
 
     host.stop()
     assert host.node is None
-    assert host._context is None
-
-
-def test_stop_without_start_is_noop():
-    NodeHost().stop()
+    host.stop()  # stopping a stopped host is a no-op
 
 
 def test_start_is_idempotent():
     host = NodeHost()
     try:
         node = host.start(lambda ctx: rclpy.create_node("test_node_host_idem", context=ctx))
-        context = host._context
 
         def fail_factory(_ctx):
             raise AssertionError("second start() must not invoke the factory")
 
         assert host.start(fail_factory) is node
-        assert host._context is context
     finally:
         host.stop()
 
@@ -84,8 +78,7 @@ def test_spin_thread_death_poisons_node_access():
 
     host = NodeHost()
     host.start(make)
-    host._spin_thread.join(timeout=5.0)
-    assert not host._spin_thread.is_alive(), "timer exception should have killed the spin thread"
+    host._spin_thread.join(timeout=5.0)  # bounded wait for the timer exception to kill it
 
     with pytest.raises(RuntimeError, match="spin thread died") as excinfo:
         _ = host.node

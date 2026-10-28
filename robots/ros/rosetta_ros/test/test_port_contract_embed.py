@@ -12,46 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contract embedding: open-kwargs threading and the contract-drift heads-up.
+"""The contract-drift heads-up: a warning, never a failure.
 
-write_dataset must thread contract_path/embed_contract to the writer, and
 warn_if_contract_mismatch must warn when a bag's embedded contract differs from
 --contract without ever failing the port (--contract always wins for decoding).
-
-No monkeypatching: write_dataset takes its writer as an argument, and
-warn_if_contract_mismatch takes the bag's embedded contract as a value.
+That --contract and --no-embed-contract reach the writer is
+test_port_cli_hub_opts's job.
 """
 
 import logging
 
 import pytest
-from bridge_helpers import StubWriter
 
-from rosetta_ros.offline.port import warn_if_contract_mismatch, write_dataset
-
-
-def _one_episode():
-    return [("ep0", iter([{"observation.state": [0.0]}]))]
-
-
-@pytest.mark.parametrize(
-    ("embed_kwargs", "expected"),
-    [({}, True), ({"embed_contract": False}, False)],
-    ids=["default", "no-embed-contract"],
-)
-def test_writer_receives_contract_path_and_embed_flag(tmp_path, embed_kwargs, expected):
-    writer = StubWriter()
-    contract_path = tmp_path / "contract.yaml"
-
-    write_dataset(writer, _one_episode(), contract=None, repo_id="repo", contract_path=contract_path, **embed_kwargs)
-
-    assert writer.open_kwargs["contract_path"] == contract_path
-    assert writer.open_kwargs["embed_contract"] is expected
-
-
-# ---------------------------------------------------------------------------
-# contract-drift heads-up (a warning, never a failure)
-# ---------------------------------------------------------------------------
+from rosetta_ros.offline.port import warn_if_contract_mismatch
 
 
 def test_different_contract_warns(tmp_path, caplog):

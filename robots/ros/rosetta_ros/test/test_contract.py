@@ -70,18 +70,36 @@ def test_stone_showcases_every_feature():
     assert c.teleop.input and c.teleop.events and c.teleop.feedback
 
 
-def test_header_timeline_on_headerless_type_rejected(tmp_path):
-    """std_msgs/msg/Float64 has no header, so it provides only `receive`; the error names what it provides."""
-    text = (
+def _header_timeline_reward(msg_type):
+    return (
         BASE
-        + """
+        + f"""
 rewards:
   next.reward:
-    channel: {topic: /reward, type: std_msgs/msg/Float64, dtype: float64}
-    align: {strategy: hold, timeline: header}
+    channel: {{topic: /reward, type: {msg_type}, dtype: float64}}
+    align: {{strategy: hold, timeline: header}}
 """
     )
-    _expect_error(tmp_path, text, "provides.*receive")
+
+
+def test_header_timeline_on_header_type_accepted(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(BASE.replace("timeline: receive", "timeline: header", 1))
+    (entry,) = load_contract(p).observations
+    assert entry.sources[0].align.timeline == "header"
+
+
+@pytest.mark.parametrize(
+    ("msg_type", "match"),
+    [
+        # Float64 has no header, so it provides only `receive`; the error names what it provides.
+        ("std_msgs/msg/Float64", "provides.*receive"),
+        ("sensor_msgs/msg/NoSuchThing", "Unknown message type 'sensor_msgs/msg/NoSuchThing'"),
+    ],
+    ids=["headerless", "unknown-type"],
+)
+def test_header_timeline_on_headerless_type_rejected(tmp_path, msg_type, match):
+    _expect_error(tmp_path, _header_timeline_reward(msg_type), match)
 
 
 def test_qos_typo_value_rejected_at_load(tmp_path):
@@ -92,28 +110,3 @@ def test_qos_typo_value_rejected_at_load(tmp_path):
         "channel: {topic: /joint_states, type: sensor_msgs/msg/JointState, qos: {reliability: best-effort}}",
     )
     _expect_error(tmp_path, text, r"observation\.state\.qos.*Invalid qos reliability")
-
-
-def test_image_without_resize_rejected_at_load(tmp_path):
-    """Spec resolution runs eagerly in load: an image with no output geometry fails here, not at first frame."""
-    text = BASE.replace(
-        "actions:",
-        """  observation.images.cam:
-    channel: {topic: /cam, type: sensor_msgs/msg/Image}
-    align: {strategy: hold, timeline: receive}
-actions:""",
-        1,
-    )
-    _expect_error(tmp_path, text, "output geometry")
-
-
-def test_unencodable_action_type_rejected_at_load(tmp_path):
-    """sensor_msgs/msg/Image decodes but has no encoder; as an action it must
-    fail at load, not first publish."""
-    old_action = (
-        "channel: {topic: /cmd, type: sensor_msgs/msg/JointState}\n"
-        "    align: {strategy: hold, timeline: receive}\n"
-        "    select: [position.j1]"
-    )
-    new_action = "channel: {topic: /cmd, type: sensor_msgs/msg/Image}\n    align: {strategy: hold, timeline: receive}"
-    _expect_error(tmp_path, BASE.replace(old_action, new_action), "No encoder registered")

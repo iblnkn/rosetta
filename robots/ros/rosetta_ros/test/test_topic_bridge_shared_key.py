@@ -23,6 +23,8 @@ import numpy as np
 from bridge_helpers import act_spec, bridge_on_graph, obs_spec, spin_until, subscribe
 from sensor_msgs.msg import JointState
 
+from rosetta.contract.schema import SafetyBehavior
+
 
 def test_two_specs_same_topic_both_sampled():
     """README kind example: two selectors on one topic concatenate in the frame."""
@@ -65,23 +67,23 @@ def test_publish_frame_drops_non_finite_frame_atomically():
 
     The NaN sits in the second spec's slice, so publishing per spec as it
     encodes would already have commanded /arm_cmd. Nothing may reach the wire,
-    the hold cache and watchdog arm must not count the frame, and a later
-    finite frame publishes normally.
+    the hold cache must not count the frame (a cached NaN would make the hold
+    safety send fail instead of sending zeros), and a later finite frame
+    publishes normally.
     """
     specs = [
-        act_spec("action", ["position.j1", "position.j2"], "/arm_cmd"),
-        act_spec("action", ["position.grip"], "/grip_cmd"),
+        act_spec("action", ["position.j1", "position.j2"], "/arm_cmd", SafetyBehavior.HOLD),
+        act_spec("action", ["position.grip"], "/grip_cmd", SafetyBehavior.HOLD),
     ]
     with bridge_on_graph("nan", [], specs) as (bridge, _node, fixture_node, executor):
         received = subscribe(bridge, fixture_node, executor, ["/arm_cmd", "/grip_cmd"])
 
         bridge.publish_frame({"action": np.array([1.0, 2.0, np.nan])})
-        assert bridge._last_action_ns is None
-        assert bridge._last_sent == [None, None]
+        bridge.send_safety_action()  # nothing reached the wire to hold: zeros
 
-        # Subscriptions are matched, so anything (wrongly) published for the
-        # NaN frame arrives before this sentinel on the same publisher.
+        # Subscriptions are matched and per-publisher order holds, so this
+        # sentinel arrives after anything published before it.
         bridge.publish_frame({"action": np.array([4.0, 5.0, 6.0])})
-        assert spin_until(executor, lambda: received["/arm_cmd"] and received["/grip_cmd"])
-        assert received["/arm_cmd"][0] == [4.0, 5.0]
-        assert received["/grip_cmd"][0] == [6.0]
+        assert spin_until(executor, lambda: len(received["/arm_cmd"]) >= 2 and len(received["/grip_cmd"]) >= 2)
+        assert received["/arm_cmd"] == [[0.0, 0.0], [4.0, 5.0]]
+        assert received["/grip_cmd"] == [[0.0], [6.0]]

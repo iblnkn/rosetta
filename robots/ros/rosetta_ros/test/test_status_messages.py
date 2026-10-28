@@ -15,13 +15,21 @@
 """The ~/status and ~/result messages carry exactly the action's feedback and result fields.
 
 They are what clients that can't use actions see instead, so they must not
-drift from the action definitions.
+drift from the action definitions. This is the one drift check for every
+message/action pair in rosetta_interfaces, rosetta_ros_hil's included.
 """
 
 import pytest
 
-from rosetta_interfaces.action import RecordEpisode, RunPolicy
-from rosetta_interfaces.msg import RecordEpisodeResult, RecordEpisodeStatus, RunPolicyResult, RunPolicyStatus
+from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
+from rosetta_interfaces.msg import (
+    ManageEpisodeResult,
+    ManageEpisodeStatus,
+    RecordEpisodeResult,
+    RecordEpisodeStatus,
+    RunPolicyResult,
+    RunPolicyStatus,
+)
 
 
 @pytest.mark.parametrize(
@@ -31,6 +39,8 @@ from rosetta_interfaces.msg import RecordEpisodeResult, RecordEpisodeStatus, Run
         (RecordEpisodeResult, RecordEpisode.Result),
         (RunPolicyStatus, RunPolicy.Feedback),
         (RunPolicyResult, RunPolicy.Result),
+        (ManageEpisodeStatus, ManageEpisode.Feedback),
+        (ManageEpisodeResult, ManageEpisode.Result),
     ],
 )
 def test_message_matches_the_action(message, action_part):

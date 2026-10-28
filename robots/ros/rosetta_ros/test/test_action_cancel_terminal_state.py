@@ -41,7 +41,6 @@ base class and the real helpers, with a work loop reduced to an event wait.
 """
 
 import threading
-import time
 
 import pytest
 import rclpy
@@ -167,10 +166,10 @@ def _send_goal(client):
 
 
 def _result_of(future, timeout_s: float = 10.0):
-    deadline = time.monotonic() + timeout_s
-    while not future.done() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert future.done(), "future never completed"
+    # The executor thread completes the future; wait on its done callback.
+    done = threading.Event()
+    future.add_done_callback(lambda _f: done.set())
+    assert done.wait(timeout_s), "future never completed"
     return future.result()
 
 

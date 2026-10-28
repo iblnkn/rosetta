@@ -26,13 +26,12 @@ returns success=True on purpose -- it knows it was stopped, not by whom. Naming
 the cause is the node's job, and it reads the reason the stop recorded.
 """
 
-import threading
 from types import SimpleNamespace
 
 import pytest
-from node_helpers import FakeGoalHandle, FakePublisher, claim
+from node_helpers import FakeGoalHandle, FakePublisher, FakeRunner, claim
 
-from rosetta.policies import RunnerResult
+from rosetta.policies import PolicyRunner, RunnerResult
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_COMPLETED,
@@ -58,24 +57,13 @@ def _handle(max_duration_s=0.0, cancel_requested=False):
     return FakeGoalHandle(request=request, cancel_requested=cancel_requested)
 
 
-class _FakeRunner:
-    def __init__(self, run=None):
-        self._run = run
-
-    def run(self, frames, *, task, stop_event):
-        if self._run is not None:
-            return self._run(task)
-        return RunnerResult(success=True, message="done")
-
-    def feedback(self):
-        return SimpleNamespace(queue_depth=0, published_actions=0, status="ok")
-
-    def request_stop(self):
-        """Called by unblock_stop, which every signal_stop runs."""
+def test_fake_runner_implements_the_policy_runner_protocol():
+    # A method added to or renamed in PolicyRunner fails here, not silently in the fake.
+    assert isinstance(FakeRunner(), PolicyRunner)
 
 
 def test_execute_success_finishes_goal_and_releases_busy(node):
-    node._runner = _FakeRunner()
+    node._runner = FakeRunner()
     claim(node)
     handle = _handle()
 
@@ -94,7 +82,7 @@ def test_execute_runner_crash_aborts_with_typed_message(node):
     def boom(_task):
         raise RuntimeError("boom")
 
-    node._runner = _FakeRunner(run=boom)
+    node._runner = FakeRunner(run=boom)
     claim(node)
     handle = _handle()
 
@@ -107,7 +95,7 @@ def test_execute_runner_crash_aborts_with_typed_message(node):
 
 
 def test_execute_reports_a_failed_run_as_an_error(node):
-    node._runner = _FakeRunner(run=lambda _t: RunnerResult(success=False, message="connect refused"))
+    node._runner = FakeRunner(run=lambda _t: RunnerResult(success=False, message="connect refused"))
     claim(node)
     handle = _handle()
 
@@ -133,7 +121,7 @@ def test_execute_reports_the_recorded_stop_reason_over_the_runners_view(node, si
     def stopped(_task):
         return RunnerResult(success=True, message="Stopped")
 
-    node._runner = _FakeRunner(run=stopped)
+    node._runner = FakeRunner(run=stopped)
     claim(node)
     node.signal_stop(signalled)
     handle = _handle(cancel_requested=signalled == TERMINATION_CANCELLED)
@@ -153,10 +141,7 @@ def test_goal_max_duration_stops_the_run_and_reports_timeout(node):
         assert node._runner.stopped.wait(5.0), "deadline never asked the runner to stop"
         return RunnerResult(success=True, message="Stopped")
 
-    runner = _FakeRunner(run=run_until_stopped)
-    runner.stopped = threading.Event()
-    runner.request_stop = runner.stopped.set
-    node._runner = runner
+    node._runner = FakeRunner(run=run_until_stopped)
     claim(node)
 
     result = node._execute(_handle(max_duration_s=0.05))
@@ -167,7 +152,7 @@ def test_goal_max_duration_stops_the_run_and_reports_timeout(node):
 
 def test_the_deadline_does_not_fire_on_a_run_that_finishes_first(node):
     """A deadline left armed past its run would stop whichever claim holds the slot when it fires."""
-    node._runner = _FakeRunner()
+    node._runner = FakeRunner()
     claim(node)
     result = node._execute(_handle(max_duration_s=0.05))
     assert result.termination_reason == TERMINATION_COMPLETED
@@ -184,7 +169,7 @@ def test_the_deadline_does_not_fire_on_a_run_that_finishes_first(node):
 )
 def test_every_run_publishes_the_result_it_returns(node, via_action, run_result):
     """~/result is how a client that did not send the goal (or started by service) learns how a run ended."""
-    node._runner = _FakeRunner(run=lambda _task: run_result)
+    node._runner = FakeRunner(run=lambda _task: run_result)
     claim(node)
     result = node._execute(_handle()) if via_action else node._run("pick up cube")
     (published,) = node._result_pub.published
@@ -201,7 +186,7 @@ def test_status_is_published_without_a_goal(node):
         assert wait_until(lambda: node._status_pub.published, timeout=2.0, poll=0.005)
         return RunnerResult(success=True, message="done")
 
-    node._runner = _FakeRunner(run=run)
+    node._runner = FakeRunner(run=run)
     claim(node)
     node._run("pick up cube")
     assert node._status_pub.published

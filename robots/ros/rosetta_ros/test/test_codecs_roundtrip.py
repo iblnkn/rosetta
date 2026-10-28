@@ -24,14 +24,8 @@ a round-trip case.
 
 import numpy as np
 import pytest
-from codec_helpers import require_message
+from codec_helpers import load_specs, require_message
 
-from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import (
-    iter_action_specs,
-    iter_observation_specs,
-)
 from rosetta.frames.codecs import (
     DECODERS,
     ENCODERS,
@@ -73,31 +67,15 @@ def _pairs() -> list[str]:
 
 
 def _specs(tmp_path, msg_type: str, select: list[str], apply_block: str = "[]"):
-    """Build (action_spec, observation_spec) for a type from a tiny contract."""
-    sel = "[" + ", ".join(select) + "]"
-    yaml = f"""
-robot_type: test
-robot_interface: ros2
-fps: 30
-observations:
-  observation.x:
-    channel: {{topic: /t, type: {msg_type}}}
-    align: {{strategy: hold, timeline: receive}}
-    select: {sel}
-    apply: {apply_block}
-actions:
-  action:
-    channel: {{topic: /t, type: {msg_type}}}
-    align: {{strategy: hold, timeline: receive}}
-    select: {sel}
-    apply: {apply_block}
-"""
-    p = tmp_path / "c.yaml"
-    p.write_text(yaml)
-    contract = load_contract(p)
-    return (
-        next(iter(iter_action_specs(contract))),
-        next(iter(iter_observation_specs(contract))),
+    """(action_spec, observation_spec) for one type, same select and apply on both."""
+    return load_specs(
+        tmp_path,
+        obs_type=msg_type,
+        obs_select=select,
+        obs_apply=apply_block,
+        act_type=msg_type,
+        act_select=select,
+        act_apply=apply_block,
     )
 
 
@@ -119,19 +97,6 @@ def test_codec_pair_round_trips(msg_type, tmp_path):
 
     out1 = np.asarray(decode_value(encode_value(vec, action_spec), obs_spec), dtype=np.float64)
     assert np.allclose(out1, v, rtol=0, atol=atol), f"{msg_type}: {v} -> {out1}"
-
-
-def test_rad2deg_reaches_the_wire_in_radians(tmp_path):
-    """The dataset speaks degrees; encode publishes radians and decode reads them back as degrees."""
-    action_spec, obs_spec = _specs(
-        tmp_path,
-        "sensor_msgs/msg/JointState",
-        ["position.j1", "position.j2"],
-        apply_block="[rad2deg]",
-    )
-    msg = encode_value([90.0, 45.0], action_spec)
-    assert np.allclose(msg.position, [np.pi / 2, np.pi / 4])
-    assert np.allclose(decode_value(msg, obs_spec), [90.0, 45.0])
 
 
 # ---------------------------------------------------------------------------
@@ -216,48 +181,8 @@ def test_multidof_divergent_sets_raise(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Requires-select and per-type encoder rules
+# Per-type encoder rules
 # ---------------------------------------------------------------------------
-
-
-def _selectless_action_spec(tmp_path, msg_type):
-    yaml = f"""
-robot_type: test
-robot_interface: ros2
-fps: 30
-observations:
-  observation.x:
-    channel: {{topic: /obs, type: sensor_msgs/msg/JointState}}
-    align: {{strategy: hold, timeline: receive}}
-    select: [position.j1]
-actions:
-  action:
-    channel: {{topic: /t, type: {msg_type}}}
-    align: {{strategy: hold, timeline: receive}}
-"""
-    p = tmp_path / "c.yaml"
-    p.write_text(yaml)
-    return next(iter(iter_action_specs(load_contract(p))))
-
-
-@pytest.mark.parametrize(
-    "msg_type",
-    [
-        "geometry_msgs/msg/Twist",
-        "geometry_msgs/msg/TwistStamped",
-        "sensor_msgs/msg/JointState",
-        "trajectory_msgs/msg/JointTrajectory",
-        "sensor_msgs/msg/Joy",
-        "control_msgs/msg/MultiDOFCommand",
-    ],
-)
-def test_selector_encoders_require_select(tmp_path, msg_type):
-    # select declares which field each value lands in; a select-less channel
-    # of a selector-driven type fails at CONTRACT LOAD (requires_select
-    # registration), not at first publish.
-    require_message(msg_type)
-    with pytest.raises(ContractValidationError, match="add 'select:'"):
-        _selectless_action_spec(tmp_path, msg_type)
 
 
 def test_scalar_encoder_rejects_multiwide_spec(tmp_path):

@@ -25,14 +25,26 @@ import types
 import numpy as np
 import pytest
 
-from rosetta_ros.decoders import (
-    DepthEncodingNotSupported,
-    decode_ros_image,
-)
+from rosetta.frames.codecs import DECODERS, discover_codecs
+from rosetta_ros.decoders import DepthEncodingNotSupported
 
 
 def _image(height, width, encoding, data, step=0):
     return types.SimpleNamespace(height=height, width=width, encoding=encoding, step=step, data=data)
+
+
+def _decode(msg_type, msg):
+    """Decode through the registry, the way ingest reaches these decoders."""
+    discover_codecs()
+    return DECODERS[msg_type](msg, spec=None)
+
+
+def _decode_raw(msg):
+    return _decode("sensor_msgs/msg/Image", msg)
+
+
+def _decode_compressed(msg):
+    return _decode("sensor_msgs/msg/CompressedImage", msg)
 
 
 def _rgb_pixels(h, w):
@@ -63,20 +75,13 @@ def test_raw_image_decodes_to_rgb(encoding):
     else:  # mono8 / 8uc1: grayscale replicated to 3 channels
         raw = rgb[..., :1]
 
-    out = decode_ros_image(_image(h, w, encoding, raw.tobytes()))
+    out = _decode_raw(_image(h, w, encoding, raw.tobytes()))
     expected = np.repeat(rgb[..., :1], 3, axis=-1) if encoding in ("mono8", "8uc1") else rgb
     assert out.shape == (h, w, 3)
     assert out.dtype == np.uint8
     np.testing.assert_array_equal(out, expected)
-
-
-@pytest.mark.parametrize("encoding", ["rgb8", "bgr8", "rgba8", "bgra8", "mono8"])
-def test_raw_image_output_is_writable(encoding):
     # frombuffer views of msg.data are read-only; the decoder must hand
     # downstream (resize no-op path, torch.from_numpy) a writable array.
-    h, w = 2, 2
-    ch = {"rgb8": 3, "bgr8": 3, "rgba8": 4, "bgra8": 4, "mono8": 1}[encoding]
-    out = decode_ros_image(_image(h, w, encoding, bytes(h * w * ch)))
     assert out.flags.writeable
 
 
@@ -85,7 +90,7 @@ def test_raw_image_row_padding_is_stripped():
     h, w, ch, pad = 3, 2, 3, 4
     rgb = _rgb_pixels(h, w)
     rows = np.concatenate([rgb.reshape(h, w * ch), np.full((h, pad), 255, np.uint8)], axis=1)
-    out = decode_ros_image(_image(h, w, "rgb8", rows.tobytes(), step=w * ch + pad))
+    out = _decode_raw(_image(h, w, "rgb8", rows.tobytes(), step=w * ch + pad))
     np.testing.assert_array_equal(out, rgb)
 
 
@@ -95,17 +100,17 @@ def test_raw_image_row_padding_is_stripped():
 @pytest.mark.parametrize("encoding", ["mono16", "16uc1", "32fc1", "32fc"])
 def test_raw_image_depth_encoding_raises(encoding):
     with pytest.raises(DepthEncodingNotSupported):
-        decode_ros_image(_image(2, 2, encoding, bytes(16)))
+        _decode_raw(_image(2, 2, encoding, bytes(16)))
 
 
 def test_raw_image_unsupported_encoding_raises():
     with pytest.raises(ValueError, match="Unsupported image encoding"):
-        decode_ros_image(_image(2, 2, "yuv422", bytes(8)))
+        _decode_raw(_image(2, 2, "yuv422", bytes(8)))
 
 
 def test_raw_image_missing_encoding_raises():
     with pytest.raises(ValueError, match="no encoding"):
-        decode_ros_image(_image(2, 2, "", bytes(12)))
+        _decode_raw(_image(2, 2, "", bytes(12)))
 
 
 # --- CompressedImage ----------------------------------------------------------
@@ -113,13 +118,6 @@ def test_raw_image_missing_encoding_raises():
 
 def _compressed(data, fmt):
     return types.SimpleNamespace(format=fmt, data=data)
-
-
-def _decode_compressed(msg):
-    from rosetta.frames.codecs import DECODERS, discover_codecs
-
-    discover_codecs()
-    return DECODERS["sensor_msgs/msg/CompressedImage"](msg, spec=None)
 
 
 @pytest.mark.parametrize("fmt", ["bgr8; png compressed bgr8", "png", ""])

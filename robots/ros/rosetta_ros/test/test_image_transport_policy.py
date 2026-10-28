@@ -81,14 +81,16 @@ def test_fully_excluded_family_records_nothing():
     assert _kept(_cam(), exclude=lambda t: True) == set()
 
 
-def test_compressed_only_camera_is_not_a_family():
-    # No raw Image base advertised: not this policy's business.
-    graph = {f"{RAW}/compressed": CIMG}
-    assert image_transport_auto_skips(graph, set()) == set()
-
-
-def test_non_image_base_is_not_a_family():
-    graph = {"/foo": "std_msgs/msg/String", "/foo/compressed": CIMG}
+@pytest.mark.parametrize(
+    "graph",
+    [
+        {f"{RAW}/compressed": CIMG},  # no raw Image base advertised
+        {"/foo": "std_msgs/msg/String", "/foo/compressed": CIMG},  # base is not an Image
+    ],
+    ids=["compressed-only", "non-image-base"],
+)
+def test_without_a_raw_image_base_there_is_no_family(graph):
+    # Not this policy's business: nothing is skipped.
     assert image_transport_auto_skips(graph, set()) == set()
 
 

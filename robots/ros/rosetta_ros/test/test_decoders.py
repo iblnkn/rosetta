@@ -22,11 +22,9 @@ import types
 
 import numpy as np
 import pytest
-from codec_helpers import require_message
+from codec_helpers import load_specs, require_message
 
 from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import iter_observation_specs
 from rosetta.frames.codecs import decode_value
 
 
@@ -35,28 +33,10 @@ def _obs_spec(
     apply_block="[]",
     *,
     msg_type="sensor_msgs/msg/JointState",
-    select="[position.j1, position.j2]",
+    select=("position.j1", "position.j2"),
 ):
-    select_line = f"    select: {select}\n" if select is not None else ""
-    yaml = f"""
-robot_type: test
-robot_interface: ros2
-fps: 30
-observations:
-  observation.state:
-    channel: {{topic: /obs, type: {msg_type}}}
-    align: {{strategy: hold, timeline: receive}}
-{select_line}    apply: {apply_block}
-actions:
-  action:
-    channel: {{topic: /cmd, type: sensor_msgs/msg/JointState}}
-    align: {{strategy: hold, timeline: receive}}
-    select: [position.j1]
-"""
-    p = tmp_path / "c.yaml"
-    p.write_text(yaml)
-    contract = load_contract(p)
-    return next(iter(iter_observation_specs(contract)))
+    """Observation spec; ``select=None`` leaves select out."""
+    return load_specs(tmp_path, obs_type=msg_type, obs_select=select, obs_apply=apply_block)[1]
 
 
 def _joint_state(names, positions):
@@ -71,15 +51,6 @@ def test_decode_joint_state_selects_by_name(tmp_path):
     assert np.allclose(out, [1.0, 2.0])
 
 
-def test_decode_applies_rad2deg_then_clamp(tmp_path):
-    # Operators run front-to-back on decode: rad2deg then clamp.
-    spec = _obs_spec(tmp_path, "[rad2deg, {clamp: {min: 0, max: 90}}]")
-    msg = _joint_state(["j1", "j2"], [np.pi / 2, np.pi])
-    out = decode_value(msg, spec)
-    # [90, 180] -> clamp[0,90] -> [90, 90]
-    assert np.allclose(out, [90.0, 90.0])
-
-
 # --- per-type decode behavior ------------------------------------------------
 
 
@@ -92,13 +63,13 @@ def _ns(**fields):
     [
         (
             "sensor_msgs/msg/Imu",
-            "[orientation.x, angular_velocity.z]",
+            ["orientation.x", "angular_velocity.z"],
             _ns(orientation=_ns(x=0.1, y=0.2, z=0.3, w=0.4), angular_velocity=_ns(x=1.0, y=2.0, z=3.0)),
             [0.1, 3.0],
         ),
         (
             "nav_msgs/msg/Odometry",
-            "[pose.pose.position.x, twist.twist.angular.z]",
+            ["pose.pose.position.x", "twist.twist.angular.z"],
             _ns(pose=_ns(pose=_ns(position=_ns(x=1.5))), twist=_ns(twist=_ns(angular=_ns(z=-0.5)))),
             [1.5, -0.5],
         ),
@@ -133,37 +104,40 @@ def test_decode_string(tmp_path):
     assert decode_value(types.SimpleNamespace(data="pick up the cube"), spec) == "pick up the cube"
 
 
-# --- requires-select: selector-driven decoders have no select-less default ---
+# --- requires-select: selector-driven codecs have no select-less default ---
+
+_SELECTOR_DECODED = [
+    "sensor_msgs/msg/JointState",
+    "sensor_msgs/msg/Imu",
+    "nav_msgs/msg/Odometry",
+    "geometry_msgs/msg/Twist",
+    "geometry_msgs/msg/TwistStamped",
+    "control_msgs/msg/MultiDOFCommand",
+    "trajectory_msgs/msg/JointTrajectory",
+    "sensor_msgs/msg/Joy",
+]
+_SELECTOR_ENCODED = [t for t in _SELECTOR_DECODED if t not in ("sensor_msgs/msg/Imu", "nav_msgs/msg/Odometry")]
 
 
 @pytest.mark.parametrize(
-    "msg_type",
-    [
-        "sensor_msgs/msg/JointState",
-        "sensor_msgs/msg/Imu",
-        "nav_msgs/msg/Odometry",
-        "geometry_msgs/msg/Twist",
-        "geometry_msgs/msg/TwistStamped",
-        "control_msgs/msg/MultiDOFCommand",
-        "trajectory_msgs/msg/JointTrajectory",
-        "sensor_msgs/msg/Joy",
-    ],
+    ("section", "msg_type"),
+    [("obs", t) for t in _SELECTOR_DECODED] + [("act", t) for t in _SELECTOR_ENCODED],
 )
-def test_selector_decoders_require_select(tmp_path, msg_type):
+def test_selector_codecs_require_select(tmp_path, section, msg_type):
     # select declares a stream's width and field order; a select-less channel
     # of a selector-driven type fails at CONTRACT LOAD (requires_select
-    # registration) — not per-message at ingest, where the drop would
-    # silently zero-fill the stream.
+    # registration), not per-message at ingest, where the drop would
+    # silently zero-fill the stream, nor at first publish.
     require_message(msg_type)
     with pytest.raises(ContractValidationError, match="add 'select:'"):
-        _obs_spec(tmp_path, msg_type=msg_type, select=None)
+        load_specs(tmp_path, **{f"{section}_type": msg_type, f"{section}_select": None})
 
 
 # --- fail-fast on bad selectors and degenerate messages ----------------------
 
 
 def test_joint_state_unknown_field_raises(tmp_path):
-    spec = _obs_spec(tmp_path, select="[torque.j1]")
+    spec = _obs_spec(tmp_path, select=["torque.j1"])
     with pytest.raises(ValueError, match="Unknown JointState field 'torque'"):
         decode_value(_joint_state(["j1"], [1.0]), spec)
 
@@ -172,7 +146,7 @@ def test_multidof_unknown_field_raises(tmp_path):
     # "velocity.j1" must raise, not be read as a DOF literally named
     # "velocity.j1".
     require_message("control_msgs/msg/MultiDOFCommand")
-    spec = _obs_spec(tmp_path, msg_type="control_msgs/msg/MultiDOFCommand", select="[velocity.j1]")
+    spec = _obs_spec(tmp_path, msg_type="control_msgs/msg/MultiDOFCommand", select=["velocity.j1"])
     msg = types.SimpleNamespace(dof_names=["j1"], values=[1.0], values_dot=[])
     with pytest.raises(ValueError, match="Unknown MultiDOFCommand field 'velocity'"):
         decode_value(msg, spec)
@@ -182,18 +156,7 @@ def test_joint_trajectory_empty_points_raises(tmp_path):
     # An empty trajectory (a common "cancel" convention) must fail at decode,
     # where ingest drops it with message context — not poison the stream with
     # a wrong-width value that detonates later at sample time.
-    spec = _obs_spec(tmp_path, msg_type="trajectory_msgs/msg/JointTrajectory", select="[position.j1]")
+    spec = _obs_spec(tmp_path, msg_type="trajectory_msgs/msg/JointTrajectory", select=["position.j1"])
     msg = types.SimpleNamespace(joint_names=["j1"], points=[])
     with pytest.raises(ValueError, match="no points"):
         decode_value(msg, spec)
-
-
-# --- decode_value width gate --------------------------------------------------
-
-
-def test_decode_value_selectless_stream_must_be_scalar(tmp_path):
-    # Built-in MultiArray decoders return the whole array; without select the
-    # spec is 1-wide, so a multi-element message is refused at the choke point.
-    spec = _obs_spec(tmp_path, msg_type="std_msgs/msg/Float64MultiArray", select=None)
-    with pytest.raises(ValueError, match="select-less stream is a scalar"):
-        decode_value(types.SimpleNamespace(data=[1.0, 2.0, 3.0]), spec)

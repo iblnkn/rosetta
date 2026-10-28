@@ -21,6 +21,7 @@ so the converter must clamp. rosbag2_py QoS exposes no getters (setter-only
 pybind API), so these tests pin that conversion constructs without raising.
 """
 
+import pytest
 from rclpy.duration import Duration
 from rclpy.qos import (
     DurabilityPolicy,
@@ -33,23 +34,26 @@ from rosbag2_py._storage import QoS as Rosbag2QoS
 from rosetta_ros.bag_topics import qos_to_rosbag2
 
 RMW_DURATION_INFINITE_NS = 2**63 - 1
+# What get_publishers_info_by_topic reports for a publisher that never set
+# deadline/lifespan/lease.
+_INFINITE = Duration(nanoseconds=RMW_DURATION_INFINITE_NS)
 
 
-def test_profile_with_infinite_durations_converts():
-    # What get_publishers_info_by_topic reports for a publisher that never
-    # set deadline/lifespan/lease.
-    infinite = Duration(nanoseconds=RMW_DURATION_INFINITE_NS)
-    profile = QoSProfile(
-        history=HistoryPolicy.KEEP_LAST,
-        depth=1,
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        deadline=infinite,
-        lifespan=infinite,
-        liveliness_lease_duration=infinite,
-    )
+@pytest.mark.parametrize(
+    "profile",
+    [
+        QoSProfile(depth=10),
+        QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            deadline=_INFINITE,
+            lifespan=_INFINITE,
+            liveliness_lease_duration=_INFINITE,
+        ),
+    ],
+    ids=["default", "infinite-durations"],
+)
+def test_profile_converts(profile):
     assert isinstance(qos_to_rosbag2(profile), Rosbag2QoS)
-
-
-def test_default_profile_converts():
-    assert isinstance(qos_to_rosbag2(QoSProfile(depth=10)), Rosbag2QoS)

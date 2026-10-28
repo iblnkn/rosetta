@@ -14,8 +14,11 @@
 
 """Fakes and helpers shared by the node tests that drive work-gate callbacks directly."""
 
+import threading
 import uuid
 from types import SimpleNamespace
+
+from rosetta.policies import RunnerFeedback, RunnerResult
 
 
 class FakeGoalHandle:
@@ -61,6 +64,39 @@ class FakePublisher:
         self.published.append(msg)
         if self._on_publish is not None:
             self._on_publish()
+
+
+class FakeRunner:
+    """A PolicyRunner that runs nothing: no framework, no robot.
+
+    ``run(task)`` replaces the run body (default: a clean finish).
+    ``request_stop()`` sets ``stopped`` and then calls ``on_stop``. Subclass
+    to make another method misbehave.
+    """
+
+    def __init__(self, run=None, *, on_stop=None):
+        self._run = run
+        self._on_stop = on_stop
+        self.stopped = threading.Event()
+
+    def setup(self, host, contract) -> None:
+        pass
+
+    def run(self, frames, *, task: str, stop_event: threading.Event) -> RunnerResult:
+        if self._run is not None:
+            return self._run(task)
+        return RunnerResult(success=True, message="done")
+
+    def feedback(self) -> RunnerFeedback:
+        return RunnerFeedback()
+
+    def request_stop(self) -> None:
+        self.stopped.set()
+        if self._on_stop is not None:
+            self._on_stop()
+
+    def teardown(self) -> None:
+        pass
 
 
 def claim(node):

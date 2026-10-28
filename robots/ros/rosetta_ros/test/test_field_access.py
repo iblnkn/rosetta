@@ -12,22 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Field selectors: indexed resolution (teleop events) and the Joy / parallel-array grammars. Pure, no ROS."""
+"""Field selectors: indexed resolution (teleop events) and the Joy / parallel-array
+grammars, the latter through the decoders that parse them. No rclpy: messages are duck-typed."""
 
 import types
 
+import numpy as np
 import pytest
 
-from rosetta_ros.field_access import (
-    JOINT_TRAJECTORY_FIELDS,
-    parse_field_selector,
-    parse_joy_selector,
-    resolve_indexed,
-)
+from rosetta.frames.codecs import DECODERS, discover_codecs
+from rosetta_ros.field_access import resolve_indexed
 
 
 def _joy(buttons=(0, 1, 0), axes=(0.5, -0.5)):
     return types.SimpleNamespace(buttons=list(buttons), axes=list(axes))
+
+
+def _decode(msg_type, msg, names):
+    discover_codecs()
+    # The decoders read only the selector list off the spec.
+    return DECODERS[msg_type](msg, types.SimpleNamespace(names=names))
 
 
 def test_numeric_segment_indexes_sequence():
@@ -48,10 +52,10 @@ def test_negative_index_rejected():
 
 @pytest.mark.parametrize(
     ("selector", "expected"),
-    [("axes.0", ("axes", 0)), ("buttons.3", ("buttons", 3)), ("2", ("axes", 2))],
+    [("axes.0", 0.5), ("buttons.1", 1.0), ("1", -0.5)],  # a bare index means axes
 )
-def test_joy_selector_parses(selector, expected):
-    assert parse_joy_selector(selector) == expected
+def test_joy_selector_reads_its_field(selector, expected):
+    np.testing.assert_array_equal(_decode("sensor_msgs/msg/Joy", _joy(), [selector]), [expected])
 
 
 @pytest.mark.parametrize(
@@ -64,19 +68,18 @@ def test_joy_selector_parses(selector, expected):
 )
 def test_joy_selector_rejects_bad_input(selector, match):
     with pytest.raises(ValueError, match=match):
-        parse_joy_selector(selector)
+        _decode("sensor_msgs/msg/Joy", _joy(), [selector])
 
 
 @pytest.mark.parametrize(
     ("selector", "expected"),
     [
-        ("velocity.elbow", ("velocities", "elbow")),  # singular alias
-        ("velocities.elbow", ("velocities", "elbow")),  # plural spelling
-        ("elbow", ("positions", "elbow")),  # bare name -> default field
+        ("velocity.elbow", 2.0),  # singular alias
+        ("velocities.elbow", 2.0),  # plural spelling
+        ("elbow", 1.0),  # bare name -> default field (position)
     ],
 )
-def test_field_selector_parses_trajectory_aliases(selector, expected):
-    parsed = parse_field_selector(
-        selector, JOINT_TRAJECTORY_FIELDS, default="position", msg_type="JointTrajectoryPoint"
-    )
-    assert parsed == expected
+def test_trajectory_selector_aliases(selector, expected):
+    point = types.SimpleNamespace(positions=[1.0], velocities=[2.0], accelerations=[], effort=[])
+    msg = types.SimpleNamespace(joint_names=["elbow"], points=[point])
+    np.testing.assert_array_equal(_decode("trajectory_msgs/msg/JointTrajectory", msg, [selector]), [expected])
