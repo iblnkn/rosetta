@@ -28,9 +28,6 @@ jobs:
     env:
       ROS_DISTRO: jazzy
       ROS_REPO: main
-      # ament_python has no rosdep key (it ships with base ROS), and
-      # industrial_ci treats any unresolved key as fatal.
-      ROSDEP_SKIP_KEYS: ament_python
       TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       BEFORE_BUILD_TARGET_WORKSPACE: >-

@@ -14,9 +14,7 @@
 
 # Sphinx configuration for the Rosetta documentation site.
 #
-# Build locally:
-#   pip install -r doc/requirements.txt
-#   sphinx-build -b html doc doc/_build/html
+# Build locally: `pixi run docs-build` (or `pixi run docs-serve`).
 #
 # The site follows the ros2_control / Nav2 / MoveIt pattern: Sphinx + MyST
 # (content stays markdown), sphinx_rtd_theme, GitHub Pages. Versioned

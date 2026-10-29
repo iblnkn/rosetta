@@ -36,6 +36,10 @@ MANIFEST
 # colcon / ROS logs
 logs/
 
+# colcon install and log trees (build/ is ignored above)
+install/
+log/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt

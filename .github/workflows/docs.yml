@@ -19,19 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          python-version: "3.12"
-      - name: Install docs toolchain
-        run: pip install -r docs/requirements.txt
+          pixi-version: v0.72.2
+          locked: true
+          environments: docs
       - name: Build (warnings are errors)
-        run: sphinx-build -W -b html docs _site
+        run: pixi run docs-build
       - name: Check external links
-        run: sphinx-build -b linkcheck docs _linkcheck
+        run: pixi run docs-linkcheck
         continue-on-error: true
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: build/docs
 
   deploy:
     needs: build

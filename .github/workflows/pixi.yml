@@ -1,0 +1,40 @@
+name: pixi
+
+# The from-source path users take: the locked pixi environment (RoboStack ROS 2
+# Jazzy + LeRobot from PyPI), then `pixi run test` builds and tests every
+# package together. The docs build checks the locked docs environment, which
+# docs.yml otherwise only builds on main.
+on:
+  pull_request:
+    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, policies/**, docs/**, .github/workflows/pixi.yml]
+  push:
+    branches: [main, dev]
+    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, policies/**, docs/**, .github/workflows/pixi.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      # The runner image sets PSModulePath and ships pwsh, so colcon-powershell
+      # takes it as the parent shell and builds each package's test environment
+      # through PowerShell, which drops the workspace packages from PYTHONPATH.
+      # https://github.com/colcon/colcon-powershell/issues/39
+      PSModulePath: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          pixi-version: v0.72.2
+          locked: true
+          environments: default docs
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+      - run: pixi run test
+      - name: Test logs
+        if: failure()
+        run: tail -n 40 log/latest_test/*/stdout_stderr.log
+      - run: pixi run docs-build

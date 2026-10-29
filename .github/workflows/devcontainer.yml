@@ -1,0 +1,24 @@
+name: devcontainer
+
+# Builds the default dev container the way "Reopen in Container" does, then
+# builds the packages in it. pixi.yml runs the tests against the same lock.
+on:
+  pull_request:
+    paths: [.devcontainer/**, .github/workflows/devcontainer.yml]
+  push:
+    branches: [main, dev]
+    paths: [.devcontainer/**, .github/workflows/devcontainer.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: devcontainers/ci@v0.3
+        with:
+          push: never
+          runCmd: pixi run build
