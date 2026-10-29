@@ -34,7 +34,6 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import fields
 from typing import Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
@@ -104,7 +103,6 @@ class LeRobotPolicyRunner:
         _p("chunk_size_threshold", 0.5, "Queue threshold ratio to request new chunk (0.0-1.0)")
         _p("aggregate_fn_name", "weighted_average", "Action aggregation function")
         _p("launch_local_server", True, "Launch local policy server subprocess", True)
-        _p("obs_similarity_atol", 1.0, "L2 tolerance for obs similarity (-1.0 disables)")
         _p("is_classifier", False, "Use reward section as action output", True)
         _p(
             "server_startup_timeout_sec",
@@ -257,15 +255,6 @@ class LeRobotPolicyRunner:
             "chunk_size_threshold": host.get("chunk_size_threshold"),
             "aggregate_fn_name": host.get("aggregate_fn_name"),
         }
-
-        # obs_similarity_atol is optional in some LeRobot versions. Gate on availability.
-        atol_param = host.get("obs_similarity_atol")
-        atol = None if atol_param < 0 else atol_param
-        supported = {f.name for f in fields(RobotClientConfig)}
-        if "obs_similarity_atol" in supported:
-            config_kwargs["obs_similarity_atol"] = atol
-        elif atol_param != 1.0:
-            host.logger.warning("obs_similarity_atol not supported in this LeRobot version; ignoring.")
 
         return RobotClientConfig(**config_kwargs)
 

@@ -279,7 +279,6 @@ default and the third is what `params/policy_runner.yaml` sets.
 | `actions_per_chunk` | `50` | `30` | Actions requested per inference. Read at each run start. |
 | `chunk_size_threshold` | `0.5` | `0.95` | Fraction, 0 to 1. Queue fill at which the next observation is sent. Read at each run start. |
 | `aggregate_fn_name` | `weighted_average` | `weighted_average` | How an overlapping chunk merges with the queue: `weighted_average` (0.3 old, 0.7 new), `latest_only`, `average`, `conservative` (0.7 old, 0.3 new). Read at each run start. |
-| `obs_similarity_atol` | `1.0` | `-1.0` | Tolerance of the server's observation-similarity filter. Negative disables it. LeRobot 0.6.1 has no such option: any value other than `1.0` logs `obs_similarity_atol not supported in this LeRobot version; ignoring.` at each run start. |
 
 The adapter refuses a contract at configure when it has more than one
 numeric observation key, more than one action key, or a numeric stream
