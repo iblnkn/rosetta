@@ -1,0 +1,32 @@
+{
+  "name": "rosetta",
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
+  // The environment lives on a named volume: conda packages hold files that
+  // differ only in case, which breaks on macOS and Windows bind mounts. The
+  // package cache sits on the same volume, so pixi hardlinks from it instead of
+  // copying, and it survives container rebuilds.
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume"
+  ],
+  "containerEnv": { "PIXI_CACHE_DIR": "${containerWorkspaceFolder}/.pixi/package-cache" },
+  "postCreateCommand": "sudo chown vscode .pixi && pixi install",
+  // Host networking lets ROS discovery reach the host and robots on the LAN.
+  // Fast DDS treats peers on the same host as shared-memory peers, so the IPC
+  // namespace has to be shared too, or local traffic silently fails.
+  "runArgs": ["--network=host", "--ipc=host"],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.pixi/envs/default/bin/python"
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "renan-r-santos.pixi-code",
+        "ranch-hand-robotics.rde-pack",
+        "redhat.vscode-xml",
+        "redhat.vscode-yaml"
+      ]
+    }
+  }
+}

@@ -81,6 +81,5 @@ LeRobot policy runner uses. `lerobot_robot_rosetta` and
 `lerobot_teleoperator_rosetta` need `lerobot<0.6.2`, `rosetta` and
 `rosetta_ros`. `rosdep` has no key for LeRobot, so install it with `pip`. For
 the same reason the LeRobot packages are not released to the ROS buildfarm.
-[`rosetta_ws`](https://github.com/iblnkn/rosetta_ws) installs LeRobot 0.6.1
-from a source checkout with the `dataset`, `async`, `training`, `peft` and
-`smolvla` extras.
+The repository's pixi environment installs LeRobot 0.6.1 from PyPI with the
+`dataset`, `async`, `training`, `peft` and `smolvla` extras.

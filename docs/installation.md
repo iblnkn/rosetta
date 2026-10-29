@@ -5,7 +5,7 @@ Install Rosetta one of three ways. Pick by what you already have.
 | You have | Use |
 |---|---|
 | Nothing, and you want to run the tutorial | [ros-physical-ai/demos](#the-demos-workspace) |
-| Nothing, and you have your own robot | [rosetta_ws](#rosetta_ws) |
+| Nothing, and you have your own robot | [From source with pixi](#from-source-with-pixi) |
 | A ROS 2 workspace already | [An existing workspace](#an-existing-workspace) |
 
 `main` is developed and tested on ROS 2 Jazzy (Python 3.12). CI runs no other
@@ -36,29 +36,41 @@ The demos pin their own Rosetta commits in `pai.repos`. Those commits
 predate the `rosetta_ros` package these docs use, so commands such as
 `ros2 launch rosetta_ros ...` fail there until the demos update their pins.
 
-## rosetta_ws
+## From source with pixi
 
-[rosetta_ws](https://github.com/iblnkn/rosetta_ws) installs ROS 2 Jazzy
-through [RoboStack](https://robostack.github.io/), LeRobot 0.6.1, torch and
-every Rosetta package with [pixi](https://pixi.sh). It runs on Linux x86_64,
-Linux aarch64 and macOS arm64.
+The repository carries a [pixi](https://pixi.sh) environment: ROS 2 Jazzy
+through [RoboStack](https://robostack.github.io/), and LeRobot 0.6.1 with
+torch from PyPI. `pixi.lock` pins it for Linux x86_64, Linux aarch64 and
+macOS arm64. CI tests Linux x86_64.
 
 ```bash
-git clone https://github.com/iblnkn/rosetta_ws.git && cd rosetta_ws
-pixi run --frozen setup    # clone the packages, install the environment
-pixi run build             # colcon build into install/
+git clone https://github.com/iblnkn/rosetta.git && cd rosetta
+pixi run build    # installs the environment on first use, then colcon build
 ```
 
-Use `--frozen` the first time. Without it, pixi checks the whole lockfile
-before LeRobot's checkout under `libs/` exists, and fails. After setup, plain
-`pixi run` works.
+Run ROS commands inside `pixi shell`, or prefix them with `pixi run`. Both
+source `install/setup.bash`. Until the first build creates that file, every
+pixi command prints `WARN Could not find activation scripts:` with its path.
 
-Run ROS commands inside `pixi shell`, or prefix them with `pixi run`. The
-environment sets `RMW_IMPLEMENTATION=rmw_zenoh_cpp`, so start the Zenoh
-router in its own terminal and leave it running:
+`pixi run test` builds and runs every package's tests, and `pixi run lint`
+runs the same pre-commit hooks as CI. `pixi task list` shows the rest.
+
+`pixi.lock` has no Windows platform. On Windows, use the repository's dev
+container, described in
+[CONTRIBUTING.md](https://github.com/iblnkn/rosetta/blob/main/CONTRIBUTING.md#development-environment).
+
+The environment leaves `RMW_IMPLEMENTATION` unset, so ROS uses its default
+RMW. To use Zenoh instead, start the router in its own terminal and leave it
+running:
 
 ```bash
 pixi run start-zenoh
+```
+
+Then set the variable in each terminal where you run nodes:
+
+```bash
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 ```
 
 ## An existing workspace
@@ -68,13 +80,12 @@ pixi run start-zenoh
 
    ```bash
    git clone https://github.com/iblnkn/rosetta.git src/rosetta
-   rosdep install --from-paths src --ignore-src -y --skip-keys ament_python
+   rosdep install --from-paths src --ignore-src -y
    colcon build --packages-up-to rosetta_ros
    source install/setup.bash
    ```
 
-   `ament_python` has no rosdep key, so rosdep stops on it unless you skip
-   it. `rosetta_ros` has the nodes, launch files and `rosetta_port`, and
+   `rosetta_ros` has the nodes, launch files and `rosetta_port`, and
    brings `rosetta` and `rosetta_interfaces` with it. To build everything,
    including `rosetta_ros_hil` and the LeRobot packages, drop
    `--packages-up-to rosetta_ros`.

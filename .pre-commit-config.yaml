@@ -10,6 +10,7 @@ repos:
       - id: check-yaml
       - id: check-xml
       - id: check-added-large-files
+        exclude: ^pixi\.lock$
       - id: check-merge-conflict
       - id: mixed-line-ending
   - repo: https://github.com/astral-sh/ruff-pre-commit

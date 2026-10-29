@@ -1,0 +1,28 @@
+{
+  // The default container plus every NVIDIA GPU, for training. Needs the NVIDIA
+  // Container Toolkit on the host. Shares the .pixi volume with the default
+  // container, so switching between them doesn't reinstall.
+  "name": "rosetta (NVIDIA GPU)",
+  "build": { "dockerfile": "../Dockerfile", "context": "../.." },
+  "mounts": [
+    "source=${localWorkspaceFolderBasename}-pixi,target=${containerWorkspaceFolder}/.pixi,type=volume"
+  ],
+  "containerEnv": { "PIXI_CACHE_DIR": "${containerWorkspaceFolder}/.pixi/package-cache" },
+  "postCreateCommand": "sudo chown vscode .pixi && pixi install",
+  "runArgs": ["--network=host", "--ipc=host", "--gpus=all"],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.pixi/envs/default/bin/python"
+      },
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "renan-r-santos.pixi-code",
+        "ranch-hand-robotics.rde-pack",
+        "redhat.vscode-xml",
+        "redhat.vscode-yaml"
+      ]
+    }
+  }
+}

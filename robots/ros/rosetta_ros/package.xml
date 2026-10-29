@@ -6,8 +6,6 @@
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
-
   <exec_depend>rosetta</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>action_msgs</exec_depend>

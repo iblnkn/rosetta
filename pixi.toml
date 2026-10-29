@@ -1,0 +1,97 @@
+[workspace]
+name = "rosetta"
+description = "Rosetta on ROS 2 Jazzy (RoboStack) with LeRobot, built from source"
+channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
+platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
+requires-pixi = ">=0.72"
+preview = ["pixi-build"]
+
+# The packages' own dependencies come from their package.xml files: each one
+# is a [dev] source package, and pixi resolves its package.xml at install time.
+[dev]
+ros-jazzy-lerobot-robot-rosetta = { path = "policies/lerobot/lerobot_robot_rosetta/package.xml" }
+ros-jazzy-lerobot-rosetta = { path = "policies/lerobot/lerobot_rosetta/package.xml" }
+ros-jazzy-lerobot-teleoperator-rosetta = { path = "policies/lerobot/lerobot_teleoperator_rosetta/package.xml" }
+ros-jazzy-rosetta = { path = "rosetta/package.xml" }
+ros-jazzy-rosetta-interfaces = { path = "robots/ros/rosetta_interfaces/package.xml" }
+ros-jazzy-rosetta-ros = { path = "robots/ros/rosetta_ros/package.xml" }
+ros-jazzy-rosetta-ros-hil = { path = "robots/ros/rosetta_ros_hil/package.xml" }
+
+[dependencies]
+ros-jazzy-ros-base = "*"
+compilers = "*"
+pkg-config = "*"
+make = "*"
+ninja = "*"
+colcon-common-extensions = "*"
+# Older colcon-core lets setuptools float to >=80, which drops the
+# `develop --editable` that `--symlink-install` uses for ament_python packages.
+colcon-core = ">=0.20"
+# launch_testing's pytest plugin breaks on 9.1.
+pytest = "<9.1"
+# Opt-in Zenoh RMW: `pixi run start-zenoh`, then RMW_IMPLEMENTATION=rmw_zenoh_cpp.
+ros-jazzy-rmw-zenoh-cpp = "*"
+# Runs the repo's .pre-commit-config.yaml, which pins its own ruff.
+pre-commit = "*"
+
+[activation]
+scripts = ["install/setup.bash"]
+
+# robostack-jazzy's bundled clang/ld can't resolve implicit libSystem symbols
+# against recent macOS SDKs, so linking goes through the system linker (see
+# pixi/macos-ld-wrapper.sh). SIP keeps typesupport dylibs off
+# DYLD_LIBRARY_PATH (see pixi/macos-rosidl-dylibs.sh).
+# KMP_DUPLICATE_LIB_OK: pip torch bundles its own libomp next to the
+# conda-forge llvm-openmp the ROS stack pulls in, and two OpenMP runtimes in
+# one process abort `import torch`.
+[target.osx-arm64.activation]
+scripts = ["install/setup.bash", "pixi/macos-rosidl-dylibs.sh"]
+env = { LDFLAGS = "${LDFLAGS} --ld-path=${PIXI_PROJECT_ROOT}/pixi/macos-ld-wrapper.sh", KMP_DUPLICATE_LIB_OK = "TRUE" }
+
+[tasks]
+build = { cmd = "colcon build --symlink-install --cmake-args -DPython_FIND_VIRTUALENV=ONLY -DPython3_FIND_VIRTUALENV=ONLY", description = "Build every package into install/" }
+test = { cmd = "colcon test && colcon test-result --verbose", depends-on = ["build"], description = "Build, then run every package's tests" }
+lint = { cmd = "pre-commit run --all-files", description = "ruff, license headers and file hygiene" }
+clean = { cmd = "rm -rf build install log", description = "Remove build/, install/ and log/" }
+start-zenoh = { cmd = "ros2 run rmw_zenoh_cpp rmw_zenohd", description = "Zenoh router for rmw_zenoh_cpp (run in its own terminal)" }
+
+# LeRobot, the framework the lerobot_* packages adapt. It's pip-only, so no
+# package.xml key covers it.
+[feature.lerobot.dependencies]
+# Conda builds of the native media/data libraries: their pip wheels link the
+# system libiconv, which the conda libiconv loaded first lacks (dlopen crash).
+pyarrow = ">=23,<24"
+av = ">=15,<16"
+# lerobot 0.6.1's upper bounds on packages the conda solve also provides; the
+# ROS stack otherwise floats past them.
+numpy = ">=2.2,<2.3"
+packaging = "<26"
+pillow = "<13"
+
+[feature.lerobot.pypi-dependencies]
+# 0.6.1 is the last release with the async_inference the policy runner uses.
+lerobot = { version = "==0.6.1", extras = ["dataset", "async", "training", "peft", "smolvla"] }
+
+[feature.lerobot.tasks]
+convert-bags = { cmd = "rosetta_port", description = "Convert bags to a LeRobot dataset (see rosetta_port --help)" }
+train = { cmd = "lerobot-train", description = "Train a LeRobot policy (see lerobot-train --help)" }
+
+# The Sphinx site in docs/. No ROS needed.
+[feature.docs.dependencies]
+python = "3.12.*"
+
+[feature.docs.pypi-dependencies]
+sphinx = ">=9.1"
+myst-parser = ">=5.1"
+sphinx-rtd-theme = ">=3.1"
+sphinx-copybutton = ">=0.5.2"
+sphinx-autobuild = "*"
+
+[feature.docs.tasks]
+docs-build = { cmd = "sphinx-build -W -b html docs build/docs", description = "Build the docs into build/docs (warnings are errors)" }
+docs-serve = { cmd = "sphinx-autobuild --open-browser docs build/docs", description = "Serve the docs, rebuilding on save" }
+docs-linkcheck = { cmd = "sphinx-build -b linkcheck docs build/docs-linkcheck", description = "Check the docs' external links" }
+
+[environments]
+default = { features = ["lerobot"] }
+docs = { features = ["docs"], no-default-feature = true }
