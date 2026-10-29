@@ -26,7 +26,7 @@ from types import SimpleNamespace
 
 import pytest
 from lerobot.async_inference.configs import PolicyServerConfig
-from lerobot.async_inference.helpers import RemotePolicyConfig
+from lerobot.async_inference.helpers import RemotePolicyConfig, TimedObservation
 
 from lerobot_rosetta import policy_server as ps
 
@@ -161,3 +161,30 @@ def test_unsupported_checkpoint_type_rejected(recorder, server):
     with pytest.raises(ValueError, match="'not_a_policy'.*does not support"):
         server.preload("user/repo", "cpu")
     assert recorder.loads == []
+
+
+# -------------------- Observation filter --------------------
+
+
+_STATE_FEATURES = {"observation.state": {"dtype": "float32", "shape": (2,), "names": ["j0", "j1"]}}
+
+
+def _obs(timestep, j0=0.0):
+    return TimedObservation(timestamp=0.0, timestep=timestep, observation={"j0": j0, "j1": 0.0})
+
+
+@pytest.fixture
+def filter_server():
+    server = ps.RosettaPolicyServer(PolicyServerConfig(host="127.0.0.1", port=8080))
+    server.lerobot_features = _STATE_FEATURES
+    return server
+
+
+def test_similar_observation_is_kept(filter_server):
+    # LeRobot skips this one: its joint state equals the last inferred one.
+    assert filter_server._obs_sanity_checks(_obs(5), _obs(4)) is True
+
+
+def test_predicted_timestep_is_skipped(filter_server):
+    filter_server._predicted_timesteps.add(5)
+    assert filter_server._obs_sanity_checks(_obs(5), _obs(4, j0=10.0)) is False

@@ -30,10 +30,6 @@ the first launch has to download weights from the Hub. `policy_device` is
 `cuda` by default. The server falls back to `cpu`, with a warning in its log,
 when its machine has no CUDA.
 
-With LeRobot 0.6.1, every run logs
-`obs_similarity_atol not supported in this LeRobot version; ignoring.`
-LeRobot's client has no such option, so the parameter has no effect.
-
 ## Start and stop a run
 
 In a second terminal, start a run with the prompt the episodes were recorded

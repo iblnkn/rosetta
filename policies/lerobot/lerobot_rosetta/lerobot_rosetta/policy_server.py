@@ -26,7 +26,20 @@ goal pays torch import, CUDA init, and the full weight load. This wrapper:
   requested (pretrained_name_or_path, device) is unchanged;
 - reads the policy type from the checkpoint's config.json and ignores the
   policy_type the client sends, which LeRobot's protocol requires but the
-  checkpoint already records.
+  checkpoint already records;
+- runs every observation the client sends through the policy, without
+  LeRobot's observation-similarity filter. LeRobot skips an observation
+  whose joint state is within L2 1.0 of the last one it inferred. The client
+  only sends a must_go observation, which bypasses the filter, once its
+  action queue is empty, so an arm moving slowly has every observation
+  skipped until then and goes a tick or more without an action at each
+  refill;
+- freezes the garbage collector at startup. Importing torch, transformers
+  and LeRobot leaves about 500,000 tracked objects, and a full collection
+  walks them all in about 200 ms during which no RPC is served. The client
+  blocks its control loop on SendObservations, so that pause stops the
+  robot's actions. Objects created after the freeze, a loaded policy
+  included, are collected as usual.
 
 Pre/post processors are still rebuilt on every handshake: they are cheap and
 depend on the client-sent rename_map.
@@ -37,6 +50,7 @@ Usage:
 """
 
 import argparse
+import gc
 import pickle  # nosec
 import time
 from concurrent import futures
@@ -68,6 +82,14 @@ class RosettaPolicyServer(PolicyServer):
         super().__init__(config)
         # (pretrained_name_or_path, device) of the loaded policy.
         self._loaded_key: tuple[str, str] | None = None
+
+    # LeRobot 0.6.1's version also skips an observation whose joint state is
+    # within L2 1.0 of the last one inferred (see the module docstring). This
+    # keeps only its predicted-timestep check.
+    def _obs_sanity_checks(self, obs, previous_obs) -> bool:
+        """True unless the observation's timestep was already inferred."""
+        with self._predicted_timesteps_lock:
+            return obs.get_timestep() not in self._predicted_timesteps
 
     def preload(self, pretrained_name_or_path: str, device: str) -> None:
         """Load the policy ahead of any client (call before binding the port)."""
@@ -176,6 +198,12 @@ def main():
     parser.add_argument("--pretrained-name-or-path", default="", help="Preload: weights path/repo")
     parser.add_argument("--policy-device", default="", help="Preload: inference device")
     args = parser.parse_args()
+
+    # Everything imported so far lives as long as the process: take it out of
+    # future collections (see the module docstring). Collect first so import
+    # garbage isn't frozen with it.
+    gc.collect()
+    gc.freeze()
 
     config = PolicyServerConfig(
         host=args.host,
