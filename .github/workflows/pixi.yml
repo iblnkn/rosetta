@@ -28,4 +28,13 @@ jobs:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
       - run: pixi run test
+      - name: Test logs
+        if: failure()
+        run: |
+          tail -n 40 log/latest_test/*/stdout_stderr.log
+          # TEMPORARY diagnosis of the CI-only import failure
+          pixi run bash -c 'echo "$PYTHONPATH" | tr ":" "\n"; python -c "import sys; print(sys.path)"; python -c "import rosetta, sys; print(rosetta.__file__)"' || true
+          ls -la build/rosetta build/rosetta/share/rosetta/hook || true
+          cat build/rosetta/share/rosetta/hook/pythonpath_develop.dsv install/rosetta/lib/python3.12/site-packages/rosetta.egg-link || true
+          id; env | grep -iE '^(python|pip|conda|virtual|pixi|colcon|ament)' || true
       - run: pixi run docs-build
