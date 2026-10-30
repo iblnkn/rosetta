@@ -87,7 +87,7 @@ entry points, and nothing in this repository changes.
 
 ## Status
 
-- `main` is developed and tested on ROS 2 Jazzy (Python 3.12). CI runs no
+- `main` is developed and tested on ROS 2 Lyrical (Python 3.14). CI runs no
   other distro.
 - The LeRobot packages need `lerobot<0.6.2`. LeRobot 0.6.2 removes the async
   inference that the LeRobot policy runner is built on.

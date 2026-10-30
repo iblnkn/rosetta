@@ -18,7 +18,7 @@ jobs:
   industrial_ci:
     runs-on: ubuntu-latest
     env:
-      ROS_DISTRO: jazzy
+      ROS_DISTRO: lyrical
       ROS_REPO: main
       TARGET_WORKSPACE: "rosetta robots/ros"
     steps:

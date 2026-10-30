@@ -18,8 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # 3.12 is ROS 2 Jazzy's Python and the oldest Rosetta supports.
-        python-version: ["3.12", "3.13"]
+        # 3.14 is ROS 2 Lyrical's Python. 3.12 is the oldest Rosetta's core
+        # supports as a plain Python package.
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

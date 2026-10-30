@@ -8,7 +8,7 @@ Install Rosetta one of three ways. Pick by what you already have.
 | Nothing, and you have your own robot | [From source with pixi](#from-source-with-pixi) |
 | A ROS 2 workspace already | [An existing workspace](#an-existing-workspace) |
 
-`main` is developed and tested on ROS 2 Jazzy (Python 3.12). CI runs no other
+`main` is developed and tested on ROS 2 Lyrical (Python 3.14). CI runs no other
 distro.
 
 ## The demos workspace
@@ -38,7 +38,7 @@ predate the `rosetta_ros` package these docs use, so commands such as
 
 ## From source with pixi
 
-The repository carries a [pixi](https://pixi.sh) environment: ROS 2 Jazzy
+The repository carries a [pixi](https://pixi.sh) environment: ROS 2 Lyrical
 through [RoboStack](https://robostack.github.io/), and LeRobot 0.6.1 with
 torch from PyPI. `pixi.lock` pins it for Linux x86_64, Linux aarch64 and
 macOS arm64. CI tests Linux x86_64.

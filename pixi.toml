@@ -1,7 +1,7 @@
 [workspace]
 name = "rosetta"
-description = "Rosetta on ROS 2 Jazzy (RoboStack) with LeRobot, built from source"
-channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
+description = "Rosetta on ROS 2 Lyrical (RoboStack) with LeRobot, built from source"
+channels = ["https://prefix.dev/robostack-lyrical", "https://prefix.dev/conda-forge"]
 platforms = ["linux-64", "osx-arm64", "linux-aarch64"]
 requires-pixi = ">=0.72"
 preview = ["pixi-build"]
@@ -9,16 +9,16 @@ preview = ["pixi-build"]
 # The packages' own dependencies come from their package.xml files: each one
 # is a [dev] source package, and pixi resolves its package.xml at install time.
 [dev]
-ros-jazzy-lerobot-robot-rosetta = { path = "policies/lerobot/lerobot_robot_rosetta/package.xml" }
-ros-jazzy-lerobot-rosetta = { path = "policies/lerobot/lerobot_rosetta/package.xml" }
-ros-jazzy-lerobot-teleoperator-rosetta = { path = "policies/lerobot/lerobot_teleoperator_rosetta/package.xml" }
-ros-jazzy-rosetta = { path = "rosetta/package.xml" }
-ros-jazzy-rosetta-interfaces = { path = "robots/ros/rosetta_interfaces/package.xml" }
-ros-jazzy-rosetta-ros = { path = "robots/ros/rosetta_ros/package.xml" }
-ros-jazzy-rosetta-ros-hil = { path = "robots/ros/rosetta_ros_hil/package.xml" }
+ros-lyrical-lerobot-robot-rosetta = { path = "policies/lerobot/lerobot_robot_rosetta/package.xml" }
+ros-lyrical-lerobot-rosetta = { path = "policies/lerobot/lerobot_rosetta/package.xml" }
+ros-lyrical-lerobot-teleoperator-rosetta = { path = "policies/lerobot/lerobot_teleoperator_rosetta/package.xml" }
+ros-lyrical-rosetta = { path = "rosetta/package.xml" }
+ros-lyrical-rosetta-interfaces = { path = "robots/ros/rosetta_interfaces/package.xml" }
+ros-lyrical-rosetta-ros = { path = "robots/ros/rosetta_ros/package.xml" }
+ros-lyrical-rosetta-ros-hil = { path = "robots/ros/rosetta_ros_hil/package.xml" }
 
 [dependencies]
-ros-jazzy-ros-base = "*"
+ros-lyrical-ros-base = "*"
 compilers = "*"
 pkg-config = "*"
 make = "*"
@@ -30,14 +30,14 @@ colcon-core = ">=0.20"
 # launch_testing's pytest plugin breaks on 9.1.
 pytest = "<9.1"
 # Opt-in Zenoh RMW: `pixi run start-zenoh`, then RMW_IMPLEMENTATION=rmw_zenoh_cpp.
-ros-jazzy-rmw-zenoh-cpp = "*"
+ros-lyrical-rmw-zenoh-cpp = "*"
 # Runs the repo's .pre-commit-config.yaml, which pins its own ruff.
 pre-commit = "*"
 
 [activation]
 scripts = ["install/setup.bash"]
 
-# robostack-jazzy's bundled clang/ld can't resolve implicit libSystem symbols
+# robostack-lyrical's bundled clang/ld can't resolve implicit libSystem symbols
 # against recent macOS SDKs, so linking goes through the system linker (see
 # pixi/macos-ld-wrapper.sh). SIP keeps typesupport dylibs off
 # DYLD_LIBRARY_PATH (see pixi/macos-rosidl-dylibs.sh).
@@ -63,10 +63,26 @@ start-zenoh = { cmd = "ros2 run rmw_zenoh_cpp rmw_zenohd", description = "Zenoh 
 pyarrow = ">=23,<24"
 av = ">=15,<16"
 # lerobot 0.6.1's upper bounds on packages the conda solve also provides; the
-# ROS stack otherwise floats past them.
-numpy = ">=2.2,<2.3"
+# ROS stack otherwise floats past them. numpy is the exception: LeRobot's
+# <2.3 has no Python 3.14 builds, so the override below lifts it.
+numpy = ">=2.3,<3"
 packaging = "<26"
 pillow = "<13"
+
+# evdev (via lerobot -> pynput) publishes no Python 3.14 wheel. The conda
+# build keeps pip from compiling it.
+[feature.lerobot.target.linux-64.dependencies]
+evdev = "*"
+
+[feature.lerobot.target.linux-aarch64.dependencies]
+evdev = "*"
+
+# Lift LeRobot 0.6.1's numpy<2.3 (no Python 3.14 builds), and take draccus
+# 0.11.6 plus its Python 3.14 fix, inside LeRobot's draccus>=0.11.6,<0.12.
+# TODO: drop the draccus fork once dlwh/draccus#70 is released.
+[feature.lerobot.pypi-options.dependency-overrides]
+numpy = ">=2.3,<3"
+draccus = { git = "https://github.com/francocipollone/draccus.git", rev = "8976f1d5bd3c7f78521f43c9c302396076064af2" }
 
 [feature.lerobot.pypi-dependencies]
 # 0.6.1 is the last release with the async_inference the policy runner uses.
