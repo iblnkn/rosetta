@@ -41,7 +41,8 @@ from rosidl_runtime_py.utilities import get_message
 from rosetta.contract.specs import StreamSpec
 from rosetta.frames.codecs import has_decoder
 from rosetta.frames.layout import FrameLayout
-from rosetta.frames.resample import StreamBuffer, step_ns
+from rosetta.frames.resample import StreamBuffer, num_ticks, step_ns
+from rosetta.frames.resample import tick_ns as grid_tick_ns
 from rosetta_ros.bag_metadata import (
     BAG_CONTRACT_KEY,
     BAG_METADATA_KEY,
@@ -267,7 +268,7 @@ def _open_and_validate(bag_dir: Path, specs: list[StreamSpec], warmup_keys: set[
             fps=fps,
             step=step,
             start_ns=start_ns,
-            n_ticks=max(1, int((end_ns - start_ns) // step) + 1),
+            n_ticks=num_ticks(end_ns - start_ns, fps),
         )
     except Exception:
         reader.close()  # a refused port must not leak the bag's file handles
@@ -373,7 +374,7 @@ def iter_bag_frames(
                 if frame is not None:
                     yield frame
                 tick_idx += 1
-                tick_ns = start_ns + tick_idx * step
+                tick_ns = grid_tick_ns(start_ns, tick_idx, fps)
 
             if topic in task_topics:
                 msg = deserialize_message(data, get_message(task_topics[topic]))
@@ -405,7 +406,7 @@ def iter_bag_frames(
             if frame is not None:
                 yield frame
             tick_idx += 1
-            tick_ns = start_ns + tick_idx * step
+            tick_ns = grid_tick_ns(start_ns, tick_idx, fps)
 
         if emitted == 0:
             stale = [entries[i][0].key for i in warmup_idxs if entries[i][1].last_ts is None]
