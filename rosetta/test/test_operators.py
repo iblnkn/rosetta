@@ -62,6 +62,27 @@ def test_resize_upsample_is_symmetric():
 
 
 @pytest.mark.parametrize(
+    ("shape", "size"),
+    [
+        ((480, 640, 3), [480, 480]),
+        ((720, 1280, 3), [224, 224]),
+        ((480, 640, 3), [960, 1280]),
+        ((480, 640), [240, 320]),
+        ((7, 13, 3), [5, 9]),
+    ],
+)
+def test_resize_matches_reference_sampling(shape, size):
+    # Datasets and trained policies depend on these exact pixels, so any faster
+    # implementation must reproduce the original fancy-index gather bit for bit.
+    img = np.random.default_rng(0).integers(0, 256, shape, dtype=np.uint8)
+    y = np.round(np.linspace(0, shape[0] - 1, size[0])).astype(np.int64)
+    x = np.round(np.linspace(0, shape[1] - 1, size[1])).astype(np.int64)
+    out = build_operator("resize", size, IMG_CTX).forward(img)
+    assert out.dtype == img.dtype
+    assert np.array_equal(out, img[y][:, x])
+
+
+@pytest.mark.parametrize(
     ("args", "match"),
     [
         ([0, 2], "must be in"),  # zero dim
