@@ -45,7 +45,7 @@ def test_clock_follows_host_node_sim_time():
     bridge = TopicBridge([], [], fps=10)
     try:
         bridge.setup(node)
-        assert bridge.clock.ros_time_is_active
+        assert bridge.clock.simulated
     finally:
         bridge.teardown()
         node.destroy_node()

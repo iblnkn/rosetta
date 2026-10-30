@@ -7,7 +7,9 @@ two entry points. `lerobot_rosetta` is the full example.
 
 Both classes implement protocols from `rosetta.policies`, and both need a
 constructor that takes no arguments. The adapter imports no ROS: the robot
-side reaches it only through frames. The
+side reaches it only through frames. Where your framework hosts a run itself,
+open the robot with `load_robot_interface(contract.robot_interface).connect(...)`
+from `rosetta.robots.registry` instead, as `lerobot_robot_rosetta` does. The
 [Python API](../reference/python-api.md) lists the names you can import.
 
 ## Write the dataset writer
@@ -109,8 +111,9 @@ What the runner has to handle:
   again cleanly after a cleanup and configure.
 - `frames` is the live robot, a `FrameIO`: `sample_frame()` returns the
   current observation frame, `warmed_up` is true once every observation
-  stream has delivered a value, and `publish_frame()` publishes one action
-  frame keyed by contract key.
+  stream has delivered a value, `publish_frame()` publishes one action
+  frame keyed by contract key, and `clock.simulated` is true when the robot
+  runs on a simulator's clock.
 - `run` blocks until `stop_event` is set or the policy finishes. A run that
   stops because it was asked to is a success. Return
   `RunnerResult(success=False, message=...)` only for a real failure, which

@@ -168,6 +168,11 @@ def test_only_a_dead_server_respawns_with_same_args(spawned, poll_value, spawns)
 # -------------------- Sim-time pacing config --------------------
 
 
+def _frames(simulated=False):
+    """A frame I/O stand-in; run() reads only its clock before the (faked) client takes over."""
+    return SimpleNamespace(clock=SimpleNamespace(simulated=simulated))
+
+
 def _robot_config(fps=30):
     from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 
@@ -176,16 +181,14 @@ def _robot_config(fps=30):
     return cfg
 
 
-# Under sim time the ceiling is the gate's slice-resolution rate: the loop
-# must not bind before the gate itself runs out of resolution.
+# On a simulated clock the ceiling is the gate's slice-resolution rate: the
+# loop must not bind before the gate itself runs out of resolution.
 @pytest.mark.parametrize(
-    ("use_sim_time", "fps"), [(False, 30), (True, int(1 / pr.GATE_SLICE_SEC))], ids=["wall_clock", "sim_time"]
+    ("simulated", "fps"), [(False, 30), (True, int(1 / pr.GATE_SLICE_SEC))], ids=["wall_clock", "sim_time"]
 )
-def test_client_fps_is_contract_fps_unless_sim_time_lifts_it(spawned, use_sim_time, fps):
-    runner, _host = _setup_runner(
-        {"pretrained_name_or_path": "user/repo", "policy_device": "cpu", "use_sim_time": use_sim_time}
-    )
-    config = runner._build_client_config(_robot_config(fps=30), task="t")
+def test_client_fps_is_contract_fps_unless_sim_time_lifts_it(spawned, simulated, fps):
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cpu"})
+    config = runner._build_client_config(_robot_config(fps=30), task="t", simulated=simulated)
     assert config.fps == fps
 
 
@@ -200,7 +203,7 @@ def test_client_fps_is_contract_fps_unless_sim_time_lifts_it(spawned, use_sim_ti
 )
 def test_client_config_carries_the_policy_type(spawned, overrides, expected):
     runner, _host = _setup_runner(overrides)
-    assert runner._build_client_config(_robot_config(), task="t").policy_type == expected
+    assert runner._build_client_config(_robot_config(), task="t", simulated=False).policy_type == expected
 
 
 def test_unreadable_checkpoint_fails_setup_naming_policy_type(spawned):
@@ -211,7 +214,7 @@ def test_unreadable_checkpoint_fails_setup_naming_policy_type(spawned):
 
 def test_client_config_forwards_the_requested_device(spawned):
     runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "policy_device": "cuda"})
-    assert runner._build_client_config(_robot_config(), task="t").policy_device == "cuda"
+    assert runner._build_client_config(_robot_config(), task="t", simulated=False).policy_device == "cuda"
 
 
 def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
@@ -231,7 +234,7 @@ def test_run_injects_bridge_and_stop_event(spawned, monkeypatch):
 
     monkeypatch.setattr(pr, "RobotClient", _FakeClient)
 
-    frames = object()
+    frames = _frames()
     stop = threading.Event()
     result = runner.run(frames, task="t", stop_event=stop)
     assert result.success is False
@@ -262,7 +265,7 @@ def test_run_uses_the_hosts_contract_when_contract_path_is_empty(spawned, monkey
 
     monkeypatch.setattr(pr, "RobotClient", _FakeClient)
 
-    runner.run(object(), task="t", stop_event=threading.Event())
+    runner.run(_frames(), task="t", stop_event=threading.Event())
     robot_config = captured["config"].robot
     assert robot_config.contract is contract
     assert robot_config.fps == contract.fps
@@ -296,5 +299,5 @@ def test_a_stopped_run_succeeds_like_a_completed_one(spawned, monkeypatch, stop_
 
     monkeypatch.setattr(pr, "RobotClient", _FakeClient)
 
-    result = runner.run(object(), task="t", stop_event=stop)
+    result = runner.run(_frames(), task="t", stop_event=stop)
     assert (result.success, result.message) == (True, message)

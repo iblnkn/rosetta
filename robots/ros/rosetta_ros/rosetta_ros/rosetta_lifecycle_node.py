@@ -555,10 +555,10 @@ class RosettaLifecycleNode(Node):
 class BridgeLifecycleNode(RosettaLifecycleNode):
     """Lifecycle node owning a :class:`TopicBridge` (``self.bridge``).
 
-    For hosts whose specs are known at construction time, meaning the framework
-    adapter packages (for example ``lerobot_robot_rosetta.Rosetta``). Adapters
-    that host extra ROS entities subclass this and extend the ``setup()`` and
-    ``teardown()`` hooks via ``super()`` (see the teleoperator adapter).
+    For hosts whose specs are known at construction time, such as the
+    connection ``Ros2Interface.connect`` opens for a framework. Hosts that need
+    extra ROS entities subclass this and extend the ``setup()`` and
+    ``teardown()`` hooks via ``super()`` (see :mod:`rosetta_ros.live`).
     """
 
     def __init__(

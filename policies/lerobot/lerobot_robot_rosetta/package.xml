@@ -3,18 +3,18 @@
 <package format="3">
   <name>lerobot_robot_rosetta</name>
   <version>0.2.0</version>
-  <description>LeRobot Robot plugin for Rosetta - bridges ROS2 topics to LeRobot Robot interface.</description>
+  <description>LeRobot Robot plugin for Rosetta - presents a Rosetta robot as a LeRobot Robot.</description>
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>rclpy</depend>
   <depend>rosetta</depend>
-  <depend>rosetta_ros</depend>
   <depend>python3-numpy</depend>
   <!-- lerobot has no rosdep key, so rosdep can neither install it nor report it
        missing: install it with pip (it is in setup.py install_requires). This
        package is not released to the ROS buildfarm (see CONTRIBUTING.md). -->
 
+  <!-- The tests load the ros2 contracts rosetta_ros ships. -->
+  <test_depend>rosetta_ros</test_depend>
   <test_depend>ament_index_python</test_depend>
 
   <export>

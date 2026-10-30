@@ -27,6 +27,7 @@ PUBLIC_API = {
     "rosetta_ros.child_goals": {"cancel_goal", "send_goal"},
     "rosetta_ros.field_access": {"dot_get", "dot_set", "resolve_indexed"},
     "rosetta_ros.launch_utils": {"autostart_handlers", "contract_output_remaps", "typed_config", "yaml_params"},
+    "rosetta_ros.live": {"RosConnection", "read_events"},
     "rosetta_ros.node_host": {"NodeHost"},
     "rosetta_ros.node_utils": {
         "RESULT_QOS",
@@ -51,7 +52,7 @@ PUBLIC_API = {
     },
     "rosetta_ros.rosetta_lifecycle_node": {"BridgeLifecycleNode", "RosettaLifecycleNode"},
     "rosetta_ros.runner_host": {"RosParameterHost"},
-    "rosetta_ros.topic_bridge": {"TopicBridge"},
+    "rosetta_ros.topic_bridge": {"RosClock", "TopicBridge"},
 }
 
 

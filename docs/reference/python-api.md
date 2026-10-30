@@ -17,9 +17,9 @@ Core imports no robot middleware, so every module here imports without ROS.
 | `rosetta.contract.sidecar` | `CONTRACT_SIDECAR_FILENAME`, `LEROBOT_CONTRACT_SIDECAR_PATH`, `find_contract_for_pretrained`, `scan_inline_codec_paths` | The contract file stored with a dataset (`rosetta_contract.yaml`, at `meta/rosetta_contract.yaml` in a LeRobot dataset). `find_contract_for_pretrained` follows a checkpoint to its training dataset's contract and returns `None` when a link is missing. |
 | `rosetta.contract.operators` | `Operator`, `OperatorContext`, `Invertibility`, `register_operator`, `OPERATOR_ENTRY_POINT_GROUP` | Operator plugins for `apply`. |
 | `rosetta.frames.codecs` | `register_decoder`, `register_encoder`, `decode_value`, `encode_value`, `discover_codecs`, `DecoderFn`, `EncoderFn`, `NonFiniteActionError`, `SUPPORTED_NUMERIC_DTYPES`, `CODEC_ENTRY_POINT_GROUP` | Codec plugins and the message to array boundary. `encode_value` raises `NonFiniteActionError` for a NaN or Inf action value. |
-| `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice`, `build_feature` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.lerobot_features` gives LeRobot feature dicts. |
+| `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice`, `build_feature` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones, or with `fill_missing=False` leaves out every key with a missing value. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.lerobot_features` gives LeRobot feature dicts. |
 | `rosetta.frames.naming` | `IMAGE_KEY_PREFIX`, `camera_name`, `sanitize_field_name` | `IMAGE_KEY_PREFIX` is `observation.images.`. `camera_name` strips it and keeps dots. `sanitize_field_name` replaces every character outside `[A-Za-z0-9_]` with `_`. |
-| `rosetta.frames.protocols` | `FrameIO` | The live robot as a framework adapter sees it. |
+| `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a framework adapter sees it. |
 | `rosetta.policies` | `DatasetWriter`, `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_dataset_writer`, `load_policy_runner`, `available_dataset_writers`, `available_policy_runners` | Framework adapter protocols and the registry that loads them by name. |
 | `rosetta.robots.protocols` | `RobotInterface` | The robot interface protocol. |
 | `rosetta.robots.registry` | `load_robot_interface`, `available_robot_interfaces`, `ROBOT_INTERFACE_GROUP` | Robot interfaces by name. |
@@ -33,11 +33,27 @@ The registries load plugins from the entry-point groups listed in
 
 | Member | Kind | Behavior |
 |---|---|---|
-| `sample_frame()` | method | Returns the current observation frame, `{contract_key: np.ndarray \| str}`. |
+| `sample_frame(*, fill_missing=True)` | method | Returns the current observation frame, `{contract_key: np.ndarray \| str}`. A stream with no data zero-fills. With `fill_missing=False` its key is left out. |
 | `warmed_up` | property | `True` once every observation stream has delivered at least one value. |
 | `publish_frame(action_frame)` | method | Publishes one action frame, `{contract_key: np.ndarray}`, and returns it. |
 | `send_safety_action()` | method | Publishes the contract's safety action. |
 | `reset_state()` | method | Clears per-episode state such as buffers and warmup. |
+| `clock` | property | The `RobotClock` the robot runs on. |
+
+`Connection`, from `rosetta.frames.protocols`, is a `FrameIO` that a
+framework opened with `RobotInterface.connect` and closes itself:
+
+| Member | Kind | Behavior |
+|---|---|---|
+| `events()` | method | Returns the latest value of each event in the event map the connection was opened with, keyed by contract event name. Empty without an event map or before the first event message. |
+| `close()` | method | Stops sampling and publishing and releases the middleware. Closing twice does nothing. |
+
+`RobotClock`, from `rosetta.frames.protocols`:
+
+| Member | Kind | Behavior |
+|---|---|---|
+| `simulated` | property | `True` when the robot runs on a simulator's clock rather than wall time. |
+| `now_ns()` | method | Returns the current time on this clock, in nanoseconds. |
 
 `DatasetWriter`, from `rosetta.policies`. A writer is opened once, receives
 one run of `add_frame` calls per episode, and is finalized once.
@@ -84,6 +100,7 @@ Both counters must stay non-negative. `policy_runner_node` carries them as
 | `register_codecs()` | Imports the interface's built-in codecs. Called once per process for every installed interface, before `rosetta.codecs` plugins load. |
 | `provided_timelines(msg_type)` | Returns the `frozenset` of timeline names a channel of `msg_type` provides. Raises `ValueError` for an unknown type. |
 | `validate_qos(qos)` | Raises `ValueError` when a channel's `qos` mapping does not parse. |
+| `connect(*, observations, actions, fps, name, events=None, use_sim_time=False)` | Opens a live robot that samples `observations` and publishes `actions` at `fps`, and returns it as a `Connection`. `events` is a contract's teleop event map. `name` identifies the connection to the middleware. With `use_sim_time` the connection runs on the simulator's clock. Contract loading never calls it. |
 
 The loaders instantiate each plugin class with no arguments and check it
 against its protocol. An unknown name raises `ValueError` listing the
@@ -92,14 +109,15 @@ the missing methods.
 
 ## ROS 2 modules
 
-The node toolkit that `rosetta_ros_hil` and the LeRobot plugins build on.
+The node toolkit that `rosetta_ros_hil` builds on, and the live connection behind `Ros2Interface.connect`.
 
 | Module | Names | Use | Imports ROS |
 |---|---|---|---|
 | `rosetta_ros.rosetta_lifecycle_node` | `RosettaLifecycleNode`, `BridgeLifecycleNode` | Base classes for lifecycle nodes. See [Lifecycle nodes](#lifecycle-nodes). | yes |
 | `rosetta_ros.node_utils` | `TERMINATION_STOPPED`, `TERMINATION_TIMEOUT`, `TERMINATION_COMPLETED`, `TERMINATION_CANCELLED`, `TERMINATION_NODE_DEACTIVATED`, `TERMINATION_ERROR`, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`, `RESULT_QOS` | The termination reasons, taken from the `.action` files. `finish_goal(goal_handle, result)` ends a goal `CANCELED` when a cancel was requested, `ABORTED` for `error`, `node_deactivated` or `cancelled`, and `SUCCEEDED` otherwise. `spin_lifecycle_node(factory)` runs a node on a 4-thread `MultiThreadedExecutor` and drives the shutdown transition on Ctrl+C. `positive_rate_descriptor` limits a rate parameter to 0.1 to 1000.0. `STATUS_QOS` is reliable, depth 10. `RESULT_QOS` is reliable, transient local, depth 1. | yes |
 | `rosetta_ros.child_goals` | `send_goal`, `cancel_goal` | Send and cancel goals on other action servers from inside a node's own work. Both block the calling thread. | yes |
-| `rosetta_ros.topic_bridge` | `TopicBridge` | The ROS 2 `FrameIO`: subscriptions, lifecycle publishers and the action watchdog, created on a host lifecycle node by `setup(node)`. | yes |
+| `rosetta_ros.topic_bridge` | `TopicBridge`, `RosClock` | The ROS 2 `FrameIO`: subscriptions, lifecycle publishers and the action watchdog, created on a host lifecycle node by `setup(node)`. `RosClock` is its `clock`, simulated when the node has `use_sim_time`. | yes |
+| `rosetta_ros.live` | `RosConnection`, `read_events` | The `Connection` that `Ros2Interface.connect` opens: a `BridgeLifecycleNode` on a `NodeHost`, configured and activated, plus a subscription to the event map's channel. `use_sim_time` runs the node on `/clock`. `read_events` resolves an event map's selectors on one message, and a selector that fails keeps the event's last value. | yes |
 | `rosetta_ros.node_host` | `NodeHost` | Runs a node on a private rclpy context with its own executor thread, for processes Rosetta does not own. | yes |
 | `rosetta_ros.runner_host` | `RosParameterHost` | A `RunnerHost` whose settings are parameters of a node. | yes |
 | `rosetta_ros.rclpy_utils` | `qos_profile_from_dict`, `prefixed_topic`, `require_transition_success`, `lifecycle_state_label` | `qos_profile_from_dict` parses a contract `qos` mapping. `prefixed_topic(prefix, topic)` moves a topic under a prefix: `("/hil/policy", "/cmd_vel")` gives `/hil/policy/cmd_vel`. | yes |
@@ -154,7 +172,7 @@ calls `send_safety_action()`. Cleanup is refused while work is in progress.
 
 `BridgeLifecycleNode(node_name, observation_specs, action_specs, fps)` adds a
 `TopicBridge` as `self.bridge`, set up and torn down with the node, and sends
-the bridge's safety action. The LeRobot robot and teleoperator plugins use it.
+the bridge's safety action. `RosConnection` uses it.
 
 ### Example
 

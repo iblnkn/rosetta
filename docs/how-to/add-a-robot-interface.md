@@ -31,9 +31,12 @@ class ToyInterface:
     def validate_qos(self, qos):
         if set(qos) - {"retain"}:
             raise ValueError(f"Unknown qos key(s) {sorted(set(qos) - {'retain'})}. Allowed: ['retain']")
+
+    def connect(self, *, observations, actions, fps, name, events=None, use_sim_time=False):
+        raise NotImplementedError("toy has no live robot yet")
 ```
 
-Contract loading calls all three methods:
+Contract loading calls the first three methods:
 
 - `register_codecs` imports the modules that register your built-in codecs.
   It runs once per process, for every installed interface, before any
@@ -48,6 +51,12 @@ Contract loading calls all three methods:
 
 These run wherever a contract loads, including on machines that only prepare
 data. Import your middleware inside the methods, not at module level.
+
+`connect` opens a live robot for a framework that hosts the run itself (see
+[Connect it to a robot](#connect-it-to-a-robot)). Contract loading never calls
+it, so an interface that only loads contracts raises `NotImplementedError`,
+as `toy` does. Every interface needs the method: a class without it fails to
+load with `TypeError`.
 
 ## Register codecs
 
@@ -142,22 +151,26 @@ rosetta.contract.errors.ContractValidationError: robot_interface 'toy' is not in
 
 ## Connect it to a robot
 
-Loading contracts is all core needs from an interface. Running a robot takes
-more, all of it in your package:
+Running a robot takes more than loading contracts, all of it in your package:
 
 - A live bridge that implements `FrameIO` from `rosetta.frames.protocols`:
   `sample_frame()` returns the current observation frame,
   `publish_frame(frame)` publishes one action frame, `warmed_up` is true once
   every observation stream has delivered a value, `send_safety_action()`
-  publishes the contract's safety action, and `reset_state()` clears
-  per-episode state. Any framework adapter's `PolicyRunner` runs against it
-  unchanged.
+  publishes the contract's safety action, `reset_state()` clears per-episode
+  state, and `clock` is the `RobotClock` the robot runs on. Any framework
+  adapter's `PolicyRunner` runs against it unchanged.
+- `connect`, which opens that bridge for a framework hosting the run itself
+  and returns it as a `Connection`: a `FrameIO` plus `events()`, the latest
+  value of each event in the contract's teleop event map, and `close()`.
+  With `use_sim_time`, the connection runs on the simulator's clock and its
+  `clock` reports `simulated`.
 - A process that hosts a `PolicyRunner` on that bridge.
 - A recorder, and a tool that replays recordings as frame dicts into a
   `DatasetWriter`.
 
-In `rosetta_ros` these are `TopicBridge`, `policy_runner_node`,
-`episode_recorder_node` and `rosetta_port`.
+In `rosetta_ros` these are `TopicBridge`, `RosConnection`,
+`policy_runner_node`, `episode_recorder_node` and `rosetta_port`.
 
 ## Package it
 

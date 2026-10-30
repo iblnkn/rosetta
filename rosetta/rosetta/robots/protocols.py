@@ -20,15 +20,21 @@ questions only it can answer: which message types exist, which timelines each
 one carries, and whether a ``qos`` mapping parses. Codec discovery asks every
 installed interface to register its built-in codecs.
 
-The live and recorded frame surfaces an interface also provides
-(:class:`~rosetta.frames.protocols.FrameIO`, an iterator of frame dicts) are
-used directly by the interface's own nodes and tools, so they need no entry
-here.
+A framework that hosts a run itself (LeRobot's CLIs driving a ``Robot``)
+also asks the interface for a live robot, through :meth:`RobotInterface.connect`.
+The interface's own nodes and tools build their live and recorded frame
+surfaces directly.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from rosetta.contract.model import TeleopEventMap
+    from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+    from rosetta.frames.protocols import Connection
 
 __all__ = ["RobotInterface"]
 
@@ -38,9 +44,9 @@ class RobotInterface(Protocol):
     """A robot interface, registered under ``rosetta.robot_interfaces``.
 
     The entry point is a class with a zero-argument constructor. Every method
-    is called during contract loading, possibly on a machine that only loads
-    contracts, so construction and these methods should import their
-    middleware lazily and cheaply.
+    but :meth:`connect` is called during contract loading, possibly on a
+    machine that only loads contracts, so construction and the methods should
+    import their middleware lazily and cheaply.
     """
 
     def register_codecs(self) -> None:
@@ -69,5 +75,29 @@ class RobotInterface(Protocol):
         Raises:
             ValueError: If the mapping does not parse for this interface.
 
+        """
+        ...
+
+    def connect(
+        self,
+        *,
+        observations: Sequence[ObservationStreamSpec],
+        actions: Sequence[ActionStreamSpec],
+        fps: int,
+        name: str,
+        events: TeleopEventMap | None = None,
+        use_sim_time: bool = False,
+    ) -> Connection:
+        """Open a live robot for a framework that hosts the run itself.
+
+        The connection samples ``observations`` into frames and publishes
+        ``actions`` from them, at ``fps``. With ``events``, it also follows
+        that channel and reports each event's latest value. ``name``
+        identifies the connection to the middleware (for example a node name).
+
+        With ``use_sim_time`` the connection runs on the simulator's clock
+        rather than wall time, and its ``clock`` reports ``simulated``.
+
+        Returns the open connection, which the caller closes.
         """
         ...

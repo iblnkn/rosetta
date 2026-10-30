@@ -78,8 +78,9 @@ name order fails to load.
 `lerobot_rosetta` needs `lerobot<0.6.2`, `torch`, `grpcio` and
 `lerobot_robot_rosetta`. LeRobot 0.6.2 removes `async_inference`, which the
 LeRobot policy runner uses. `lerobot_robot_rosetta` and
-`lerobot_teleoperator_rosetta` need `lerobot<0.6.2`, `rosetta` and
-`rosetta_ros`. `rosdep` has no key for LeRobot, so install it with `pip`. For
+`lerobot_teleoperator_rosetta` need `lerobot<0.6.2` and `rosetta`. None of the
+LeRobot packages imports ROS, but driving a `ros2` contract needs `rosetta_ros`
+installed. `rosdep` has no key for LeRobot, so install it with `pip`. For
 the same reason the LeRobot packages are not released to the ROS buildfarm.
 The repository's pixi environment installs LeRobot 0.6.1 from PyPI with the
 `dataset`, `async`, `training`, `peft` and `smolvla` extras.

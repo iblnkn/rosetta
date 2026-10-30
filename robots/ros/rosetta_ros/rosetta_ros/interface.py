@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The ``ros2`` robot interface, as contract loading sees it.
+"""The ``ros2`` robot interface, as core sees it.
 
 Registered under ``rosetta.robot_interfaces`` as ``ros2``. Imports nothing
 from ROS at module level: rclpy and rosidl load when a method needs them.
@@ -20,7 +20,14 @@ from ROS at module level: rclpy and rosidl load when a method needs them.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from rosetta.contract.model import TeleopEventMap
+    from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+
+    from .live import RosConnection
 
 
 class Ros2Interface:
@@ -41,3 +48,28 @@ class Ros2Interface:
         from .rclpy_utils import qos_profile_from_dict
 
         qos_profile_from_dict(qos)
+
+    def connect(
+        self,
+        *,
+        observations: Sequence[ObservationStreamSpec],
+        actions: Sequence[ActionStreamSpec],
+        fps: int,
+        name: str,
+        events: TeleopEventMap | None = None,
+        use_sim_time: bool = False,
+    ) -> RosConnection:
+        """Open a :class:`~rosetta_ros.live.RosConnection`; ``name`` is its node name.
+
+        ``use_sim_time`` runs the node on ``/clock``.
+        """
+        from .live import RosConnection
+
+        return RosConnection(
+            observations=observations,
+            actions=actions,
+            fps=fps,
+            name=name,
+            events=events,
+            use_sim_time=use_sim_time,
+        )

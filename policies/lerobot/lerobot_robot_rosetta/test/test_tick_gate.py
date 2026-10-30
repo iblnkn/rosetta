@@ -20,8 +20,6 @@ release point is deterministic. Pacing through the adapter (first call, one
 period, reset, stop) is covered in test_adapter.py.
 """
 
-from types import SimpleNamespace
-
 import pytest
 
 import lerobot_robot_rosetta.rosetta as adapter
@@ -32,11 +30,11 @@ PERIOD_NS = 100
 
 class _FakeClock:
     def __init__(self, active=True, t=0):
-        self.ros_time_is_active = active
+        self.simulated = active
         self.t = t
 
-    def now(self):
-        return SimpleNamespace(nanoseconds=self.t)
+    def now_ns(self):
+        return self.t
 
 
 def _patch_sleep(monkeypatch, clock, step_ns):
@@ -53,22 +51,12 @@ def _patch_sleep(monkeypatch, clock, step_ns):
     return calls
 
 
-@pytest.mark.parametrize(
-    "clock",
-    [
-        None,
-        _FakeClock(active=False, t=500),
-        # e.g. a plain clock double, or a non-ROSClock: getattr defaults to False
-        SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
-    ],
-    ids=["no_clock", "wall_clock", "clock_without_ros_time_attr"],
-)
-def test_gate_is_passthrough_without_ros_time(monkeypatch, clock):
+def test_gate_is_passthrough_on_wall_time(monkeypatch):
     def _sleep(sec):
         raise AssertionError("a passthrough gate slept")
 
     monkeypatch.setattr(adapter.time, "sleep", _sleep)
-    gate = _TickGate(clock, PERIOD_NS)
+    gate = _TickGate(_FakeClock(active=False, t=500), PERIOD_NS)
     gate.wait()
     gate.wait()  # a gated second call would sleep: no time has passed
 

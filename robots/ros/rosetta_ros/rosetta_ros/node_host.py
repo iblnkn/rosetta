@@ -14,8 +14,8 @@
 
 """NodeHost: own a node on a private rclpy context (init, executor, spin thread).
 
-The standalone-mode plumbing shared by the LeRobot robot and teleoperator
-adapters, which embed a node in a process rosetta does not own (LeRobot's).
+The plumbing behind ``Ros2Interface.connect``, which embeds a node in a
+process rosetta does not own (a framework's, such as LeRobot's CLIs).
 Each host initializes its own rclpy Context, never the global one, so
 multiple hosts in one process (robot + teleoperator) and any other rclpy
 user start and stop independently. Initializing a non-default context also

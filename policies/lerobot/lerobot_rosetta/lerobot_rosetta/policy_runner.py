@@ -147,11 +147,11 @@ class LeRobotPolicyRunner:
             is_classifier=self._host.get("is_classifier"),
         )
         robot_config._external_bridge = frames  # Inject the pre-built frame I/O
-        # Under sim time the adapter's tick gates pace on the node clock; the
+        # Under sim time the adapter's tick gates pace on the robot's clock; the
         # goal's stop_event releases a gate blocked by a paused sim clock.
         robot_config._stop_event = stop_event
 
-        config = self._build_client_config(robot_config, task)
+        config = self._build_client_config(robot_config, task, simulated=frames.clock.simulated)
         client = RobotClient(config)
         self._client = client
 
@@ -221,11 +221,11 @@ class LeRobotPolicyRunner:
                 client.shutdown_event.set()
                 return
 
-    def _build_client_config(self, robot_config: RosettaConfig, task: str) -> RobotClientConfig:
-        """Build RobotClientConfig from ROS2 parameters.
+    def _build_client_config(self, robot_config: RosettaConfig, task: str, *, simulated: bool) -> RobotClientConfig:
+        """Build RobotClientConfig from the host's parameters.
 
-        Under sim time the robot adapter's tick gates pace the control loop on
-        the node clock, so the client fps is only a wall-clock ceiling that
+        On a simulated robot clock the robot adapter's tick gates pace the
+        control loop on that clock, so the client fps is only a wall-clock ceiling that
         must never bind before the gate itself runs out of resolution. The
         gate resolves at most one tick per GATE_SLICE_SEC, so that resolution
         rate IS the ceiling: faster gains nothing, slower throttles fast sims.
@@ -233,11 +233,8 @@ class LeRobotPolicyRunner:
         """
         host = self._host
         contract_fps = robot_config.fps
-        # A ROS 2 host already declares use_sim_time (TimeSource.attach_node); other hosts get the default.
-        host.declare("use_sim_time", False, "Pace on the host's simulated clock")
-        use_sim_time = bool(host.get("use_sim_time"))
-        control_loop_fps = max(contract_fps, int(1 / GATE_SLICE_SEC)) if use_sim_time else contract_fps
-        if use_sim_time:
+        control_loop_fps = max(contract_fps, int(1 / GATE_SLICE_SEC)) if simulated else contract_fps
+        if simulated:
             host.logger.info(
                 f"Sim time active: pacing on the sim clock at contract fps={contract_fps}Hz; "
                 f"client fps ceiling lifted to {control_loop_fps}Hz (FPSTracker logs the ceiling)."
