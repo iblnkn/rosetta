@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>rerun_rosetta</name>
+  <version>0.2.0</version>
+  <description>Rerun dataset backend for Rosetta - trains directly from contract-queried rrd recordings on a Rerun catalog server.</description>
+  <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rosetta</depend>
+  <depend>python3-numpy</depend>
+  <!-- rerun-sdk/torch have no rosdep keys; provided by the workspace pixi env
+       and declared in setup.py install_requires. -->
+
+  <!-- The parity tests write rrd bags (rosbag2_storage_rrd, no rosdep key; the
+       tests skip without it) and compare against rosetta_ros's offline porter. -->
+  <test_depend>rosetta_ros</test_depend>
+  <test_depend>rosbag2_py</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>ament_index_python</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

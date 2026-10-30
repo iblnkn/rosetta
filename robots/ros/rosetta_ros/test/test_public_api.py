@@ -28,6 +28,7 @@ PUBLIC_API = {
     "rosetta_ros.field_access": {"dot_get", "dot_set", "resolve_indexed"},
     "rosetta_ros.launch_utils": {"autostart_handlers", "contract_output_remaps", "typed_config", "yaml_params"},
     "rosetta_ros.live": {"RosConnection", "read_events"},
+    "rosetta_ros.offline.rrd_layout": {"MessageView", "Rosbag2RrdLayout"},
     "rosetta_ros.node_host": {"NodeHost"},
     "rosetta_ros.node_utils": {
         "RESULT_QOS",

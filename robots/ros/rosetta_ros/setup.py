@@ -48,6 +48,10 @@ setup(
         "rosetta.robot_interfaces": [
             "ros2 = rosetta_ros.interface:Ros2Interface",
         ],
+        # How this interface's rosbag2_storage_rrd recordings look to rerun_rosetta.
+        "rerun_rosetta.layouts": [
+            "ros2 = rosetta_ros.offline.rrd_layout:Rosbag2RrdLayout",
+        ],
     },
     extras_require={"test": ["pytest"]},
     zip_safe=True,

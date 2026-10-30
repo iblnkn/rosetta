@@ -122,9 +122,10 @@ The node toolkit that `rosetta_ros_hil` builds on, and the live connection behin
 | `rosetta_ros.runner_host` | `RosParameterHost` | A `RunnerHost` whose settings are parameters of a node. | yes |
 | `rosetta_ros.rclpy_utils` | `qos_profile_from_dict`, `prefixed_topic`, `require_transition_success`, `lifecycle_state_label` | `qos_profile_from_dict` parses a contract `qos` mapping. `prefixed_topic(prefix, topic)` moves a topic under a prefix: `("/hil/policy", "/cmd_vel")` gives `/hil/policy/cmd_vel`. | yes |
 | `rosetta_ros.launch_utils` | `typed_config`, `yaml_params`, `autostart_handlers`, `contract_output_remaps` | Helpers for launch files. `yaml_params(path, node_name)` reads one node's parameters from a params file, merging the `/**`, `/**/<node>`, `<node>` and `/<namespace>/<node>` sections in that order. It raises `ValueError` when the file has sections and none applies to the node. `contract_output_remaps(contract_path, prefix)` remaps every action and reward topic under `prefix`, and raises `ValueError` for a prefix with an empty `contract_path`. | yes |
+| `rosetta_ros.offline.rrd_layout` | `Rosbag2RrdLayout`, `MessageView` | The `ros2` recording layout `rerun_rosetta` loads for rosbag2_storage_rrd bags. A channel's messages sit in the reflected column `<topic>:<pkg.msg.Type>:message`, and receive times on the `recv_timestamp` timeline. A topic recorded only in the raw form raises `ValueError`. `MessageView` serves a reflected message to the decoders as read-only attributes. | no |
 | `rosetta_ros.field_access` | `dot_get`, `dot_set`, `resolve_indexed` | Read and write message fields by dotted path. | no |
 
-## LeRobot packages
+## Framework adapter packages
 
 These names are each package's `__all__`. No test pins them.
 
@@ -133,6 +134,7 @@ These names are each package's `__all__`. No test pins them.
 | `lerobot_rosetta` | `LeRobotDatasetWriter`, `LeRobotPolicyRunner`, `build_lerobot_features` |
 | `lerobot_robot_rosetta` | `Rosetta`, `RosettaConfig` |
 | `lerobot_teleoperator_rosetta` | `RosettaTeleop`, `RosettaTeleopConfig` |
+| `rerun_rosetta` | `contract_dataset`, `ContractFrames`, `compile_contract`, `CompiledQuery`, `RecordingLayout`, `load_layout`, `write_stats_layer`, `load_stats`, `stats_layer_name` |
 
 ## Lifecycle nodes
 
