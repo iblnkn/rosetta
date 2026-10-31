@@ -70,6 +70,7 @@ def launch_setup(context, *args, **kwargs):
     pretrained_name_or_path = LaunchConfiguration("pretrained_name_or_path").perform(context)
     policy_type = LaunchConfiguration("policy_type").perform(context)
     policy_device = LaunchConfiguration("policy_device").perform(context)
+    buffer_backends = LaunchConfiguration("buffer_backends").perform(context)
     server_address = LaunchConfiguration("server_address").perform(context)
     launch_local_server = LaunchConfiguration("launch_local_server").perform(context)
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context)
@@ -88,6 +89,8 @@ def launch_setup(context, *args, **kwargs):
         overrides["policy_type"] = policy_type
     if policy_device:
         overrides["policy_device"] = policy_device
+    if buffer_backends:
+        overrides["buffer_backends"] = buffer_backends
     if server_address:
         overrides["server_address"] = server_address
     if launch_local_server:
@@ -146,6 +149,11 @@ def generate_launch_description():
             "policy_device",
             default_value="",  # Empty = use value from params file
             description="Inference device, e.g. cuda, cuda:1, cpu (empty = use params file value)",
+        ),
+        DeclareLaunchArgument(
+            "buffer_backends",
+            default_value="",  # Empty = use value from params file
+            description="rosidl buffer backends image subscriptions accept, e.g. cuda (empty = use params file value)",
         ),
         # Server configuration
         DeclareLaunchArgument(

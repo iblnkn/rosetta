@@ -152,7 +152,7 @@ def spin_until(executor, predicate, timeout_s=5.0):
 
 
 @contextmanager
-def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True):
+def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True, buffer_backends=()):
     """TopicBridge on a real LifecycleNode plus a fixture node, on one executor.
 
     Yields (bridge, node, fixture_node, executor). Subscriptions the test
@@ -170,7 +170,7 @@ def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True):
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(fixture_node)
-    bridge = TopicBridge(obs_specs, act_specs, fps=fps)
+    bridge = TopicBridge(obs_specs, act_specs, fps=fps, buffer_backends=buffer_backends)
     try:
         bridge.setup(node)
         node.trigger_configure()

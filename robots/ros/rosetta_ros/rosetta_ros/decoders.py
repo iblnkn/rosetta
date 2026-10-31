@@ -37,6 +37,10 @@ Supported raw encodings are the keys of IMAGE_ENCODINGS (from
 sensor_msgs/image_encodings.h): rgb8/bgr8, rgba8/bgra8 (alpha dropped),
 mono8/8uc1 (replicated to 3 channels). To add one, add a table entry.
 
+A raw image whose data arrives in device memory (a CUDA-backed rosidl
+Buffer) decodes there, to the same bytes, as an array of the installed
+backend that imports it (see rosetta_ros.buffers).
+
 Depth encodings (mono16, 16uc1, 32fc1, 32fc) are NOT supported and will raise
 DepthEncodingNotSupported — on the raw path (message ``encoding``) and the
 compressed path (``format``, including compressedDepth). LeRobot does not
@@ -59,7 +63,9 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
 
+from rosetta.frames.arrays import take
 from rosetta.frames.codecs import register_decoder
+from rosetta_ros.buffers import message_bytes
 from rosetta_ros.field_access import (
     JOINT_STATE_FIELDS,
     JOINT_TRAJECTORY_FIELDS,
@@ -106,6 +112,26 @@ IMAGE_ENCODINGS: dict[str, tuple[int, bool]] = {
 }
 
 
+_CHANNELS_TO_RGB: dict[tuple[int, bool], np.ndarray | None] = {
+    # (channels, BGR) -> source channel for each of R, G, B; None keeps the
+    # channels as they are.
+    (3, False): None,
+    (3, True): np.array([2, 1, 0]),
+    (4, False): np.array([0, 1, 2]),
+    (4, True): np.array([2, 1, 0]),
+    (1, False): np.array([0, 0, 0]),
+}
+
+
+class ImageDataMissing(ValueError):
+    """An Image message arrived with no pixel data.
+
+    From a CUDA-backed publisher this means the message was taken after the
+    backend recycled its memory, which a deep QoS history or slow callbacks
+    allow. The stream drops it like any undecodable message.
+    """
+
+
 class DepthEncodingNotSupported(ValueError):
     """
     Raised when a depth image encoding is encountered.
@@ -115,16 +141,19 @@ class DepthEncodingNotSupported(ValueError):
     """
 
 
-def decode_ros_image(msg) -> np.ndarray:
+def decode_ros_image(msg) -> Any:
     """
     Decode a ROS Image message to an HWC uint8 RGB array.
 
-    Resizing is handled by the ``resize`` operator in the entry's ``apply``
-    pipeline, not here.
+    Host data decodes to numpy. Device data decodes in device memory, to the
+    same bytes, as an array of the backend that imported it. Resizing is
+    handled by the ``resize`` operator in the entry's ``apply`` pipeline, not
+    here.
 
     Raises
     ------
         DepthEncodingNotSupported: If encoding is a depth format
+        ImageDataMissing: If the message carries no pixel data
         ValueError: If encoding is not supported or missing
 
     """
@@ -145,22 +174,32 @@ def decode_ros_image(msg) -> np.ndarray:
     if enc not in IMAGE_ENCODINGS:
         raise ValueError(f"Unsupported image encoding: '{enc}'. Supported: {sorted(IMAGE_ENCODINGS)}")
 
+    if len(msg.data) == 0:
+        raise ImageDataMissing(
+            "Image message has no data. From a CUDA-backed publisher, the message was taken after "
+            "its memory was recycled: keep the subscription's QoS history shallow and its callbacks fast."
+        )
+
     ch, is_bgr = IMAGE_ENCODINGS[enc]
     step = int(msg.step) or w * ch  # 0 = tightly packed rows
-    rows = np.frombuffer(msg.data, dtype=np.uint8).reshape(h, step)[:, : w * ch]
-    if ch == 1:
-        return np.repeat(rows[..., None], 3, axis=-1)  # fresh, writable
-    arr = rows.reshape(h, w, ch)[..., :3]
-    if is_bgr:
-        arr = arr[..., ::-1]
-    # The one materializing copy: detaches from the read-only frombuffer view
-    # (resize passes equal-dims arrays through unchanged, and the serve path's
-    # torch.from_numpy needs writable memory).
-    return arr.copy()
+    pixels = message_bytes(msg.data).reshape(h, step)[:, : w * ch].reshape(h, w, ch)
+    to_rgb = _CHANNELS_TO_RGB[(ch, is_bgr)]
+    if to_rgb is not None:
+        # One gather reorders, drops alpha or replicates mono, and detaches
+        # from the message's memory.
+        return take(pixels, to_rgb, axis=2)
+    if isinstance(pixels, np.ndarray):
+        # The one materializing copy: detaches from the read-only frombuffer
+        # view (resize passes equal-dims arrays through unchanged, and the
+        # serve path's torch.from_numpy needs writable memory).
+        return pixels.copy()
+    # Device memory is left in place: the view holds the message's read
+    # handle, so the publisher can't reuse the block while a frame holds it.
+    return pixels
 
 
-@register_decoder("sensor_msgs/msg/Image", dtype="video")
-def _dec_image(msg: Any, spec: StreamSpec) -> np.ndarray:
+@register_decoder("sensor_msgs/msg/Image", dtype="video", device_capable=True)
+def _dec_image(msg: Any, spec: StreamSpec) -> Any:
     """Decode sensor_msgs/Image to full-resolution HWC uint8 RGB."""
     _ = spec  # Encoding comes from the message itself; nothing to select.
     return decode_ros_image(msg)

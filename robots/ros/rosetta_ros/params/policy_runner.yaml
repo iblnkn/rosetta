@@ -27,6 +27,15 @@ policy_runner:
     # Device for policy inference: "cuda", "xpu", "mps", "cpu", or specific like "cuda:0"
     policy_device: "cuda"
 
+    # rosidl buffer backends image subscriptions accept, comma-separated
+    # (ROS 2 Lyrical+). With "cuda", a CUDA-backed camera or DNN publisher's
+    # images are decoded and resized in GPU memory, and the LeRobot adapter
+    # copies each contract-sized image to the host once per frame. Needs
+    # rmw_fastrtps_cpp or rmw_zenoh_cpp 0.10.5+, and cuda_buffer from
+    # ros2/rosidl_buffer_backends; configure logs which streams took it.
+    # Empty = host memory only.
+    buffer_backends: ""
+
     # Note: fps is defined in the contract (single source of truth)
 
     # Number of actions to request per inference chunk

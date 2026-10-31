@@ -23,7 +23,8 @@ a replayed bag and a live robot yield identical frame dicts. That bag/live
 parity is why an offline-trained policy behaves the same online. The frame dict
 is the seam:
 
-- ``sample_frame()`` returns ``{contract_key: np.ndarray | str}``.
+- ``sample_frame()`` returns ``{contract_key: array | str}``: numpy, except
+  images that arrived in device memory (see ``buffer_backends``).
 - ``publish_frame()`` consumes ``{contract_key: np.ndarray}``.
 
 Nothing here depends on LeRobot or any policy framework. Framework adapters
@@ -33,7 +34,7 @@ Nothing here depends on LeRobot or any policy framework. Framework adapters
 from __future__ import annotations
 
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 from rclpy.lifecycle import Publisher
@@ -43,9 +44,10 @@ from rosidl_runtime_py.utilities import get_message
 
 from rosetta.contract.schema import SafetyBehavior
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.frames.codecs import NonFiniteActionError, encode_value
+from rosetta.frames.codecs import NonFiniteActionError, encode_value, host_only_reason
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer
+from rosetta_ros.buffers import device_memory_unavailable
 from rosetta_ros.ingest import StreamIngest
 from rosetta_ros.rclpy_utils import lifecycle_state_label, qos_profile_from_dict
 
@@ -101,6 +103,12 @@ class TopicBridge:
         action_specs: Resolved action stream specs (publishers).
         fps: Contract rate (Hz). Sets the watchdog period on the ROS clock, so
             the timeout tracks sim time under use_sim_time.
+        buffer_backends: rosidl buffer backends (e.g. ``"cuda"``) an image
+            subscription accepts, so a publisher's device memory arrives
+            without a copy and stays on its device. Applied to a stream only
+            where its decoder and operators all handle device memory and
+            this process can import it; setup() logs each stream's choice.
+            Empty: host memory only, as before ROS 2 Lyrical.
 
     """
 
@@ -109,10 +117,12 @@ class TopicBridge:
         observation_specs: list[ObservationStreamSpec],
         action_specs: list[ActionStreamSpec],
         fps: int,
+        buffer_backends: Sequence[str] = (),
     ):
         self._observation_specs = list(observation_specs)
         self._action_specs = list(action_specs)
         self._fps = int(fps)
+        self._buffer_backends = tuple(buffer_backends)
 
         # Layouts validate the key structure once. Several specs may share a key
         # and even a topic, so buffers and publishers below are positional lists
@@ -172,11 +182,13 @@ class TopicBridge:
             buffer = StreamBuffer.from_spec(spec)
             self._obs_buffers.append((spec, buffer))
             callback = partial(self._on_observation, spec=spec, buffer=buffer, index=index)
+            accepted = self._accepted_buffer_backends(spec, node.get_logger())
             sub = node.create_subscription(
                 get_message(spec.source.channel.type),
                 spec.source.channel.topic,
                 callback,
                 qos_profile_from_dict(spec.source.channel.qos),
+                **({"acceptable_buffer_backends": ",".join(accepted)} if accepted else {}),
             )
             self._subscriptions.append(sub)
 
@@ -200,6 +212,26 @@ class TopicBridge:
         node.get_logger().info(
             f"TopicBridge: {len(self._observation_specs)} obs, {len(self._action_specs)} act @ {self._fps}Hz"
         )
+
+    def _accepted_buffer_backends(self, spec: ObservationStreamSpec, logger) -> tuple[str, ...]:
+        """The configured buffer backends ``spec``'s subscription can accept, logging why for image streams."""
+        if not self._buffer_backends or not spec.is_image:
+            return ()
+        where = f"'{spec.key}' ({spec.source.channel.topic})"
+        reason = host_only_reason(spec)
+        if reason is not None:
+            logger.info(f"{where} takes host memory: {reason}")
+            return ()
+        accepted = []
+        for backend in self._buffer_backends:
+            unavailable = device_memory_unavailable(backend)
+            if unavailable is None:
+                accepted.append(backend)
+            else:
+                logger.warning(f"{where} won't accept {backend} memory: {unavailable}")
+        if accepted:
+            logger.info(f"{where} accepts {', '.join(accepted)} memory; frames keep it on its device")
+        return tuple(accepted)
 
     def teardown(self) -> None:
         """Destroy all ROS2 resources on the host node."""
@@ -311,8 +343,10 @@ class TopicBridge:
         """Sample all observation buffers into a backend-neutral frame dict.
 
         Returns:
-            ``{contract_key: np.ndarray | str}``, the same shape the bag porter
-            emits offline. Missing streams are zero-filled so the frame keeps a
+            ``{contract_key: array | str}``, the same shape the bag porter
+            emits offline, with the same bytes. An image that arrived in
+            device memory stays there, as an array of the backend that
+            imported it. Missing streams are zero-filled so the frame keeps a
             stable shape (or, with ``fill_missing=False``, their keys are left
             out), and logged only on a missing/recovered transition. Specs
             sharing a key are concatenated in declaration order.
