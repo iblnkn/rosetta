@@ -38,8 +38,15 @@ sensor_msgs/image_encodings.h): rgb8/bgr8, rgba8/bgra8 (alpha dropped),
 mono8/8uc1 (replicated to 3 channels). To add one, add a table entry.
 
 A raw image whose data arrives in device memory (a CUDA-backed rosidl
-Buffer) decodes there, to the same bytes, as an array of the installed
-backend that imports it (see rosetta_ros.buffers).
+Buffer) decodes there, to the same bytes, as a torch tensor (see
+rosetta_ros.buffers).
+
+Tensors
+-------
+tensor_msgs/ExperimentalTensor (from ros2/rosidl_buffer_backends) carries a
+DLTensor: dtype, shape, element strides, byte offset and data. The stream
+declares its shape (``shape:``) and dtype; the decoder checks the message's
+shape against it and casts to the dtype. Data in device memory stays there.
 
 Depth encodings (mono16, 16uc1, 32fc1, 32fc) are NOT supported and will raise
 DepthEncodingNotSupported — on the raw path (message ``encoding``) and the
@@ -65,7 +72,7 @@ except ImportError:
 
 from rosetta.frames.arrays import take
 from rosetta.frames.codecs import register_decoder
-from rosetta_ros.buffers import message_bytes
+from rosetta_ros.buffers import DLPACK_DTYPES, message_bytes, message_tensor
 from rosetta_ros.field_access import (
     JOINT_STATE_FIELDS,
     JOINT_TRAJECTORY_FIELDS,
@@ -243,6 +250,76 @@ def _dec_compressed_image(msg: Any, spec: StreamSpec) -> np.ndarray:
     if not order.startswith("rgb"):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img
+
+
+# =============================================================================
+# Tensor Decoder
+# =============================================================================
+
+
+class TensorDataMissing(ValueError):
+    """An ExperimentalTensor message arrived with no data.
+
+    From a CUDA-backed publisher this means the message was taken after the
+    backend recycled its memory, as with ImageDataMissing.
+    """
+
+
+def decode_tensor(msg: Any, shape: tuple[int, ...], dtype: str) -> Any:
+    """
+    Decode a tensor_msgs/ExperimentalTensor to an array of ``shape`` and ``dtype``.
+
+    Reads the message as torch_conversions does: one-lane DLPack dtypes,
+    element strides (empty means row-major contiguous), and a byte offset into
+    ``data``, all bounds-checked. A host message is copied, cast to ``dtype``.
+    A message in device memory stays there, cast on the device only when its
+    dtype differs.
+    """
+    msg_shape = tuple(int(n) for n in msg.shape)
+    if msg_shape != shape:
+        raise ValueError(
+            f"ExperimentalTensor has shape {list(msg_shape)}, but the stream declares {list(shape)}; "
+            f"set the stream's 'shape:' to the tensor's shape"
+        )
+    lanes = int(msg.dtype_lanes)
+    msg_dtype = DLPACK_DTYPES.get((int(msg.dtype_code), int(msg.dtype_bits))) if lanes == 1 else None
+    if msg_dtype is None:
+        raise ValueError(
+            f"ExperimentalTensor dtype (code {msg.dtype_code}, {msg.dtype_bits} bits, {lanes} lanes) is not supported"
+        )
+    strides = tuple(int(s) for s in msg.strides)
+    if not strides:
+        strides = tuple(int(np.prod(shape[i + 1 :])) for i in range(len(shape)))
+    if len(strides) != len(shape):
+        raise ValueError(f"ExperimentalTensor has {len(strides)} strides for {len(shape)} dimensions")
+    if any(s < 0 for s in strides):
+        raise ValueError(f"ExperimentalTensor has negative strides {list(strides)}")
+    if len(msg.data) == 0:
+        raise TensorDataMissing(
+            "ExperimentalTensor message has no data. From a CUDA-backed publisher, the message was taken after "
+            "its memory was recycled: keep the subscription's QoS history shallow and its callbacks fast."
+        )
+    span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
+    byte_offset = int(msg.byte_offset)
+    if byte_offset + span * int(msg.dtype_bits) // 8 > len(msg.data):
+        raise ValueError(
+            f"ExperimentalTensor of shape {list(shape)} and strides {list(strides)} at byte offset "
+            f"{byte_offset} reads past its {len(msg.data)} bytes of data"
+        )
+    tensor = message_tensor(msg.data, msg_dtype, shape, strides, byte_offset)
+    if isinstance(tensor, np.ndarray):
+        return tensor.astype(dtype)  # a copy, so the frame doesn't hold the message's buffer
+    if msg_dtype == dtype:
+        return tensor  # the view holds the message's read handle, as a device image does
+    import torch
+
+    return tensor.to(getattr(torch, dtype))
+
+
+@register_decoder("tensor_msgs/msg/ExperimentalTensor", dtype="float32", device_capable=True)
+def _dec_tensor(msg: Any, spec: StreamSpec) -> Any:
+    """Decode tensor_msgs/ExperimentalTensor to the stream's declared shape and dtype."""
+    return decode_tensor(msg, spec.shape, spec.dtype)
 
 
 # =============================================================================

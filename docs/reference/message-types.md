@@ -17,6 +17,7 @@ included.
 |---|---|---|---|
 | `sensor_msgs/msg/Image` | `video` | not used | Whole image. Encodings `rgb8`, `bgr8`, `rgba8`, `bgra8`, `mono8`, `8UC1`, matched without case. Output is RGB uint8, alpha dropped, mono copied to three channels. |
 | `sensor_msgs/msg/CompressedImage` | `video` | not used | Whole image, decoded with OpenCV (`cv2`, required). Channel order comes from the `format` string, BGR when it names none. |
+| `tensor_msgs/msg/ExperimentalTensor` | `float32` | not used | Whole tensor, at the source's `shape`, which must equal the message's. Message dtypes `uint8`, `int8`, `int16`, `int32`, `int64`, `float16`, `float32`, `float64` and `bool`, one lane. `bfloat16` only in device memory. Empty `strides` means row-major. Cast to the source's `dtype`. From ros2/rosidl_buffer_backends, which RoboStack does not package. |
 | `sensor_msgs/msg/JointState` | `float64` | required | `position.<joint>`, `velocity.<joint>`, `effort.<joint>`. A bare `<joint>` means position. Joints are looked up by name. |
 | `trajectory_msgs/msg/JointTrajectory` | `float64` | required | First point only. `position.<joint>`, `velocity.<joint>`, `acceleration.<joint>`, `effort.<joint>`. The plurals `positions`, `velocities` and `accelerations` work too. A bare `<joint>` means position. |
 | `control_msgs/msg/MultiDOFCommand` | `float64` | required | `values.<dof>`, `values_dot.<dof>`. A bare `<dof>` means `values`. |
@@ -25,7 +26,7 @@ included.
 | `nav_msgs/msg/Odometry` | `float64` | required | Dotted path, such as `pose.pose.position.x` or `twist.twist.angular.z`. |
 | `geometry_msgs/msg/Twist` | `float64` | required | Dotted path, such as `linear.x` or `angular.z`. |
 | `geometry_msgs/msg/TwistStamped` | `float64` | required | Dotted path from the root, so `twist.linear.x`, not `linear.x`. |
-| `std_msgs/msg/Float32MultiArray` | `float32` | optional | The whole `data` array. `select` entries only name the elements, and their count must equal the array length. Without `select` only a one-element array decodes. |
+| `std_msgs/msg/Float32MultiArray` | `float32` | optional | The whole `data` array. `select` entries only name the elements, and their count must equal the array length. Without `select` the array must match the source's `shape`, or have one element without one. |
 | `std_msgs/msg/Float64MultiArray` | `float64` | optional | Same as `Float32MultiArray`. |
 | `std_msgs/msg/Int32MultiArray` | `int32` | optional | Same as `Float32MultiArray`. |
 | `std_msgs/msg/Float32`, `Float64`, `Int32`, `Int64`, `Bool` | `float32`, `float64`, `int32`, `int64`, `bool` | optional | One value from `data`. A `select` entry only names it. |

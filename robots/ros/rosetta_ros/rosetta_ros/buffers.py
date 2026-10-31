@@ -56,20 +56,64 @@ def device_memory_unavailable(buffer_backend: str) -> str | None:
     return None
 
 
+DLPACK_DTYPES: dict[tuple[int, int], str] = {
+    (1, 8): "uint8",
+    (0, 8): "int8",
+    (0, 16): "int16",
+    (0, 32): "int32",
+    (0, 64): "int64",
+    (2, 16): "float16",
+    (2, 32): "float32",
+    (2, 64): "float64",
+    (4, 16): "bfloat16",
+    (6, 8): "bool",
+}
+"""DLPack ``(type code, bits)`` -> dtype name, for one-lane types. The set
+torch_conversions reads, with the names numpy and torch both use. numpy has no
+bfloat16, so a bfloat16 value can only be read in device memory."""
+
+
 def message_bytes(data: Any) -> Any:
     """A message's ``uint8[]`` field as a flat uint8 array, without copying it.
 
     Host data becomes a read-only numpy view. Device data becomes a torch
     tensor on its device.
     """
-    backend_type = getattr(data, "backend_type", "cpu")
-    if backend_type == "cpu":
+    if _on_host(data):
         return np.frombuffer(data, dtype=np.uint8)
-    if backend_type != "cuda":
+    return _device_tensor(data, "uint8", (len(data),), (1,), 0)
+
+
+def message_tensor(data: Any, dtype: str, shape: tuple[int, ...], strides: tuple[int, ...], byte_offset: int) -> Any:
+    """A message's ``uint8[]`` field viewed as a ``dtype`` array, without copying it.
+
+    ``strides`` are in elements and ``byte_offset`` is where the first element
+    starts, as in a DLTensor; the caller has checked they stay inside
+    ``data``. Host data becomes a read-only numpy view. Device data becomes a
+    torch tensor on its device.
+    """
+    if not _on_host(data):
+        return _device_tensor(data, dtype, shape, strides, byte_offset)
+    if dtype == "bfloat16":
+        raise ValueError("bfloat16 message data can only be read in device memory")
+    itemsize = np.dtype(dtype).itemsize
+    span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
+    flat = np.frombuffer(data, dtype=dtype, count=span, offset=byte_offset)
+    return np.lib.stride_tricks.as_strided(flat, shape, tuple(s * itemsize for s in strides), writeable=False)
+
+
+def _on_host(data: Any) -> bool:
+    """True for host data, False for CUDA data; raises for memory rosetta can't read."""
+    backend_type = getattr(data, "backend_type", "cpu")
+    if backend_type not in ("cpu", "cuda"):
         raise ValueError(f"Message data is in '{backend_type}' memory, which rosetta can't read")
+    return backend_type == "cpu"
+
+
+def _device_tensor(data: Any, dtype: str, shape: tuple[int, ...], strides: tuple[int, ...], byte_offset: int) -> Any:
     import torch
 
-    view = CudaBufferView(data)
+    view = CudaBufferView(data, dtype=dtype, shape=shape, strides=strides, byte_offset=byte_offset)
     # The legacy default stream the handle is ordered on is per device, so the
     # import runs with the data's device current, whichever GPU it's on.
     with torch.cuda.device(view.device_id):
@@ -88,14 +132,30 @@ class CudaBufferView:
     lease owns the handle: every export shares it, and a view that is never
     exported, or whose import fails, closes the handle when it's freed.
 
+    The view is a flat uint8 array of the whole buffer unless ``dtype``,
+    ``shape``, ``strides`` (in elements) and ``byte_offset`` describe a
+    tensor inside it. The offset is folded into the data pointer, as
+    torch_conversions does, so no consumer has to honor a DLPack byte_offset.
+
     TODO: replace with cuda_buffer's own ``__dlpack__`` once
     ros2/rosidl_buffer_backends exposes one on its read handle.
     """
 
-    def __init__(self, data: Any) -> None:
+    def __init__(
+        self,
+        data: Any,
+        *,
+        dtype: str = "uint8",
+        shape: tuple[int, ...] | None = None,
+        strides: tuple[int, ...] | None = None,
+        byte_offset: int = 0,
+    ) -> None:
         from cuda_buffer import CudaBuffer
 
-        self._size = len(data)
+        self._dtype = next(key for key, name in DLPACK_DTYPES.items() if name == dtype)
+        self._shape = list(shape) if shape is not None else [len(data)]
+        self._strides = list(strides) if strides is not None else [1]
+        self._byte_offset = byte_offset
         self._handle = CudaBuffer.from_input_buffer(data, _CUDA_LEGACY_STREAM)
         self._lease = _ReadLease(self._handle, data)
 
@@ -115,10 +175,11 @@ class CudaBufferView:
         # torch-free bridge, though importing it imports the package's torch.
         from torch_conversions._torch_bridge import make_dlpack_capsule
 
+        code, bits = self._dtype
         return make_dlpack_capsule(
-            self._handle.device_ptr, _KDL_CUDA, self._handle.device_id,
-            1, 8, 1,  # uint8: DLPack type code, bits, lanes
-            [self._size], [1], 0, self._lease,
+            self._handle.device_ptr + self._byte_offset, _KDL_CUDA, self._handle.device_id,
+            code, bits, 1,  # DLPack type code, bits, lanes
+            self._shape, self._strides, 0, self._lease,
         )  # fmt: skip
 
 

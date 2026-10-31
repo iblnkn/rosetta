@@ -197,3 +197,55 @@ def test_cuda_published_image_reaches_the_frame_in_gpu_memory():
         host = _decode(_image(h, w, "bgr8", bgr.tobytes()))
         expected = spec.operators[0].forward(host)
         np.testing.assert_array_equal(to_host(frame), expected)
+
+
+_HAS_TENSOR_MSGS = importlib.util.find_spec("tensor_msgs") is not None
+
+
+@pytest.mark.skipif(
+    not (_HAS_CUDA_BUFFER and _HAS_TENSOR_MSGS),
+    reason="needs cuda_buffer and tensor_msgs from ros2/rosidl_buffer_backends",
+)
+def test_cuda_published_tensor_reaches_the_frame_in_gpu_memory():
+    torch = _torch("cuda")
+    from cuda_buffer import CudaBuffer
+    from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+    from tensor_msgs.msg import ExperimentalTensor
+
+    features = np.random.default_rng(4).standard_normal((4, 6, 8)).astype(np.float16)
+    spec = ObservationStreamSpec(
+        key="observation.features",
+        names=(),
+        fps=30,
+        source=Source(
+            channel=Channel(topic="/device_features", type="tensor_msgs/msg/ExperimentalTensor"),
+            align=Align("hold", "receive"),
+            shape=features.shape,
+        ),
+        dtype="float32",
+        image_resize=None,
+    )
+    with bridge_on_graph("device_tensors", [spec], [], buffer_backends=("cuda",)) as (bridge, _, fixture, executor):
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        pub = fixture.create_publisher(ExperimentalTensor, "/device_features", qos)
+        assert spin_until(executor, lambda: pub.get_subscription_count() > 0)
+
+        src = torch.from_numpy(features.reshape(-1).view(np.uint8).copy()).cuda()
+        torch.cuda.synchronize()
+        msg = ExperimentalTensor(dtype_code=2, dtype_bits=16, dtype_lanes=1, shape=list(features.shape))
+        msg.data = CudaBuffer.allocate_buffer(src.numel())
+        with CudaBuffer.from_output_buffer(msg.data, 1) as handle:
+            CudaBuffer.to_buffer(src.data_ptr(), src.numel(), handle, 1)
+        pub.publish(msg)
+
+        assert spin_until(executor, lambda: bridge.warmed_up), "the CUDA-backed tensor never arrived"
+        frame = bridge.sample_frame()["observation.features"]
+        assert isinstance(frame, torch.Tensor)
+        assert frame.is_cuda
+        assert frame.dtype == torch.float32
+        np.testing.assert_array_equal(to_host(frame), features.astype(np.float32))

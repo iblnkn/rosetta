@@ -123,7 +123,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             "buffer_backends",
             "",
             ParameterDescriptor(
-                description="Comma-separated rosidl buffer backends image subscriptions accept (e.g. 'cuda'), so "
+                description="Comma-separated rosidl buffer backends subscriptions accept (e.g. 'cuda'), so "
                 "a publisher's device memory is decoded and resized without leaving its device. Applies to streams "
                 "whose decoder and operators handle device memory; configure logs each stream's choice. "
                 "Empty = host memory only.",
