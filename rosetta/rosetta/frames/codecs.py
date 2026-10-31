@@ -25,7 +25,7 @@ A codec binds to a message type in one of two ways:
 - By type, via the registry in :mod:`rosetta.codecs`. ``@register_decoder`` /
   ``@register_encoder`` key a function by ROS type string. The built-in ros2
   codecs and installed ``rosetta.codecs`` plugins populate it
-  (:func:`discover_codecs`), so a contract naming only ``type:`` resolves with
+  (:func:`rosetta.contract.interfaces.discover_codecs`), so a contract naming only ``type:`` resolves with
   no path.
 - Inline, per channel. A spec's ``decoder:`` / ``encoder:`` gives a
   ``"module:function"`` path that wins over the registry for that channel.
@@ -59,55 +59,20 @@ from ..codecs import (
     DECODERS,
     ENCODERS,
     load_codec,
-    load_codec_plugins,
     width_mismatch_message,
 )
+from ..contract.interfaces import discover_codecs
 from ..operators import forward_pipeline, inverse_pipeline
 
 __all__ = [
     "NonFiniteActionError",
     "decode_value",
-    "discover_codecs",
     "encode_value",
     "host_only_reason",
 ]
 
 if TYPE_CHECKING:
     from ..contract.specs import ActionStreamSpec, ObservationStreamSpec
-
-
-# =============================================================================
-# Codec discovery
-# =============================================================================
-
-
-def discover_codecs(robot_interface: str | None = None) -> None:
-    """
-    Register every robot interface's built-in codecs, then import ``rosetta.codecs`` plugins.
-
-    Raises if ``robot_interface`` (the one a contract names) failed to register.
-
-    Each entry point's value is a module path. Loading it runs that module's
-    ``@register_decoder`` / ``@register_encoder`` decorators, so installed
-    plugins populate the registries keyed by msg_type. The contract therefore
-    names a ``type:`` only, so a custom codec for a brand-new type needs no path
-    in the contract. To *replace* a built-in codec, the plugin registers with
-    ``override=True`` (global), or a spec uses the inline ``decoder:``/
-    ``encoder:`` path (per-spec, deterministic).
-
-    Idempotent, hard-error semantics live in the shared loader (see
-    :func:`rosetta.plugins.load_entry_point_plugins`): a plugin that
-    fails to import raises ContractValidationError, and that failure is
-    latched, so every later call re-raises the same error until the process
-    restarts with a fixed environment.
-    """
-    # Each installed robot interface registers its built-in codecs first, so a
-    # plugin can replace a built-in with override=True. Imported here, not at
-    # module level: an interface's codec modules import this one.
-    from rosetta.robots.registry import register_interface_codecs
-
-    register_interface_codecs(robot_interface)
-    load_codec_plugins()
 
 
 # =============================================================================

@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from rosetta.codecs import DECODERS
-from rosetta.frames.codecs import discover_codecs
+from rosetta.contract.interfaces import discover_codecs
 from rosetta_ros.field_access import resolve_indexed
 
 

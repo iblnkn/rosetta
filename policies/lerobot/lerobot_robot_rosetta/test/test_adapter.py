@@ -25,8 +25,8 @@ from ament_index_python.packages import get_package_share_directory
 import lerobot_robot_rosetta.rosetta as adapter
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import load_contract
-from rosetta.frames.codecs import discover_codecs
 from rosetta.frames.protocols import FrameIO
 
 discover_codecs()  # register the built-in codecs

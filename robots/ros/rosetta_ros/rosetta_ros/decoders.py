@@ -101,7 +101,7 @@ if TYPE_CHECKING:
     from rosetta.contract.specs import StreamSpec
 
 # This module must stay importable without ROS: codec discovery
-# (rosetta.frames.codecs.discover_codecs) imports it during ROS-less contract
+# (rosetta.contract.interfaces.discover_codecs) imports it during ROS-less contract
 # loading. Decoders are duck-typed on the message instance, so no rclpy,
 # rosidl, or message-class import belongs at module level.
 

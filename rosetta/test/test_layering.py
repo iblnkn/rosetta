@@ -57,27 +57,14 @@ SEAMS = frozenset({"rosetta.robots", "rosetta.data", "rosetta.policies"})
 # entry that no longer occurs, so this list only shrinks.
 KNOWN_VIOLATIONS = frozenset(
     {
-        "rosetta.contract.schema -> rosetta.frames.codecs",
         "rosetta.contract.schema -> rosetta.frames.layout",
         "rosetta.contract.schema -> rosetta.frames.naming",
-        "rosetta.contract.schema -> rosetta.robots.protocols",
-        "rosetta.contract.schema -> rosetta.robots.registry",
         "rosetta.contract.specs -> rosetta.frames.naming",
-        "rosetta.frames.codecs -> rosetta.robots.registry",
     }
 )
 KNOWN_CYCLES = frozenset(
     {
-        frozenset(
-            {
-                "rosetta.contract.schema",
-                "rosetta.contract.specs",
-                "rosetta.frames.codecs",
-                "rosetta.frames.layout",
-                "rosetta.robots.protocols",
-                "rosetta.robots.registry",
-            }
-        ),
+        frozenset({"rosetta.contract.schema", "rosetta.contract.specs", "rosetta.frames.layout"}),
     }
 )
 

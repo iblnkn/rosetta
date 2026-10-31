@@ -30,9 +30,9 @@ from bridge_helpers import FakeLogger, bridge_on_graph, spin_until
 
 from rosetta.arrays import to_host
 from rosetta.codecs import DECODERS
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from rosetta.frames.codecs import discover_codecs
 from rosetta.operators import OperatorContext, build_operator
 from rosetta_ros import decoders, topic_bridge
 from rosetta_ros.buffers import message_bytes

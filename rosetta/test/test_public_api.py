@@ -25,7 +25,12 @@ import pytest
 
 PUBLIC_API = {
     "rosetta.errors": {"ContractValidationError"},
-    "rosetta.plugins": {"instantiate_entry_point", "load_entry_point_plugins", "resolve_entry_point"},
+    "rosetta.plugins": {
+        "instantiate_entry_point",
+        "load_entry_point_plugins",
+        "protocol_problems",
+        "resolve_entry_point",
+    },
     "rosetta.operators": {
         "Invertibility",
         "OPERATOR_ENTRY_POINT_GROUP",
@@ -53,6 +58,13 @@ PUBLIC_API = {
         "load_contract",
         "owning_key",
         "parse_contract",
+    },
+    "rosetta.contract.interfaces": {
+        "ContractInterface",
+        "ROBOT_INTERFACE_GROUP",
+        "available_robot_interfaces",
+        "discover_codecs",
+        "load_interface",
     },
     "rosetta.contract.sidecar": {
         "CONTRACT_SIDECAR_FILENAME",
@@ -85,7 +97,6 @@ PUBLIC_API = {
     "rosetta.frames.codecs": {
         "NonFiniteActionError",
         "decode_value",
-        "discover_codecs",
         "encode_value",
         "host_only_reason",
     },

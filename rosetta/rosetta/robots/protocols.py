@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""What a robot interface package gives Rosetta's core.
+"""A live robot interface: what contract loading asks, plus ``connect``.
 
-A contract names its robot interface (``robot_interface: ros2``). Loading the
-contract looks that name up in :mod:`.registry` and asks the interface the
-questions only it can answer: which message types exist, which timelines each
-one carries, and whether a ``qos`` mapping parses. Codec discovery asks every
-installed interface to register its built-in codecs.
-
-A framework that hosts a run itself (LeRobot's CLIs driving a ``Robot``)
-also asks the interface for a live robot, through :meth:`RobotInterface.connect`.
-The interface's own nodes and tools build their live and recorded frame
-surfaces directly.
+:class:`RobotInterface` extends :class:`rosetta.contract.interfaces.ContractInterface`,
+the questions contract loading asks an interface (message types, timelines,
+qos, built-in codecs). A framework that hosts a run itself (LeRobot's CLIs
+driving a ``Robot``) also asks the interface for a live robot, through
+:meth:`RobotInterface.connect`. The interface's own nodes and tools build
+their live and recorded frame surfaces directly.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+from rosetta.contract.interfaces import ContractInterface
 
 if TYPE_CHECKING:
     from rosetta.contract.model import TeleopEventMap
@@ -40,43 +38,13 @@ __all__ = ["RobotInterface"]
 
 
 @runtime_checkable
-class RobotInterface(Protocol):
+class RobotInterface(ContractInterface, Protocol):
     """A robot interface, registered under ``rosetta.robot_interfaces``.
 
     The entry point is a class with a zero-argument constructor. Every method
-    but :meth:`connect` is called during contract loading, possibly on a
-    machine that only loads contracts, so construction and the methods should
-    import their middleware lazily and cheaply.
+    but :meth:`connect` is called during contract loading (see
+    :class:`~rosetta.contract.interfaces.ContractInterface`).
     """
-
-    def register_codecs(self) -> None:
-        """Register this interface's built-in decoders and encoders.
-
-        Called by :func:`rosetta.frames.codecs.discover_codecs` before codec
-        plugins load, so a plugin can still replace a built-in with
-        ``override=True``. Called once per process.
-        """
-        ...
-
-    def provided_timelines(self, msg_type: str) -> frozenset[str]:
-        """Timelines a channel of ``msg_type`` provides, by name.
-
-        Contract loading checks every ``align.timeline`` against this set.
-
-        Raises:
-            ValueError: If ``msg_type`` is not a type this interface knows.
-
-        """
-        ...
-
-    def validate_qos(self, qos: dict[str, Any]) -> None:
-        """Check a channel's ``qos`` mapping.
-
-        Raises:
-            ValueError: If the mapping does not parse for this interface.
-
-        """
-        ...
 
     def connect(
         self,

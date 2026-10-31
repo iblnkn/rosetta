@@ -27,6 +27,7 @@ import sys
 import rosetta
 import rosetta.arrays
 import rosetta.codecs
+import rosetta.contract.interfaces
 import rosetta.contract.schema
 import rosetta.contract.specs
 import rosetta.errors

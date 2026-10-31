@@ -22,7 +22,7 @@ import sys
 # or not entry-point discovery works.
 _PROBE = """
 from rosetta.codecs import has_decoder, has_encoder
-from rosetta.frames.codecs import discover_codecs
+from rosetta.contract.interfaces import discover_codecs
 discover_codecs()
 assert has_decoder("sensor_msgs/msg/JointState")
 assert has_encoder("geometry_msgs/msg/Twist")

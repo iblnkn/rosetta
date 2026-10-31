@@ -26,7 +26,7 @@ and installed ``rosetta.codecs`` plugins add theirs, so a contract naming only
 
 This module also owns the contract's dtype vocabulary, because a dtype is a
 decoder's output declaration. Lookups here read the registry as it stands;
-:func:`rosetta.frames.codecs.discover_codecs` fills it. Running a codec
+:func:`rosetta.contract.interfaces.discover_codecs` fills it. Running a codec
 on a message is :mod:`rosetta.frames.codecs`.
 """
 

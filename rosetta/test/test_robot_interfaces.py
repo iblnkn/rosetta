@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 from fake_interface import FakeVector
 
+from rosetta.contract import interfaces
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 from rosetta.errors import ContractValidationError
@@ -77,10 +78,10 @@ def test_the_interface_decides_what_loads(fake_interface, tmp_path, old, new, ma
 def broken_interface_too(fake_interface, monkeypatch):
     """Install a second interface, ``broken``, whose package fails to import."""
     eps = [
-        ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=registry.ROBOT_INTERFACE_GROUP),
-        ilm.EntryPoint(name="broken", value="no_such_module:Interface", group=registry.ROBOT_INTERFACE_GROUP),
+        ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=interfaces.ROBOT_INTERFACE_GROUP),
+        ilm.EntryPoint(name="broken", value="no_such_module:Interface", group=interfaces.ROBOT_INTERFACE_GROUP),
     ]
-    monkeypatch.setattr(registry, "_ilm", SimpleNamespace(entry_points=lambda group: eps))
+    monkeypatch.setattr(interfaces, "_ilm", SimpleNamespace(entry_points=lambda group: eps))
 
 
 def test_a_broken_interface_does_not_block_contracts_for_another(broken_interface_too, tmp_path):
@@ -117,3 +118,22 @@ def test_a_missing_stream_zero_fills_unless_asked_not_to(fake_interface, tmp_pat
     assert connection.sample_frame(fill_missing=False) == {}
     connection.push(0, np.array([1.0, 2.0]))
     assert connection.sample_frame(fill_missing=False)["observation.state"].tolist() == [1.0, 2.0]
+
+
+@pytest.fixture
+def offline_only_interface(fake_interface, monkeypatch):
+    """Make ``fake`` an interface that answers contract loading but has no ``connect``."""
+    import fake_interface as module
+
+    class OfflineInterface(module.FakeInterface):
+        connect = None
+
+    monkeypatch.setattr(module, "OfflineInterface", OfflineInterface, raising=False)
+    ep = ilm.EntryPoint(name="fake", value="fake_interface:OfflineInterface", group=interfaces.ROBOT_INTERFACE_GROUP)
+    monkeypatch.setattr(interfaces, "_ilm", SimpleNamespace(entry_points=lambda group: [ep]))
+
+
+def test_an_offline_only_interface_loads_contracts_but_not_live_robots(offline_only_interface, tmp_path):
+    contract = _load(tmp_path, CONTRACT)
+    with pytest.raises(TypeError, match=r"does not implement RobotInterface \(missing or non-callable: connect\)"):
+        registry.load_robot_interface(contract.robot_interface)
