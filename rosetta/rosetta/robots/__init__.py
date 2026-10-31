@@ -31,8 +31,8 @@ contract names among the installed ``rosetta.robot_interfaces`` entry points.
 The ROS2 implementation (topic bridge, rosbag2 replay, nodes, message codecs)
 is the ``rosetta_ros`` package. A future ecosystem (ROS1,
 zenoh-native, MQTT, ...) is a sibling package implementing the same
-surfaces; nothing on the policy side changes, because both sides speak only
-frames.
+surfaces. No dataset writer or policy runner changes, because they speak
+only frames.
 
 This seam imports only lower layers of core, never :mod:`rosetta.data` or
 :mod:`rosetta.policies`. Interface packages build on the rest of core as

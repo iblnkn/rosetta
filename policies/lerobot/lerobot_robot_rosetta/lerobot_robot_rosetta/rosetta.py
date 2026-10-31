@@ -150,7 +150,7 @@ def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
             f"ported dataset would receive missing, misrouted, or misshaped "
             f"inputs live. Merge numeric streams under one key per role "
             f"(values concatenate in declaration order) and give every "
-            f"numeric stream a select:, or deploy with a framework adapter "
+            f"numeric stream a select:, or deploy with a policy runner "
             f"that preserves per-key layout."
         )
 

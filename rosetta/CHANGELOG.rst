@@ -4,6 +4,40 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Breaking: three seams, and core in layers.** ``rosetta.policies`` held
+  both the offline ``DatasetWriter`` and the live ``PolicyRunner``. The writer
+  is now ``rosetta.data``. Core's modules sit in layers (base, contract,
+  frames, then the robots, data and policies seams, which never import each
+  other), and ``test/test_layering.py`` fails on an import that points up a
+  layer, crosses seams or closes a cycle. Entry-point group names are
+  unchanged, so registered plugins keep loading; imports move:
+
+  - ``rosetta.policies.DatasetWriter``, ``load_dataset_writer`` and
+    ``available_dataset_writers``: ``rosetta.data``
+  - ``rosetta.contract.errors``: ``rosetta.errors``
+  - ``rosetta.contract.plugins``: ``rosetta.plugins`` (now public)
+  - ``rosetta.contract.operators``: ``rosetta.operators``
+  - ``rosetta.frames.arrays``: ``rosetta.arrays``
+  - ``register_decoder``, ``register_encoder``, ``DecoderFn``, ``EncoderFn``,
+    ``SUPPORTED_NUMERIC_DTYPES`` and ``CODEC_ENTRY_POINT_GROUP`` from
+    ``rosetta.frames.codecs``: ``rosetta.codecs``
+  - ``rosetta.frames.codecs.discover_codecs``:
+    ``rosetta.contract.interfaces.discover_codecs``
+  - ``rosetta.frames.naming``: ``rosetta.contract.naming``
+  - ``FrameLayout.lerobot_features()``: ``FrameLayout.features()``
+  - ``rosetta.frames.layout.build_feature``: removed
+  - ``LEROBOT_CONTRACT_SIDECAR_PATH`` and ``find_contract_for_pretrained`` from
+    ``rosetta.contract.sidecar``: ``lerobot_dataset_rosetta.sidecar``
+
+  Contract loading asks a robot interface only the new
+  ``rosetta.contract.interfaces.ContractInterface`` questions;
+  ``RobotInterface`` adds ``connect``, which ``load_robot_interface`` checks.
+  ``PolicyRunner`` gains ``find_contract(pretrained, *, warn)``, which
+  ``policy_runner_node`` calls when it has no ``contract_path``; a runner
+  without it no longer loads. Registry lookups such as ``has_decoder`` no
+  longer run codec discovery; loading a contract still does. ``frames.resample``
+  is public. A missing writer or runner now reads ``No dataset writer 'x'`` or
+  ``No policy runner 'x'`` instead of ``No framework 'x'``.
 * **Breaking: the ROS 2 code moved to the new ``rosetta_ros`` package.**
   ``rosetta.robots.ros2.X`` is now ``rosetta_ros.X``, and the launch files,
   params, example contracts and the four executables moved with it

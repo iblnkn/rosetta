@@ -4,6 +4,11 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* Breaking: ``rosetta_port --framework`` is now ``--format``. It picks a
+  dataset writer, and LeRobot's comes from the new ``lerobot_dataset_rosetta``.
+* ``policy_runner_node`` with no ``contract_path`` asks its policy runner's
+  ``find_contract`` for the contract ``pretrained_name_or_path`` was trained
+  with, instead of following LeRobot's layout itself.
 * ``episode_recorder_node`` subscribes raw and writes each message's
   serialized bytes as received, with no deserialize and serialize per message.
 * Every lifecycle node spins on rclpy's single-threaded ``EventsExecutor``.

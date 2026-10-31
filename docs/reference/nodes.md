@@ -196,14 +196,14 @@ rclpy node has, the node has only the three service clients.
 
 ## policy_runner_node
 
-Runs a policy on the live robot through a framework adapter. Node name
+Runs a policy on the live robot through a policy runner. Node name
 `policy_runner`. Launch file `policy_runner_launch.py`.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
 | `contract_path` | string | `""` | Contract file. Empty resolves it from `pretrained_name_or_path`, as in [Contract fallback](#contract-fallback). The launch argument defaults to empty, which keeps the params-file value. Read-only. |
 | `pretrained_name_or_path` | string | `""` | Checkpoint, a local path or a Hugging Face Hub repo ID. Read by the adapter and by the contract fallback. Read-only. |
-| `framework` | string | `lerobot` | Adapter, by its name in the `rosetta.policy_runners` entry-point group. Read-only. |
+| `framework` | string | `lerobot` | Policy runner, by its name in the `rosetta.policy_runners` entry-point group. Read-only. |
 | `is_classifier` | bool | `false` | Publish the contract's `rewards` section as the output instead of `actions`. Read-only. |
 | `buffer_backends` | string | `""` | Comma-separated rosidl buffer backends that subscriptions accept, such as `cuda` (ROS 2 Lyrical and newer). A stream accepts them only when its decoder and every `apply` operator handle device memory (`sensor_msgs/msg/Image`, `tensor_msgs/msg/ExperimentalTensor` and `resize` do). Such values are decoded, and images resized, on their device. The LeRobot adapter copies each contract-sized image to the host once per frame, because LeRobot observations are numpy. Configure logs which streams accept device memory and why the others do not. Empty accepts host memory only. Read-only. |
 | `default_prompt` | string | `""` | Task used when a goal or service call leaves `prompt` empty. Read at each run start. |

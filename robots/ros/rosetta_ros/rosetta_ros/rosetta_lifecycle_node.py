@@ -22,7 +22,8 @@ where relevant extend ``unblock_stop()`` and ``send_safety_action()``. They
 never override the lifecycle callbacks themselves.
 
 :class:`BridgeLifecycleNode` adds :class:`TopicBridge` ownership for hosts
-whose specs are known at construction time (the framework adapter packages).
+whose specs are known at construction time (the live connection
+:meth:`~rosetta_ros.interface.Ros2Interface.connect` opens).
 Nodes that resolve their resources from ROS parameters at configure time
 subclass :class:`RosettaLifecycleNode` directly.
 """

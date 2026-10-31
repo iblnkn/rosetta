@@ -17,8 +17,8 @@ import os
 from setuptools import find_packages, setup
 
 # Rosetta's core: the contract, frames, and the protocols and registries robot
-# interfaces (e.g. rosetta_ros) and framework adapters (e.g. lerobot_rosetta)
-# plug into. Imports no robot middleware.
+# interfaces (e.g. rosetta_ros), dataset writers (e.g. lerobot_dataset_rosetta)
+# and policy runners (e.g. lerobot_rosetta) plug into. Imports no robot middleware.
 package_name = "rosetta"
 
 setup(

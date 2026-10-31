@@ -22,7 +22,7 @@ Core imports no robot middleware, so every module here imports without ROS.
 | `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones, or with `fill_missing=False` leaves out every key with a missing value. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.features` gives each key's dtype, shape and names, in the shape of LeRobot's dataset features. |
 | `rosetta.contract.naming` | `IMAGE_KEY_PREFIX`, `camera_name`, `sanitize_field_name` | `IMAGE_KEY_PREFIX` is `observation.images.`. `camera_name` strips it and keeps dots. `sanitize_field_name` replaces every character outside `[A-Za-z0-9_]` with `_`. |
 | `rosetta.frames.resample` | `StreamBuffer`, `step_ns`, `tick_ns`, `num_ticks` | Fixed-rate resampling of asynchronous messages, shared by live bridges and offline replay. `StreamBuffer` holds one stream's messages and answers what value it has at a tick. `step_ns(fps)` is the frame period, `tick_ns(start_ns, index, fps)` the time of tick `index`, and `num_ticks(duration_ns, fps)` the number of ticks in a span. |
-| `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a framework adapter sees it. |
+| `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a policy runner sees it. |
 | `rosetta.data` | `DatasetWriter`, `load_dataset_writer`, `available_dataset_writers`, `DATASET_WRITER_GROUP` | The dataset writer protocol and the registry that loads a writer by name. |
 | `rosetta.policies` | `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_policy_runner`, `available_policy_runners`, `POLICY_RUNNER_GROUP` | The policy runner protocol, its value types, and the registry that loads a runner by name. |
 | `rosetta.contract.interfaces` | `ContractInterface`, `load_interface`, `available_robot_interfaces`, `discover_codecs`, `ROBOT_INTERFACE_GROUP` | What contract loading asks of a robot interface, and finding one by name. `discover_codecs` fills the codec registry from every installed interface, then from codec plugins. |
@@ -131,7 +131,7 @@ The node toolkit that `rosetta_ros_hil` builds on, and the live connection behin
 | `rosetta_ros.offline.rrd_layout` | `Rosbag2RrdLayout`, `MessageView` | The `ros2` recording layout `rerun_rosetta` loads for rosbag2_storage_rrd bags. A channel's messages sit in the reflected column `<topic>:<pkg.msg.Type>:message`, and receive times on the `recv_timestamp` timeline. A topic recorded only in the raw form raises `ValueError`. `MessageView` serves a reflected message to the decoders as read-only attributes. | no |
 | `rosetta_ros.field_access` | `dot_get`, `dot_set`, `resolve_indexed` | Read and write message fields by dotted path. | no |
 
-## Framework adapter packages
+## Dataset and policy packages
 
 These names are each package's `__all__`. No test pins them.
 

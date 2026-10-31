@@ -63,7 +63,8 @@ tutorials/first-policy
 How-to guides cover one task each: recording, writing a contract, preparing
 a dataset, training, deploying, routing commands through a mux,
 human-in-the-loop episodes, and extending
-Rosetta with a message type, a framework or a robot interface.
+Rosetta with a message type, a dataset writer, a policy runner or a robot
+interface.
 
 ```{toctree}
 :caption: How-to guides
@@ -77,7 +78,8 @@ how-to/deploy-a-policy
 how-to/route-commands
 how-to/human-in-the-loop
 how-to/add-a-message-type
-how-to/add-a-framework
+how-to/add-a-dataset-writer
+how-to/add-a-policy-runner
 how-to/add-a-robot-interface
 ```
 

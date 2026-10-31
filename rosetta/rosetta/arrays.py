@@ -29,7 +29,7 @@ consumer on another stream imports the array with its library's
 ``from_dlpack``, whose stream handshake orders it after that work.
 
 Moving frames to the device a model runs on is the framework's job, as
-normalization and batching are. A framework adapter whose API takes host
+normalization and batching are. A policy runner whose framework takes host
 arrays brings each image to the host with :func:`to_host`.
 """
 

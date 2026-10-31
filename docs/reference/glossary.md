@@ -27,9 +27,16 @@ Contract
   each source is aligned, selected and transformed. The same file drives
   recording, porting and deployment.
 
+Dataset backend
+: A package that writes frames as training data, or reads training data back
+  as frames. `lerobot_dataset_rosetta` writes LeRobot datasets.
+  `rerun_rosetta` reads `.rrd` recordings. Lives under `data/` and plugs into
+  `rosetta.data`.
+
 Dataset writer
-: The part of a framework adapter that writes ported frames in the
-  framework's dataset format. `rosetta_port --format` picks it.
+: A class that writes ported frames in one dataset format, registered under
+  `rosetta.dataset_writers`. `rosetta_port --format` picks it. `lerobot`
+  comes from `lerobot_dataset_rosetta`.
 
 Episode
 : One recorded demonstration. One bag directory, and one episode in the
@@ -44,17 +51,13 @@ Frame key
 : The name of one entry in a frame, such as `observation.state` or `action`.
   LeRobot calls it a feature.
 
-Framework adapter
-: A package that binds a learning framework to Rosetta by registering a
-  dataset writer and a policy runner under the framework's name, such as
-  `lerobot` from `lerobot_rosetta`.
-
 Operator
 : A named transform an `apply` list can use, such as `rad2deg`, `clamp` or
   `resize`. Each has a forward direction and possibly an inverse.
 
 Policy runner
-: The part of a framework adapter that runs a policy against live frames.
+: A class that runs a framework's policy against live frames, registered
+  under `rosetta.policy_runners`. `lerobot` comes from `lerobot_rosetta`.
   Also the node that hosts it, `policy_runner_node` (node name
   `policy_runner`).
 

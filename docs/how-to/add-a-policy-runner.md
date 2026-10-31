@@ -1,70 +1,20 @@
-# Add a framework
+# Add a policy runner
 
-Write a framework adapter so `rosetta_port` writes your learning framework's
-dataset format and `policy_runner_node` runs its policies. An adapter is a
-Python package with two classes, a dataset writer and a policy runner, and
-two entry points. `lerobot_rosetta` is the full example.
+Write a policy runner so `policy_runner_node` runs your framework's
+policies. A runner is a Python class that implements `PolicyRunner` from
+`rosetta.policies`, has a constructor that takes no arguments, and is
+registered under the `rosetta.policy_runners` entry point. `lerobot_rosetta`
+is the full example.
 
-The writer implements a protocol from `rosetta.data` and the runner one from
-`rosetta.policies`, and both need a
-constructor that takes no arguments. The adapter imports no ROS: the robot
-side reaches it only through frames. Where your framework hosts a run itself,
-open the robot with `load_robot_interface(contract.robot_interface).connect(...)`
-from `rosetta.robots.registry` instead, as `lerobot_robot_rosetta` does. The
+The runner imports no ROS: the robot reaches it only through frames. Where
+your framework hosts a run itself, open the robot with
+`load_robot_interface(contract.robot_interface).connect(...)` from
+`rosetta.robots.registry` instead, as `lerobot_robot_rosetta` does. To write
+your framework's dataset format as well, write a dataset writer too
+([Add a dataset writer](add-a-dataset-writer.md)). The
 [Python API](../reference/python-api.md) lists the names you can import.
 
-## Write the dataset writer
-
-`rosetta_port` calls `open` once, then for each bag a run of `add_frame`
-calls ending in `save_episode`, then `finalize` once:
-
-```python
-# my_adapter/writer.py
-import json
-from pathlib import Path
-
-
-class MyWriter:
-    def open(self, *, contract, repo_id, root=None, contract_path=None, embed_contract=True, **opts):
-        self._out = Path(root or ".") / repo_id
-        self._episodes = []
-        self._frames = []
-
-    def add_frame(self, frame):
-        self._frames.append(sorted(frame))
-
-    def save_episode(self):
-        self._episodes.append(len(self._frames))
-        self._frames = []
-
-    def discard_episode(self):
-        self._frames = []
-
-    def finalize(self):
-        self._out.mkdir(parents=True, exist_ok=True)
-        (self._out / "episodes.json").write_text(json.dumps(self._episodes))
-```
-
-What the writer has to handle:
-
-- `frame` maps each contract key to a `np.ndarray`, or a `str` for text, plus
-  `is_first`, `is_last` and `is_terminal` as `(1,)` bool arrays and `task` as
-  a string.
-- `contract` is the loaded `Contract`. `iter_specs(contract)` from
-  `rosetta.contract.specs` gives every key `add_frame` receives.
-  `iter_policy_specs(contract)` gives only observations and actions, for a
-  format that builds state and action vectors.
-- `opts` always holds `push_to_hub`, `hub_private`, `vcodec` and
-  `streaming_encoding` from the `rosetta_port` command line, plus any of the
-  writer-specific flags that were set. Ignore the ones you don't use.
-- With `embed_contract` true and a `contract_path`, copy the contract into the
-  output, so a policy trained on it can find its contract later.
-- `discard_episode` drops a bag that failed partway. It's also called when
-  nothing is buffered.
-- `finalize` isn't called when every bag fails, so don't leave saved episodes
-  depending on it.
-
-## Write the policy runner
+## Write the runner
 
 `policy_runner_node` calls `setup` at configure (after `find_contract` when
 it has no `contract_path`), `run` once per goal,
@@ -72,7 +22,7 @@ it has no `contract_path`), `run` once per goal,
 cleanup or shutdown:
 
 ```python
-# my_adapter/runner.py
+# my_runner/runner.py
 from rosetta.policies import RunnerFeedback, RunnerResult
 
 
@@ -137,38 +87,30 @@ What the runner has to handle:
   counters are `uint32` in `RunPolicy` feedback, so keep them non-negative.
 - `teardown` releases what `setup` started, such as a server process.
 
-## Register them
+## Register it
 
-Advertise both classes under one framework name in your package's
-`setup.py`:
+Advertise the class under a framework name in your package's `setup.py`:
 
 ```python
 entry_points={
-    "rosetta.dataset_writers": ["myfw = my_adapter.writer:MyWriter"],
-    "rosetta.policy_runners": ["myfw = my_adapter.runner:MyRunner"],
+    "rosetta.policy_runners": ["myfw = my_runner.runner:MyRunner"],
 },
 ```
 
-Rebuild or reinstall the package after adding the entry points. Check that
-Rosetta finds them:
+Rebuild or reinstall the package after adding the entry point. Check that
+Rosetta finds it:
 
 ```bash
-python3 -c "from rosetta.data import available_dataset_writers; from rosetta.policies import available_policy_runners; print(available_dataset_writers(), available_policy_runners())"
+python3 -c "from rosetta.policies import available_policy_runners; print(available_policy_runners())"
 ```
 
-A class missing part of a protocol is rejected when it loads:
+A class missing part of the protocol is rejected when it loads:
 
 ```text
-TypeError: Entry point 'myfw' in group 'rosetta.policy_runners' (my_adapter) does not implement PolicyRunner (missing or non-callable: feedback, request_stop, run, teardown).
+TypeError: Entry point 'myfw' in group 'rosetta.policy_runners' (my_runner) does not implement PolicyRunner (missing or non-callable: feedback, request_stop, run, teardown).
 ```
 
-## Use them
-
-Port bags with your writer:
-
-```bash
-ros2 run rosetta_ros rosetta_port --format myfw --raw-dir bags --contract robot.yaml --repo-id my_dataset
-```
+## Use it
 
 The launch file has no `framework` argument. Set it, and your runner's own
 settings, in a params file:
@@ -194,14 +136,14 @@ unchanged on yours.
 
 ## Package it
 
-An adapter is an ordinary Python package, so it can live in its own
+A runner is an ordinary Python package, so it can live in its own
 repository with its own releases. Depend on `rosetta`. Add `rosetta_ros` only
 as a test dependency, and only if your tests load `robot_interface: ros2`
-contracts. To build the adapter in a ROS 2 workspace with colcon, give it a
+contracts. To build it in a ROS 2 workspace with colcon, give it a
 `package.xml` with build type `ament_python`, as
 [`policies/lerobot/lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta)
 does.
 
 Rosetta's
 [CONTRIBUTING.md](https://github.com/iblnkn/rosetta/blob/main/CONTRIBUTING.md)
-says when an adapter belongs in the `rosetta` repository instead.
+says when a package belongs in the `rosetta` repository instead.

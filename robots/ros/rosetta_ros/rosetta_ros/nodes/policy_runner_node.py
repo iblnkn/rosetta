@@ -89,7 +89,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             ParameterDescriptor(description="Path to contract YAML file", read_only=True),
         )
         # This default, and is_classifier's below, are duplicated as inert
-        # standalone-use fallbacks in each framework adapter's own setup()
+        # standalone-use fallbacks in each policy runner's own setup()
         # (e.g. lerobot_rosetta/policy_runner.py). Keep both in sync.
         self.declare_parameter(
             "pretrained_name_or_path",
@@ -97,7 +97,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             ParameterDescriptor(
                 description="Path or HF repo ID of the trained policy. Declared here (framework-agnostic) "
                 "so it's available before contract_path is resolved -- if contract_path is empty, this is "
-                "used to fall back to the contract that trained the model. Framework adapters read the same "
+                "used to find the contract that trained the model. Policy runners read the same "
                 "parameter for their own checkpoint loading; their own declare calls become no-ops.",
                 read_only=True,
             ),

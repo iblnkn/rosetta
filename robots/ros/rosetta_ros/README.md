@@ -16,9 +16,11 @@ It provides:
 - example contracts in `contracts/`: `so_101.yaml`, `turtlebot3.yaml`, and
   `stone.yaml`, the annotated tour of the contract format
 
-Learning frameworks connect through framework adapters such as
+Learning frameworks connect through dataset writers such as
+[`lerobot_dataset_rosetta`](../../../data/lerobot/lerobot_dataset_rosetta),
+which `rosetta_port` loads by name, and policy runners such as
 [`lerobot_rosetta`](../../../policies/lerobot/lerobot_rosetta), which
-`policy_runner_node` and `rosetta_port` load by name.
+`policy_runner_node` loads by name.
 
 ## Build
 
