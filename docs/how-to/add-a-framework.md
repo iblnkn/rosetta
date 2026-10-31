@@ -5,7 +5,8 @@ dataset format and `policy_runner_node` runs its policies. An adapter is a
 Python package with two classes, a dataset writer and a policy runner, and
 two entry points. `lerobot_rosetta` is the full example.
 
-Both classes implement protocols from `rosetta.policies`, and both need a
+The writer implements a protocol from `rosetta.data` and the runner one from
+`rosetta.policies`, and both need a
 constructor that takes no arguments. The adapter imports no ROS: the robot
 side reaches it only through frames. Where your framework hosts a run itself,
 open the robot with `load_robot_interface(contract.robot_interface).connect(...)`
@@ -142,7 +143,7 @@ Rebuild or reinstall the package after adding the entry points. Check that
 Rosetta finds them:
 
 ```bash
-python3 -c "from rosetta.policies import available_dataset_writers, available_policy_runners; print(available_dataset_writers(), available_policy_runners())"
+python3 -c "from rosetta.data import available_dataset_writers; from rosetta.policies import available_policy_runners; print(available_dataset_writers(), available_policy_runners())"
 ```
 
 A class missing part of a protocol is rejected when it loads:

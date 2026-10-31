@@ -22,7 +22,8 @@ Core imports no robot middleware, so every module here imports without ROS.
 | `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice`, `build_feature` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones, or with `fill_missing=False` leaves out every key with a missing value. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.lerobot_features` gives LeRobot feature dicts. |
 | `rosetta.contract.naming` | `IMAGE_KEY_PREFIX`, `camera_name`, `sanitize_field_name` | `IMAGE_KEY_PREFIX` is `observation.images.`. `camera_name` strips it and keeps dots. `sanitize_field_name` replaces every character outside `[A-Za-z0-9_]` with `_`. |
 | `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a framework adapter sees it. |
-| `rosetta.policies` | `DatasetWriter`, `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_dataset_writer`, `load_policy_runner`, `available_dataset_writers`, `available_policy_runners` | Framework adapter protocols and the registry that loads them by name. |
+| `rosetta.data` | `DatasetWriter`, `load_dataset_writer`, `available_dataset_writers`, `DATASET_WRITER_GROUP` | The dataset writer protocol and the registry that loads a writer by name. |
+| `rosetta.policies` | `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_policy_runner`, `available_policy_runners`, `POLICY_RUNNER_GROUP` | The policy runner protocol, its value types, and the registry that loads a runner by name. |
 | `rosetta.contract.interfaces` | `ContractInterface`, `load_interface`, `available_robot_interfaces`, `discover_codecs`, `ROBOT_INTERFACE_GROUP` | What contract loading asks of a robot interface, and finding one by name. `discover_codecs` fills the codec registry from every installed interface, then from codec plugins. |
 | `rosetta.robots.protocols` | `RobotInterface` | The live robot interface protocol: `ContractInterface` plus `connect`. |
 | `rosetta.robots.registry` | `load_robot_interface`, `available_robot_interfaces`, `ROBOT_INTERFACE_GROUP` | Robot interfaces by name. |
@@ -58,7 +59,7 @@ framework opened with `RobotInterface.connect` and closes itself:
 | `simulated` | property | `True` when the robot runs on a simulator's clock rather than wall time. |
 | `now_ns()` | method | Returns the current time on this clock, in nanoseconds. |
 
-`DatasetWriter`, from `rosetta.policies`. A writer is opened once, receives
+`DatasetWriter`, from `rosetta.data`. A writer is opened once, receives
 one run of `add_frame` calls per episode, and is finalized once.
 
 | Member | Behavior |

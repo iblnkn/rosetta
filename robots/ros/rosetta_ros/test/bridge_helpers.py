@@ -29,7 +29,7 @@ from typing import Any
 
 from rosetta.contract.schema import Align, Channel, Contract, SafetyBehavior, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
-from rosetta.policies.protocols import DatasetWriter
+from rosetta.data import DatasetWriter
 
 JOINT_STATE = "sensor_msgs/msg/JointState"
 

@@ -18,7 +18,7 @@ Rosbag to dataset porter.
 
 Reads rosbag2 recordings, decodes and resamples them through the contract using
 the same ``StreamBuffer`` used live (so train and inference match), then feeds
-the frame dicts to a :class:`~rosetta.policies.DatasetWriter` chosen
+the frame dicts to a :class:`~rosetta.data.DatasetWriter` chosen
 by ``--framework``.
 
 Usage:
@@ -42,12 +42,12 @@ import yaml
 from rosetta.contract.schema import load_contract
 from rosetta.contract.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH
 from rosetta.contract.specs import iter_observation_specs, iter_specs
-from rosetta.policies import available_dataset_writers, load_dataset_writer
+from rosetta.data import available_dataset_writers, load_dataset_writer
 from rosetta_ros.offline.bag_frames import find_bag_dirs, iter_bag_frames, read_bag_contract_text
 
 if TYPE_CHECKING:
     from rosetta.contract.schema import Contract
-    from rosetta.policies import DatasetWriter
+    from rosetta.data import DatasetWriter
 
 
 def warn_if_contract_mismatch(contract_path: Path, bag_contract: str) -> None:

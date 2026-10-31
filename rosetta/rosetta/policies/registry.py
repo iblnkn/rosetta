@@ -12,46 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Resolving a :class:`~.protocols.DatasetWriter` / :class:`~.protocols.PolicyRunner` by name.
+"""Resolving a :class:`~.protocols.PolicyRunner` by name.
 
-Adapters register their implementation under one of the two entry-point
-groups below (see :mod:`rosetta.policies` for the registration snippet);
-these helpers look it up at runtime without this package ever importing the
-adapter directly. Loading fails fast: an unknown or ambiguous name raises
-``ValueError``; a non-class or non-conforming entry point raises
-``TypeError``; adapter import/constructor failures propagate raw with their
-full tracebacks (the traceback names the adapter — no wrapper improves it).
+A package registers its runner under :data:`POLICY_RUNNER_GROUP` (see
+:mod:`rosetta.policies` for the registration snippet); these helpers look it
+up at runtime without this package ever importing it. Loading fails fast: an
+unknown or ambiguous name raises ``ValueError``; a non-class or
+non-conforming entry point raises ``TypeError``; import and constructor
+failures propagate raw with their full tracebacks (the traceback names the
+package; no wrapper improves it).
 """
 
 from __future__ import annotations
 
 import importlib.metadata as _ilm
-from typing import Any
 
 from ..plugins import instantiate_entry_point
-from .protocols import DatasetWriter, PolicyRunner
+from .protocols import PolicyRunner
 
-DATASET_WRITER_GROUP = "rosetta.dataset_writers"
-"""Entry-point group an adapter registers its :class:`~.protocols.DatasetWriter` under."""
+__all__ = ["POLICY_RUNNER_GROUP", "available_policy_runners", "load_policy_runner"]
 
 POLICY_RUNNER_GROUP = "rosetta.policy_runners"
-"""Entry-point group an adapter registers its :class:`~.protocols.PolicyRunner` under."""
-
-
-def _instantiate(group: str, name: str, protocol: type) -> Any:
-    """Load, instantiate, and structurally validate the ``name`` entry point."""
-    return instantiate_entry_point(list(_ilm.entry_points(group=group)), group, name, protocol, "framework")
-
-
-def load_dataset_writer(name: str) -> DatasetWriter:
-    """Instantiate the ``DatasetWriter`` registered as ``name``.
-
-    The entry point must be a class whose zero-argument instances implement
-    :class:`~.protocols.DatasetWriter`: a non-class or non-conforming entry
-    point raises ``TypeError`` here; import/constructor failures propagate
-    raw with their full tracebacks.
-    """
-    return _instantiate(DATASET_WRITER_GROUP, name, DatasetWriter)
+"""Entry-point group a package registers its :class:`~.protocols.PolicyRunner` under."""
 
 
 def load_policy_runner(name: str) -> PolicyRunner:
@@ -62,14 +44,10 @@ def load_policy_runner(name: str) -> PolicyRunner:
     point raises ``TypeError`` here; import/constructor failures propagate
     raw with their full tracebacks.
     """
-    return _instantiate(POLICY_RUNNER_GROUP, name, PolicyRunner)
-
-
-def available_dataset_writers() -> list[str]:
-    """Framework names registered under :data:`DATASET_WRITER_GROUP`."""
-    return sorted({ep.name for ep in _ilm.entry_points(group=DATASET_WRITER_GROUP)})
+    eps = list(_ilm.entry_points(group=POLICY_RUNNER_GROUP))
+    return instantiate_entry_point(eps, POLICY_RUNNER_GROUP, name, PolicyRunner, "policy runner")
 
 
 def available_policy_runners() -> list[str]:
-    """Framework names registered under :data:`POLICY_RUNNER_GROUP`."""
+    """Runner names registered under :data:`POLICY_RUNNER_GROUP`."""
     return sorted({ep.name for ep in _ilm.entry_points(group=POLICY_RUNNER_GROUP)})

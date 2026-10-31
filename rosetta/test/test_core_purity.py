@@ -14,7 +14,7 @@
 
 """Core's purity: it imports without ROS.
 
-Core (``rosetta.contract``, ``rosetta.frames``, ``rosetta.policies``,
+Core (``rosetta.contract``, ``rosetta.frames``, ``rosetta.data``, ``rosetta.policies``,
 ``rosetta.robots``) imports without any ROS dependency, so framework adapters
 and robot interfaces other than ROS 2 are usable and testable without ROS.
 """
@@ -38,6 +38,7 @@ import rosetta.frames.protocols
 import rosetta.frames.resample
 import rosetta.operators
 import rosetta.plugins
+import rosetta.data
 import rosetta.policies
 import rosetta.robots.protocols
 import rosetta.robots.registry

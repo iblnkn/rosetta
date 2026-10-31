@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The two seams a policy framework adapter implements.
+"""The seam a policy runner implements.
 
-:class:`DatasetWriter` (offline) and :class:`PolicyRunner` (online), plus
-the value types the runner reports through. See :mod:`rosetta.policies` for
-how an adapter registers an implementation of these.
+:class:`PolicyRunner` drives a policy against a live robot, through the
+:class:`RunnerHost` its node provides, and reports through the value types
+here. See :mod:`rosetta.policies` for how a package registers one.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -100,74 +99,6 @@ class RunnerHost(Protocol):
     @property
     def logger(self) -> Any:
         """A logger with ``debug``, ``info``, ``warning`` and ``error`` methods."""
-        ...
-
-
-@runtime_checkable
-class DatasetWriter(Protocol):
-    """Consumes frame dicts and writes a dataset.
-
-    Lifecycle: ``open()`` once, then per episode a run of ``add_frame()`` calls
-    ending with ``save_episode()`` — or ``discard_episode()`` if the episode
-    fails partway — then ``finalize()`` once at the end. If porting fails
-    partway, the host does NOT call ``finalize()`` (the porter raises first);
-    a writer must not depend on ``finalize()`` for the correctness of
-    already-saved episodes.
-
-    A frame dict maps each contract key to a ``np.ndarray`` (or ``str`` for
-    task-like values), plus the boundary markers ``is_first``/``is_last``/
-    ``is_terminal`` (``(1,)`` bool arrays) and a ``task`` string.
-    :func:`rosetta_ros.offline.bag_frames.iter_bag_frames` produces
-    exactly this shape.
-    """
-
-    def open(
-        self,
-        *,
-        contract: Contract,
-        repo_id: str,
-        root: Path | None = None,
-        contract_path: Path | None = None,
-        embed_contract: bool = True,
-        **opts: Any,
-    ) -> None:
-        """Translate the contract into the framework's schema and open output.
-
-        The writer derives whichever spec view it needs from ``contract``:
-        :func:`rosetta.contract.specs.iter_specs` is the full recording view —
-        exactly the keys the porter feeds :meth:`add_frame` (frameworks that
-        record every column, e.g. LeRobot, want this); ``iter_policy_specs``
-        is the policy I/O view (frameworks that concatenate state/action
-        vectors want this, so extended/teleop columns never leak into them).
-
-        When ``embed_contract`` is true and ``contract_path`` is given, the
-        writer must copy that contract YAML into its output so tooling can
-        recover it later (see
-        :func:`rosetta.contract.sidecar.find_contract_for_pretrained`);
-        the location is framework-defined (LeRobot-layout datasets use
-        ``meta/rosetta_contract.yaml``). Framework-specific options arrive
-        via ``**opts``.
-        """
-        ...
-
-    def add_frame(self, frame: dict[str, Any]) -> None:
-        """Append one resampled frame dict to the current episode."""
-        ...
-
-    def save_episode(self) -> None:
-        """Flush the buffered episode."""
-        ...
-
-    def discard_episode(self) -> None:
-        """Drop the partially buffered episode after an episode-level failure.
-
-        Buffered frames must not leak into the next episode. Must be safe to
-        call when nothing is buffered.
-        """
-        ...
-
-    def finalize(self) -> None:
-        """Write top-level metadata and close the dataset."""
         ...
 
 
