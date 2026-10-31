@@ -17,9 +17,11 @@
 Rosetta: LeRobot Robot adapter over a live robot's frames.
 
 This module presents a :class:`~rosetta.frames.protocols.FrameIO` as a LeRobot
-Robot. It translates between the frame dict ({contract_key: np.ndarray | str})
-and LeRobot's flattened observation/action shape: images by short key, state
-and action as individual namespaced floats. It imports no robot middleware.
+Robot. It translates between the frame dict ({contract_key: array | str}) and
+LeRobot's flattened observation/action shape: images by short key, state and
+action as individual namespaced floats. LeRobot's observations are numpy, so
+this is where an image delivered in device memory comes to the host. It
+imports no robot middleware.
 
 Two modes:
     - Standalone: LeRobot hosts the run (its CLIs), so connect() opens the
@@ -42,6 +44,7 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
+from rosetta.frames.arrays import to_host
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.protocols import Connection, FrameIO, RobotClock
 from rosetta.robots.registry import load_robot_interface
@@ -223,7 +226,7 @@ class Rosetta(Robot):
             for i, name in enumerate(names):
                 obs[name] = float(vec[i])
         for key, short in self._obs_image_keys.items():
-            obs[short] = frame[key]  # (H, W, C) uint8 passthrough
+            obs[short] = to_host(frame[key])  # (H, W, C) uint8, copied once if on a device
         return obs
 
     def _unflatten_action(self, action: RobotAction) -> dict:
