@@ -39,9 +39,10 @@ Public API. Other packages import only these modules, and only the names in
 each module's ``__all__``; every other module is internal:
 
 - Base: ``errors``, ``plugins`` (entry-point loading), ``arrays`` (device
-  arrays), ``operators`` (operator plugins)
+  arrays), ``operators`` (operator plugins), ``codecs`` (codec registry and
+  codec plugins)
 - Contract: ``contract.schema``, ``contract.specs``, ``contract.sidecar``
-- Frames: ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
+- Frames: ``frames.codecs`` (decoding and encoding), ``frames.layout``,
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)

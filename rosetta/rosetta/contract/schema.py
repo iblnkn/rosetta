@@ -43,14 +43,9 @@ from typing import Any, Iterable, TypeVar
 
 import yaml
 
+from ..codecs import SPECIAL_DTYPES, SUPPORTED_NUMERIC_DTYPES, is_valid_dtype, load_codec
 from ..errors import ContractValidationError
-from ..frames.codecs import (
-    SPECIAL_DTYPES,
-    SUPPORTED_NUMERIC_DTYPES,
-    discover_codecs,
-    is_valid_dtype,
-    load_codec,
-)
+from ..frames.codecs import discover_codecs
 from ..frames.naming import IMAGE_KEY_PREFIX
 from ..operators import lookup_operator
 from ..robots.protocols import RobotInterface

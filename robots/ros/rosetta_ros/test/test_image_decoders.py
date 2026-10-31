@@ -25,7 +25,8 @@ import types
 import numpy as np
 import pytest
 
-from rosetta.frames.codecs import DECODERS, discover_codecs
+from rosetta.codecs import DECODERS
+from rosetta.frames.codecs import discover_codecs
 from rosetta_ros.decoders import DepthEncodingNotSupported
 
 

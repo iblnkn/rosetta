@@ -71,13 +71,13 @@ from typing import Any, Sequence
 import numpy as np
 
 from ..arrays import is_device_array, to_host
+from ..codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 from ..contract.specs import (
     ActionStreamSpec,
     ObservationStreamSpec,
     StreamSpec,
 )
 from ..errors import ContractValidationError
-from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
 __all__ = [
     "FrameLayout",

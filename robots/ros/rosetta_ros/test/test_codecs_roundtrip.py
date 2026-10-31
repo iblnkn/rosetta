@@ -26,13 +26,8 @@ import numpy as np
 import pytest
 from codec_helpers import load_specs, require_message
 
-from rosetta.frames.codecs import (
-    DECODERS,
-    ENCODERS,
-    decode_value,
-    discover_codecs,
-    encode_value,
-)
+from rosetta.codecs import DECODERS, ENCODERS
+from rosetta.frames.codecs import decode_value, discover_codecs, encode_value
 
 # Every type that has BOTH an encoder and a decoder is round-trippable and must
 # have a sample below. type -> (select, sample_vector, atol).

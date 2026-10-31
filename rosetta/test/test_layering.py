@@ -62,7 +62,6 @@ KNOWN_VIOLATIONS = frozenset(
         "rosetta.contract.schema -> rosetta.frames.naming",
         "rosetta.contract.schema -> rosetta.robots.protocols",
         "rosetta.contract.schema -> rosetta.robots.registry",
-        "rosetta.contract.specs -> rosetta.frames.codecs",
         "rosetta.contract.specs -> rosetta.frames.naming",
         "rosetta.frames.codecs -> rosetta.robots.registry",
     }

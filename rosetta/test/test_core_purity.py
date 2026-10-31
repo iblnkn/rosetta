@@ -25,14 +25,18 @@ import sys
 NO_RCLPY_PROBE = """
 import sys
 import rosetta
+import rosetta.arrays
+import rosetta.codecs
 import rosetta.contract.schema
 import rosetta.contract.specs
-import rosetta.arrays
+import rosetta.errors
 import rosetta.frames.codecs
 import rosetta.frames.layout
 import rosetta.frames.naming
-import rosetta.frames.resample
 import rosetta.frames.protocols
+import rosetta.frames.resample
+import rosetta.operators
+import rosetta.plugins
 import rosetta.policies
 import rosetta.robots.protocols
 import rosetta.robots.registry

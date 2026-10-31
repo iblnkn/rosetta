@@ -62,13 +62,13 @@ load with `TypeError`.
 
 Decoders turn a message into an array, and encoders turn an array back into a
 message. Register them with `register_decoder` and `register_encoder` from
-`rosetta.frames.codecs`, in the modules `register_codecs` imports:
+`rosetta.codecs`, in the modules `register_codecs` imports:
 
 ```python
 # rosetta_toy/codecs.py
 import numpy as np
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder("toy/Vector", dtype="float64", requires_select=True)

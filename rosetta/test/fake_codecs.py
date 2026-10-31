@@ -20,7 +20,7 @@ select names the fields of a FakeVector; fake/Data and fake/Text take no select.
 import numpy as np
 from fake_interface import DATA, TEXT, VECTOR, FakeData, FakeVector
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder(VECTOR, dtype="float64", requires_select=True)

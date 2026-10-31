@@ -20,8 +20,9 @@ import typing
 import pytest
 
 from rosetta import plugins
+from rosetta.codecs import CODEC_ENTRY_POINT_GROUP
 from rosetta.errors import ContractValidationError
-from rosetta.frames.codecs import CODEC_ENTRY_POINT_GROUP, discover_codecs
+from rosetta.frames.codecs import discover_codecs
 from rosetta.operators import OPERATOR_ENTRY_POINT_GROUP, discover_operators
 
 

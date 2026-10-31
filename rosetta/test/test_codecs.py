@@ -24,18 +24,10 @@ import numpy as np
 import pytest
 from fake_interface import FakeVector
 
+from rosetta.codecs import DECODERS, DTYPES, ENCODERS, register_decoder, register_encoder
 from rosetta.contract.schema import Align, Channel, Contract, FrameEntry, Source, load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
-from rosetta.frames.codecs import (
-    DECODERS,
-    DTYPES,
-    ENCODERS,
-    NonFiniteActionError,
-    decode_value,
-    encode_value,
-    register_decoder,
-    register_encoder,
-)
+from rosetta.frames.codecs import NonFiniteActionError, decode_value, encode_value
 
 pytestmark = pytest.mark.usefixtures("scratch_registries")
 

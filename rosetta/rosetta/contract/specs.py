@@ -34,14 +34,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from ..codecs import decoder_requires_select, encoder_requires_select, get_decoder_dtype, has_decoder, has_encoder
 from ..errors import ContractValidationError
-from ..frames.codecs import (
-    decoder_requires_select,
-    encoder_requires_select,
-    get_decoder_dtype,
-    has_decoder,
-    has_encoder,
-)
 from ..frames.naming import IMAGE_KEY_PREFIX
 from ..operators import Operator, OperatorContext, build_operator
 from .schema import (

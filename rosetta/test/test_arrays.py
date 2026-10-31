@@ -23,9 +23,10 @@ import pytest
 from fake_arrays import FakeDeviceArray, FakeDeviceMemory
 
 from rosetta.arrays import is_device_array, take, to_host
+from rosetta.codecs import register_decoder
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from rosetta.frames.codecs import decode_value, host_only_reason, register_decoder
+from rosetta.frames.codecs import decode_value, host_only_reason
 from rosetta.frames.layout import FrameLayout
 from rosetta.operators import Invertibility, Operator, OperatorContext, build_operator, register_operator
 

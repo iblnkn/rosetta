@@ -97,7 +97,7 @@ type is used as an action or feedback.
 import numpy as np
 from geometry_msgs.msg import Point
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder("geometry_msgs/msg/Point", dtype="float64")

@@ -26,7 +26,7 @@ and a decoder for `geometry_msgs/msg/Point`:
 # my_pkg/codecs.py
 import numpy as np
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder("sensor_msgs/msg/BatteryState", dtype="float32", requires_select=True)
