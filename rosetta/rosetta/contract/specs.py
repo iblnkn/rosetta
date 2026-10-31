@@ -30,6 +30,7 @@ which is the concatenation/splitting order in FrameLayout.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -69,6 +70,11 @@ __all__ = [
 ]
 
 
+DECODED_IMAGE_CHANNELS = 3
+"""Channels of every decoded image. Decoders normalize all supported encodings
+to RGB (alpha dropped, mono replicated), and depth is rejected at decode."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StreamSpec:
     """Base configuration for observation and action streams.
@@ -90,13 +96,27 @@ class StreamSpec:
     is_image: bool = False  # True only for observation.images.* keys
 
     @property
-    def dim(self) -> int:
-        """Vector width: len(names), or 1 for a select-less scalar.
+    def shape(self) -> tuple[int, ...]:
+        """The shape of one decoded value.
 
-        Layout slices, zero-fill and safety actions all use it. A select-less
-        numeric stream is a scalar (enforced at frame assembly).
+        An image is ``(h, w, 3)`` from its resize. A stream with ``select`` is
+        ``(len(select),)``. A stream without one takes its declared ``shape``,
+        and is otherwise a scalar, ``(1,)``. Frame assembly enforces it.
         """
-        return max(len(self.names), 1)
+        image_resize = getattr(self, "image_resize", None)
+        if self.is_image and image_resize is not None:
+            return (*image_resize, DECODED_IMAGE_CHANNELS)
+        if self.names:
+            return (len(self.names),)
+        return self.source.shape or (1,)
+
+    @property
+    def dim(self) -> int:
+        """Element count of one value, ``prod(shape)``: the vector width for a 1-D stream.
+
+        Layout slices, zero-fill and safety actions all use it.
+        """
+        return math.prod(self.shape)
 
     @property
     def namespaced_names(self) -> list[str]:
@@ -276,6 +296,10 @@ def _build_observation_spec(
     All are decoded at ingest, so the type must be decodable. An image must
     declare its output geometry through its operators.
     """
+    if is_image and src.shape is not None:
+        raise ContractValidationError(
+            f"Image observation '{key}' declares 'shape'; an image's shape comes from its resize"
+        )
     operators = _build_operators(src.apply, is_image=is_image)
     image_resize = _image_hw_from_operators(operators) if is_image else None
     if is_image and image_resize is None:
@@ -321,6 +345,11 @@ def _build_action_spec(
             f"Action-shaped entry '{key}' (topic {ch.topic}) resolves to dtype "
             f"'{resolved_dtype}', but published streams are numeric vectors. "
             f"Supported: {', '.join(sorted(SUPPORTED_NUMERIC_DTYPES))}."
+        )
+    if src.shape is not None and len(src.shape) != 1:
+        raise ContractValidationError(
+            f"Action-shaped entry '{key}' (topic {ch.topic}) declares shape {list(src.shape)}; "
+            f"published streams are vectors, so 'shape' must have one dimension."
         )
     # Actions are decoded too (the porter records them), so a registry
     # decoder's select requirement applies here as well.

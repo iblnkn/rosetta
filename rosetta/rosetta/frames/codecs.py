@@ -39,8 +39,8 @@ for the annotated reference):
         align: {strategy: hold, timeline: receive}
 
 A decoder registered ``device_capable=True`` handles messages whose data is in
-device memory, returning the image as the device array the robot interface
-imported (see :mod:`rosetta.frames.arrays`) instead of copying it to the host. A robot
+device memory, returning the value as a device array (see
+:mod:`rosetta.frames.arrays`) instead of copying it to the host. A robot
 interface delivers device memory only to streams :func:`host_only_reason`
 clears, so every other stream decodes as numpy, as always.
 """
@@ -48,6 +48,7 @@ clears, so every other stream decodes as numpy, as always.
 from __future__ import annotations
 
 import importlib
+import math
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
@@ -89,8 +90,10 @@ EncoderFn = Callable[[np.ndarray, "ActionStreamSpec", int | None], Any]
 # =============================================================================
 
 SUPPORTED_NUMERIC_DTYPES: dict[str, Any] = {
+    "float16": np.float16,
     "float32": np.float32,
     "float64": np.float64,
+    "uint8": np.uint8,
     "int32": np.int32,
     "int64": np.int64,
     "bool": np.bool_,
@@ -176,9 +179,10 @@ def register_decoder(
         runtime (where ingest treats it like a corrupt message and the
         stream silently zero-fills).
     device_capable: The decoder handles a message whose data is in device
-        memory, returning the image on that device as a device array
-        (see :mod:`rosetta.frames.arrays`). It must produce the same bytes it would on the
-        host, and still return numpy for a message whose data is on the host.
+        memory, returning the value on that device as a device array of the
+        stream's dtype (see :mod:`rosetta.frames.arrays`). It must produce the
+        same values it would on the host, and still return numpy for a
+        message whose data is on the host.
 
     Example:
     -------
@@ -363,13 +367,11 @@ def host_only_reason(spec: "ObservationStreamSpec | ActionStreamSpec") -> str | 
     """
     Why ``spec`` can't take device memory from its transport, or None if it can.
 
-    A stream can when it is an image stream, its decoder is a registered
-    ``device_capable`` one (an inline ``decoder:`` path never is), and every
-    operator in its ``apply`` is ``device_capable``. A robot interface asks
-    its transport for device memory only on such streams.
+    A stream can when its decoder is a registered ``device_capable`` one (an
+    inline ``decoder:`` path never is) and every operator in its ``apply`` is
+    ``device_capable``. A robot interface asks its transport for device
+    memory only on such streams.
     """
-    if not spec.is_image:
-        return "only image streams leave the host"
     if spec.source.channel.decoder:
         return f"inline decoder '{spec.source.channel.decoder}' runs on the host"
     discover_codecs()
@@ -446,15 +448,18 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
                 )
         val = forward_pipeline(val, operators)
 
-    # Width gate for numeric vectors (images and strings excepted): select
-    # declares the stream's width. FrameLayout re-checks on the bridge path,
-    # but this is the only guard for direct decode->encode callers (a teleop
-    # passthrough) and for custom decoders. It fails at ingest, next to
-    # the message that caused it, instead of at sample time.
-    if isinstance(val, np.ndarray) and not spec.is_image and val.size != spec.dim:
-        raise ValueError(
-            width_mismatch_message("Decoded value", spec.key, spec.source.channel.topic, val.size, spec.dim, spec.names)
-        )
+    # Width gate for numeric values (images and strings excepted): select or
+    # shape declares the stream's size. FrameLayout re-checks on the bridge
+    # path, but this is the only guard for direct decode->encode callers (a
+    # teleop passthrough) and for custom decoders. It fails at ingest, next to
+    # the message that caused it, instead of at sample time. Size comes from
+    # shape, which every array library spells the same.
+    if hasattr(val, "shape") and not spec.is_image:
+        size = math.prod(val.shape)
+        if size != spec.dim:
+            raise ValueError(
+                width_mismatch_message("Decoded value", spec.key, spec.source.channel.topic, size, spec.dim, spec.names)
+            )
 
     return val
 

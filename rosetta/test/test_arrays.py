@@ -34,6 +34,7 @@ pytestmark = pytest.mark.usefixtures("scratch_registries", "fake_interface")
 _IMG = "_test_msgs/msg/Image"
 _HOST_IMG = "_test_msgs/msg/HostImage"
 _VEC = "_test_msgs/msg/Vector"
+_DEVICE_VEC = "_test_msgs/msg/DeviceVector"
 _RESIZE = (("resize", (2, 3)),)
 
 
@@ -43,7 +44,7 @@ def _image(h=4, w=6):
 
 @pytest.fixture
 def decoders():
-    """A device-capable image decoder, a host-only one, and a numeric one.
+    """Device-capable and host-only image decoders, and the same pair for vectors.
 
     The device-capable decoder imports a FakeDeviceMemory message as a device
     array, the way a robot interface imports a device-backed message, and
@@ -61,6 +62,10 @@ def decoders():
     @register_decoder(_VEC, dtype="float64")
     def _vector_decoder(msg, spec):
         return np.asarray(msg, dtype=np.float64)
+
+    @register_decoder(_DEVICE_VEC, dtype="float64", device_capable=True)
+    def _device_vector_decoder(msg, spec):
+        return FakeDeviceArray(msg.data) if isinstance(msg, FakeDeviceMemory) else msg
 
 
 def _spec(msg_type=_IMG, *, ops=_RESIZE, is_image=True, decoder=None):
@@ -146,15 +151,19 @@ def test_device_capable_image_stream_can_take_device_memory(decoders):
     assert host_only_reason(_spec()) is None
 
 
+def test_device_capable_numeric_stream_can_take_device_memory(decoders):
+    assert host_only_reason(_spec(_DEVICE_VEC, ops=(), is_image=False)) is None
+
+
 @pytest.mark.parametrize(
     ("spec", "reason"),
     [
-        (lambda: _spec(_VEC, ops=(), is_image=False), "only image streams"),
+        (lambda: _spec(_VEC, ops=(), is_image=False), "decoder runs on the host"),
         (lambda: _spec(decoder="test_arrays:_inline"), "inline decoder"),
         (lambda: _spec(_HOST_IMG), "decoder runs on the host"),
         (lambda: _spec(ops=(("_test_host_only", None), *_RESIZE)), "_test_host_only run on the host"),
     ],
-    ids=["numeric", "inline-decoder", "host-decoder", "host-operator"],
+    ids=["host-numeric-decoder", "inline-decoder", "host-decoder", "host-operator"],
 )
 def test_host_only_reason_names_the_blocker(decoders, spec, reason):
     assert reason in host_only_reason(spec())
@@ -173,6 +182,18 @@ def test_device_message_decodes_and_resizes_in_device_memory(decoders):
     np.testing.assert_array_equal(value.data, decode_value(_image(), _spec()))
 
 
+def test_device_numeric_message_stays_in_device_memory(decoders):
+    spec = _spec(_DEVICE_VEC, ops=(), is_image=False)
+    value = decode_value(FakeDeviceMemory(np.array([1.0])), spec)
+    assert isinstance(value, FakeDeviceArray)
+
+
+def test_device_value_of_the_wrong_size_is_refused_at_decode(decoders):
+    spec = _spec(_DEVICE_VEC, ops=(), is_image=False)
+    with pytest.raises(ValueError, match="observation.state"):
+        decode_value(FakeDeviceMemory(np.zeros(3)), spec)
+
+
 def test_device_message_on_a_host_only_operator_is_refused(decoders):
     spec = _spec(ops=(("_test_host_only", None), *_RESIZE))
     with pytest.raises(ValueError, match="_test_host_only run on numpy only"):
@@ -189,7 +210,7 @@ def test_layout_passes_device_images_through():
 
 def test_layout_refuses_a_non_uint8_device_image():
     img = FakeDeviceArray(np.zeros((2, 3, 3), np.float32))
-    with pytest.raises(ValueError, match="dtype float32, not uint8"):
+    with pytest.raises(ValueError, match="device dtype float32, not uint8"):
         FrameLayout([_spec()]).assemble([img])
 
 

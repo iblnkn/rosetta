@@ -286,7 +286,7 @@ def test_unsupported_numeric_dtype_rejected():
     # Backstop for hand-built specs; contract-loaded dtypes are already
     # vocabulary-checked in schema._validate_dtype.
     with pytest.raises(ContractValidationError, match="Unsupported dtype"):
-        FrameLayout([obs_spec("observation.state", ["a"], dtype="float16")])
+        FrameLayout([obs_spec("observation.state", ["a"], dtype="complex64")])
 
 
 def test_assemble_wrong_value_count_rejected():
@@ -338,3 +338,59 @@ def test_role_comes_from_section_not_key_name():
     )
     assert layout["action_history"].is_action is False
     assert layout["cmd_vel"].is_action is True
+
+
+# ---------- tensors: declared shapes and device values ----------
+
+
+def tensor_spec(key, shape, *, topic="/features", dtype="float32"):
+    source = Source(
+        channel=Channel(topic=topic, type="sensor_msgs/msg/JointState"), align=Align("hold", "receive"), shape=shape
+    )
+    return obs_spec(key, [], topic=topic, dtype=dtype, source=source)
+
+
+def test_tensor_key_keeps_its_declared_shape():
+    layout = FrameLayout([tensor_spec("observation.features", (2, 3))])
+    frame = layout.assemble([np.arange(6, dtype=np.float64)])
+    assert frame["observation.features"].shape == (2, 3)
+    assert frame["observation.features"].dtype == np.float32
+    assert layout["observation.features"].shape == (2, 3)
+
+
+def test_missing_tensor_zero_fills_at_its_shape():
+    frame = FrameLayout([tensor_spec("observation.features", (2, 3))]).assemble([None])
+    np.testing.assert_array_equal(frame["observation.features"], np.zeros((2, 3), np.float32))
+
+
+def test_tensor_value_of_the_wrong_size_is_rejected():
+    with pytest.raises(ValueError, match="observation.features"):
+        FrameLayout([tensor_spec("observation.features", (2, 3))]).assemble([np.zeros(5)])
+
+
+def test_tensor_feature_declares_its_shape():
+    feats = FrameLayout([tensor_spec("observation.features", (4, 2, 2))]).lerobot_features()
+    assert feats["observation.features"] == {"dtype": "float32", "shape": (4, 2, 2), "names": None}
+
+
+def test_device_value_alone_in_its_key_stays_on_its_device():
+    from fake_arrays import FakeDeviceArray
+
+    val = FakeDeviceArray(np.zeros((2, 3), np.float32))
+    assert FrameLayout([tensor_spec("observation.features", (2, 3))]).assemble([val])["observation.features"] is val
+
+
+def test_device_value_of_another_dtype_is_refused_rather_than_copied():
+    from fake_arrays import FakeDeviceArray
+
+    with pytest.raises(ValueError, match="device dtype float64, not float32"):
+        FrameLayout([tensor_spec("observation.features", (2, 3))]).assemble([FakeDeviceArray(np.zeros((2, 3)))])
+
+
+def test_shared_key_with_a_device_part_concatenates_on_the_host():
+    from fake_arrays import FakeDeviceArray
+
+    specs = [obs_spec("observation.state", ["a", "b"], topic="/arm"), obs_spec("observation.state", ["g"], topic="/g")]
+    frame = FrameLayout(specs).assemble([FakeDeviceArray(np.array([1.0, 2.0], np.float32)), np.array([3.0])])
+    assert isinstance(frame["observation.state"], np.ndarray)
+    np.testing.assert_array_equal(frame["observation.state"], np.array([1, 2, 3], np.float32))

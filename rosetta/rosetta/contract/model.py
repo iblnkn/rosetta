@@ -138,6 +138,7 @@ class Source:
     channel: Channel
     align: Align
     select: tuple[str, ...] | None = None  # field paths to project (list form in YAML)
+    shape: tuple[int, ...] | None = None  # declared value shape, for a stream without select
     apply: tuple[tuple[str, Any], ...] = ()  # ordered operators: ((name, args), ...)
     kind: FieldKind = FieldKind.CONTINUOUS  # representation for VLA frameworks
 

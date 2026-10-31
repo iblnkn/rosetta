@@ -15,14 +15,17 @@
 """
 FrameLayout: the canonical mapping between contract keys and per-spec slices.
 
-Multiple contract specs may share one output key (e.g. two topics feeding
-``observation.state``). Their values concatenate into one flat vector. This
-module is the single source of truth for that layout:
+Every frame value except a string is a tensor with a static shape and dtype.
+A stream's shape comes from the contract (``spec.shape``): an image is
+``(h, w, 3)``, a stream with ``select`` is a vector of its names, and a stream
+without one takes its declared ``shape`` or is a scalar. Multiple specs may
+share one output key (e.g. two topics feeding ``observation.state``). Their
+vectors concatenate into one. This module is the single source of truth for
+that layout:
 
 - key order is first-occurrence order of the spec list
 - within a key, specs concatenate in declaration order
-- each spec occupies a static slice sized ``spec.dim`` (= max(len(names), 1),
-  where a select-less numeric stream is a scalar, enforced at assembly)
+- each spec occupies a static slice sized ``spec.dim`` (= prod(spec.shape))
 
 Layout is purely positional (list / declaration order), by design. Placing a
 source at a chosen offset in the concatenated vector needs *some* explicit
@@ -54,9 +57,10 @@ NaN/Inf gate inspects float64 and whose encoders do the wire-type cast. Casting
 to an int dtype here would launder a policy's NaN into INT_MIN, finite garbage
 that sails through the gate onto hardware.
 
-Images pass through as they were decoded: numpy, or a device array when the
-transport delivered device memory (see :mod:`.arrays`).
-Missing images and numeric vectors are numpy. No ROS dependency.
+A value the transport delivered in device memory stays a device array (see
+:mod:`.arrays`) when it alone fills its key. Its decoder produced the key's
+dtype, which assembly checks rather than casts. A key that concatenates
+several specs is numpy, as are missing values. No ROS dependency.
 """
 
 from __future__ import annotations
@@ -72,7 +76,7 @@ from ..contract.specs import (
     ObservationStreamSpec,
     StreamSpec,
 )
-from .arrays import is_device_array
+from .arrays import is_device_array, to_host
 from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
 __all__ = [
@@ -82,21 +86,13 @@ __all__ = [
     "build_feature",
 ]
 
-# All supported image encodings are normalized to 3-channel uint8 RGB by the
-# decoders (3ch color as-is, 4ch drops alpha, mono->rgb). Depth/RGBD encodings
-# are explicitly rejected at decode (see decoders.DepthEncodingNotSupported).
-# The decoded output channel count is therefore always 3, regardless of the
-# source encoding. This is the single source of truth for the feature shape
-# and the zero-fill shape so they agree.
-DECODED_IMAGE_CHANNELS = 3
-
 
 def build_feature(spec: ObservationStreamSpec) -> dict[str, Any]:
     """
     Build the LeRobot feature dict for an image or string spec.
 
     Numeric features come from FrameLayout.lerobot_features() only. A numeric
-    key's shape and names must cover the whole concatenated vector (with
+    key's shape and names must cover the whole concatenated value (with
     namespacing), which a single spec cannot know.
 
     The ObservationStreamSpec signature is deliberate. Image and string streams
@@ -107,12 +103,7 @@ def build_feature(spec: ObservationStreamSpec) -> dict[str, Any]:
     if spec.is_image:
         if not spec.image_resize:
             raise ValueError(f"Image spec '{spec.key}' must have image_resize")
-        h, w = spec.image_resize
-        return {
-            "dtype": "video",
-            "shape": (h, w, DECODED_IMAGE_CHANNELS),
-            "names": ["height", "width", "channels"],
-        }
+        return {"dtype": "video", "shape": spec.shape, "names": ["height", "width", "channels"]}
 
     if spec.dtype == "string":
         return {"dtype": "string", "shape": (1,), "names": None}
@@ -123,25 +114,32 @@ def build_feature(spec: ObservationStreamSpec) -> dict[str, Any]:
     )
 
 
-def zero_image_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
-    """(H, W, DECODED_IMAGE_CHANNELS) uint8 zeros for a missing image frame.
+def _same_dtype(val: Any, np_dtype: np.dtype) -> bool:
+    """True if ``val``'s dtype is ``np_dtype``. Array libraries spell it alike after their prefix (torch.uint8)."""
+    return str(val.dtype).rsplit(".", 1)[-1] == np_dtype.name
 
-    Must match both the shape of a real decoded frame and the feature
-    declared by build_feature. Numeric zero-fill lives inline in
-    FrameLayout.assemble (it is per-slice, not per-spec-alone).
+
+def _tensor_part(key: str, sl: "SpecSlice", val: Any, np_dtype: np.dtype) -> Any:
+    """One spec's value at its static shape.
+
+    Zeros if missing, a device array as is, otherwise numpy cast to the key's dtype.
     """
-    if spec.image_resize is None:
-        raise ValueError(f"Image spec '{spec.key}' must have image_resize")
-    h, w = spec.image_resize
-    return np.zeros((h, w, DECODED_IMAGE_CHANNELS), dtype=np.uint8)
-
-
-def _device_image(key: str, val: Any) -> Any:
-    """A device image passes through as is. Casting it would copy it to the host, so its dtype is checked instead."""
-    # Every array library spells uint8 "uint8", after its own prefix (torch.uint8).
-    if str(val.dtype).rsplit(".", 1)[-1] != "uint8":
-        raise ValueError(f"Image stream '{key}' produced dtype {val.dtype}, not uint8")
-    return val
+    shape = sl.spec.shape
+    if val is None:
+        return np.zeros(shape, dtype=np_dtype)
+    if is_device_array(val):
+        # Casting would copy it to the host, so the decoder must have produced the key's dtype.
+        if not _same_dtype(val, np_dtype):
+            raise ValueError(f"Stream '{key}' produced device dtype {val.dtype}, not {np_dtype.name}")
+        if tuple(val.shape) != shape:
+            raise ValueError(f"Stream '{key}' produced device shape {tuple(val.shape)}, not {shape}")
+        return val
+    part = np.asarray(val, dtype=np_dtype)
+    if part.size != sl.dim:
+        raise ValueError(
+            width_mismatch_message("Stream value", key, sl.spec.source.channel.topic, part.size, sl.dim, sl.spec.names)
+        )
+    return part.reshape(shape)
 
 
 def _spec_category(spec: StreamSpec) -> str:
@@ -184,6 +182,13 @@ class KeyLayout:
         return sum(s.dim for s in self.slices)
 
     @property
+    def shape(self) -> tuple[int, ...]:
+        """The key's value shape: its one spec's shape, or the concatenated vector of several."""
+        if len(self.slices) == 1:
+            return self.slices[0].spec.shape
+        return (self.dim,)
+
+    @property
     def is_action(self) -> bool:
         """True when this key is fed by action-shaped specs (policy output).
 
@@ -195,13 +200,15 @@ class KeyLayout:
 
     @property
     def np_dtype(self) -> Any:
-        """Numpy dtype for a numeric key. Image/string keys have none."""
+        """Numpy dtype of the key's values: uint8 for an image. String keys have none."""
+        if self.category == "image":
+            return np.dtype(np.uint8)
         if self.category != "numeric":
             raise ValueError(
                 f"Key '{self.key}' is category '{self.category}' ('{self.dtype}'); "
-                f"np_dtype applies to numeric keys only."
+                f"np_dtype applies to image and numeric keys only."
             )
-        return SUPPORTED_NUMERIC_DTYPES[self.dtype]
+        return np.dtype(SUPPORTED_NUMERIC_DTYPES[self.dtype])
 
 
 class FrameLayout:
@@ -305,11 +312,12 @@ class FrameLayout:
 
         ``values[i]`` pairs with ``self.specs[i]`` (the resampled output for
         that stream at one tick: a numpy array, a string, or None when the
-        stream had no data). Numeric specs sharing a key concatenate in
-        declaration order. Missing values zero-fill at the spec's static dim;
-        with ``fill_missing=False`` a key with any missing value is left out.
-        Returns {contract_key: array | str}: numeric vectors as numpy, images
-        as decoded (see :mod:`.arrays`).
+        stream had no data). Each value takes its spec's static shape, cast to
+        the key's dtype. Numeric specs sharing a key concatenate in declaration
+        order. Missing values zero-fill; with ``fill_missing=False`` a key with
+        any missing value is left out. Returns {contract_key: array | str}:
+        numpy, or a device array for a single-spec key whose value is one (see
+        :mod:`.arrays`).
         """
         if len(values) != len(self.specs):
             raise ValueError(f"assemble() got {len(values)} values for {len(self.specs)} specs")
@@ -325,42 +333,19 @@ class FrameLayout:
                 continue
             layout = self._layouts[key]
 
-            if layout.category == "image":
-                val = key_values[0]
-                if val is None:
-                    frame[key] = zero_image_for_spec(layout.slices[0].spec)
-                elif is_device_array(val):
-                    frame[key] = _device_image(key, val)
-                else:
-                    frame[key] = np.asarray(val, dtype=np.uint8)
-            elif layout.category == "string":
+            if layout.category == "string":
                 val = key_values[0]
                 if val is not None and not isinstance(val, str):
                     raise ValueError(
                         f"String stream '{key}' produced {type(val).__name__}; its decoder must return str"
                     )
                 frame[key] = val if val is not None else ""
-            else:
-                np_dtype = layout.np_dtype
-                parts = []
-                for sl, val in zip(layout.slices, key_values, strict=True):
-                    if val is None:
-                        parts.append(np.zeros(sl.dim, dtype=np_dtype))
-                        continue
-                    part = np.asarray(val, dtype=np_dtype).flatten()
-                    if part.size != sl.dim:
-                        raise ValueError(
-                            width_mismatch_message(
-                                "Stream value",
-                                key,
-                                sl.spec.source.channel.topic,
-                                part.size,
-                                sl.dim,
-                                sl.spec.names,
-                            )
-                        )
-                    parts.append(part)
-                frame[key] = np.concatenate(parts) if len(parts) > 1 else parts[0]
+                continue
+            np_dtype = layout.np_dtype
+            parts = [_tensor_part(key, sl, val, np_dtype) for sl, val in zip(layout.slices, key_values, strict=True)]
+            # Concatenation runs on the host: rosetta has no device concatenate,
+            # and keys several specs share are small vectors.
+            frame[key] = parts[0] if len(parts) == 1 else np.concatenate([to_host(p) for p in parts])
 
         return frame
 
@@ -403,16 +388,16 @@ class FrameLayout:
     # -------------------- features --------------------
 
     def lerobot_features(self) -> dict[str, dict[str, Any]]:
-        """Per-key LeRobot feature dicts covering the full concatenated vectors.
+        """Per-key LeRobot feature dicts covering the full concatenated values.
 
-        Images and strings delegate to build_feature. Numeric keys declare
-        shape (key.dim,) with the namespaced selector names of every slice.
+        Images and strings delegate to build_feature. Numeric keys declare the
+        key's shape, with the namespaced selector names of every slice when
+        they have them.
 
         LeRobot is the only backend consuming this format. Other adapters
         derive their schemas from KeyLayout directly. It lives here, not in
-        lerobot_robot_rosetta, so the
-        declared image shape and zero_image_for_spec's zero-fill shape agree
-        via DECODED_IMAGE_CHANNELS by construction.
+        lerobot_robot_rosetta, so the declared shapes and the zero-fill shapes
+        both come from ``spec.shape`` by construction.
         """
         feats: dict[str, dict[str, Any]] = {}
         for key, layout in self._layouts.items():
@@ -424,7 +409,7 @@ class FrameLayout:
                 names.extend(sl.spec.namespaced_names)
             feats[key] = {
                 "dtype": layout.dtype,
-                "shape": (layout.dim,),
+                "shape": layout.shape,
                 "names": names or None,
             }
         return feats
