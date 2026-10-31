@@ -154,9 +154,9 @@ def compile_contract(
     return CompiledQuery(
         specs=specs,
         index=layout.index,
+        # Rerun rounds the period to whole ns; see the README for the drift from the porter's grid.
         sampling=FixedRateSampling(rate_hz=float(contract.fps)),
         fields=fields,
-        # Rerun rounds the period to whole ns; see the README for the drift from the porter's grid.
         required=tuple(required),
         windows=windows,
     )
