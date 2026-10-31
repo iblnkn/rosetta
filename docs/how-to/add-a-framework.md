@@ -66,7 +66,8 @@ What the writer has to handle:
 
 ## Write the policy runner
 
-`policy_runner_node` calls `setup` at configure, `run` once per goal,
+`policy_runner_node` calls `setup` at configure (after `find_contract` when
+it has no `contract_path`), `run` once per goal,
 `feedback` at `feedback_rate_hz` while a goal runs, and `teardown` at
 cleanup or shutdown:
 
@@ -76,6 +77,12 @@ from rosetta.policies import RunnerFeedback, RunnerResult
 
 
 class MyRunner:
+    def find_contract(self, pretrained, *, warn):
+        # Where your checkpoints record their contract. None makes the node
+        # require contract_path.
+        warn(f"MyRunner can't find a contract for {pretrained}")
+        return None
+
     def setup(self, host, contract):
         host.declare("rate_hz", 10.0, "Control loop rate", read_only=True)
         self._period = 1.0 / host.get("rate_hz")
@@ -105,6 +112,9 @@ class MyRunner:
 
 What the runner has to handle:
 
+- `find_contract` runs only when the node has no `contract_path`. Return the
+  path of the contract `pretrained` was trained with, or `None`. Report
+  each missing link through `warn` rather than raising.
 - `host` holds the runner's settings. Declare each one with a default, then
   read it with `host.get`. Under ROS 2 each setting is a parameter of
   `policy_runner_node`, so params files and `--ros-args -p` set it.
@@ -157,7 +167,7 @@ TypeError: Entry point 'myfw' in group 'rosetta.policy_runners' (my_adapter) doe
 Port bags with your writer:
 
 ```bash
-ros2 run rosetta_ros rosetta_port --framework myfw --raw-dir bags --contract robot.yaml --repo-id my_dataset
+ros2 run rosetta_ros rosetta_port --format myfw --raw-dir bags --contract robot.yaml --repo-id my_dataset
 ```
 
 The launch file has no `framework` argument. Set it, and your runner's own

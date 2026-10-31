@@ -50,7 +50,7 @@ from rclpy.action import ActionServer
 from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import load_contract
-from rosetta.contract.sidecar import find_contract_for_pretrained, scan_inline_codec_paths
+from rosetta.contract.sidecar import scan_inline_codec_paths
 from rosetta.contract.specs import (
     iter_action_specs,
     iter_observation_specs,
@@ -173,10 +173,15 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         Any failure raises. The base logs the traceback and routes through
         on_error, which tears down whatever this method partially built.
         """
+        # The runner is loaded first: with no contract_path, it is the one that
+        # knows where its checkpoints keep their contract.
+        framework = self.get_parameter("framework").value
+        runner = load_policy_runner(framework)
+
         contract_path = self.get_parameter("contract_path").value
         if not contract_path:
             pretrained = self.get_parameter("pretrained_name_or_path").value
-            fallback = find_contract_for_pretrained(pretrained, warn=self.get_logger().warning)
+            fallback = runner.find_contract(pretrained, warn=self.get_logger().warning) if pretrained else None
             if fallback is None:
                 if pretrained:
                     raise ValueError(
@@ -212,8 +217,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         # Assign self._runner before calling setup() on it: a setup() that
         # raises partway leaves a half-initialized runner that on_error's
         # teardown() must still reach in order to release it.
-        framework = self.get_parameter("framework").value
-        self._runner = load_policy_runner(framework)
+        self._runner = runner
         self._runner.setup(RosParameterHost(self), self._contract)
 
         self._action_server = self.create_work_action_server(RunPolicy, "run_policy", self._execute)

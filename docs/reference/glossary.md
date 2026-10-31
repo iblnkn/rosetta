@@ -29,7 +29,7 @@ Contract
 
 Dataset writer
 : The part of a framework adapter that writes ported frames in the
-  framework's dataset format. `rosetta_port --framework` picks it.
+  framework's dataset format. `rosetta_port --format` picks it.
 
 Episode
 : One recorded demonstration. One bag directory, and one episode in the

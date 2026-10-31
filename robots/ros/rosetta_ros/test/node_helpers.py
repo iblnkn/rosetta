@@ -79,6 +79,9 @@ class FakeRunner:
         self._on_stop = on_stop
         self.stopped = threading.Event()
 
+    def find_contract(self, pretrained, *, warn):
+        return None
+
     def setup(self, host, contract) -> None:
         pass
 

@@ -68,11 +68,11 @@ class DatasetWriter(Protocol):
         vectors want this, so extended/teleop columns never leak into them).
 
         When ``embed_contract`` is true and ``contract_path`` is given, the
-        writer must copy that contract YAML into its output so tooling can
-        recover it later (see
-        :func:`rosetta.contract.sidecar.find_contract_for_pretrained`);
-        the location is framework-defined (LeRobot-layout datasets use
-        ``meta/rosetta_contract.yaml``). Framework-specific options arrive
+        writer must copy that contract YAML into its output, named
+        :data:`rosetta.contract.sidecar.CONTRACT_SIDECAR_FILENAME`, so the
+        framework's :meth:`rosetta.policies.PolicyRunner.find_contract` can
+        recover it from a checkpoint later. The location is the format's own
+        (LeRobot-layout datasets use ``meta/rosetta_contract.yaml``). Framework-specific options arrive
         via ``**opts``.
         """
         ...

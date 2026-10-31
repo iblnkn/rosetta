@@ -252,9 +252,11 @@ The run ends with `termination_reason`:
 
 ### Contract fallback
 
-With an empty `contract_path`, configure follows
-`pretrained_name_or_path` to its `train_config.json`, then to the training
-dataset's `root` or `repo_id`, then to `meta/rosetta_contract.yaml` there.
+With an empty `contract_path`, configure asks the `framework`'s policy
+runner where `pretrained_name_or_path` keeps its contract. The `lerobot`
+runner follows the checkpoint to its `train_config.json`, then to the
+training dataset's `root` or `repo_id`, then to `meta/rosetta_contract.yaml`
+there.
 A link that names an existing local directory is read from it. Any other
 link is fetched from the Hub. A missing link fails configure, and a Hub miss
 also logs a warning naming it. Each inline `decoder:` or

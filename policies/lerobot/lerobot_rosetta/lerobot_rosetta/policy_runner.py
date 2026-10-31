@@ -34,11 +34,13 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Callable, Optional
 
 from lerobot.async_inference.configs import RobotClientConfig
 from lerobot.async_inference.robot_client import RobotClient
 from lerobot.configs.policies import PreTrainedConfig
+from lerobot_dataset_rosetta.sidecar import find_contract_for_pretrained
 
 # Submodule import, not the package root: pulling lerobot_robot_rosetta/__init__
 # would import the full Robot stack just to get the config dataclass.
@@ -68,6 +70,10 @@ class LeRobotPolicyRunner:
         self._policy_type: str = ""  # sent in LeRobot's handshake; see _resolve_policy_type
 
     # -------------------- Lifecycle --------------------
+
+    def find_contract(self, pretrained: str, *, warn: Callable[[str], None]) -> Path | None:
+        """Follow a LeRobot checkpoint to its training dataset's contract sidecar."""
+        return find_contract_for_pretrained(pretrained, warn=warn)
 
     def setup(self, host, contract: Contract) -> None:
         """Declare LeRobot inference settings on the host and store the contract."""

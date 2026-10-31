@@ -53,7 +53,7 @@ def test_cli_flags_reach_writer_open(tmp_path, monkeypatch, flags, expected):
     contract_path.write_text(CONTRACT)
     write_bag(tmp_path / "raw" / "ep0", [("/joint_states", 1_000_000_000, joint_state(["j1"], [0.5]))])
     writer = StubWriter()
-    monkeypatch.setattr(port_mod, "load_dataset_writer", lambda _framework: writer)
+    monkeypatch.setattr(port_mod, "load_dataset_writer", lambda _format: writer)
     monkeypatch.setattr(
         sys, "argv", ["rosetta-port", "--raw-dir", str(tmp_path / "raw"), "--contract", str(contract_path), *flags]
     )

@@ -19,10 +19,10 @@ Rosbag to dataset porter.
 Reads rosbag2 recordings, decodes and resamples them through the contract using
 the same ``StreamBuffer`` used live (so train and inference match), then feeds
 the frame dicts to a :class:`~rosetta.data.DatasetWriter` chosen
-by ``--framework``.
+by ``--format``.
 
 Usage:
-    # LeRobot dataset (default framework)
+    # LeRobot dataset (the default format)
     python -m rosetta_ros.offline.port \
         --raw-dir ./datasets/bags --contract contract.yaml \
         --repo-id my_org/my_dataset --root ./datasets/lerobot
@@ -40,7 +40,6 @@ from typing import TYPE_CHECKING, Any, Iterable
 import yaml
 
 from rosetta.contract.schema import load_contract
-from rosetta.contract.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH
 from rosetta.contract.specs import iter_observation_specs, iter_specs
 from rosetta.data import available_dataset_writers, load_dataset_writer
 from rosetta_ros.offline.bag_frames import find_bag_dirs, iter_bag_frames, read_bag_contract_text
@@ -151,17 +150,17 @@ def port(
     repo_id: str,
     contract_path: Path,
     *,
-    framework: str = "lerobot",
+    dataset_format: str = "lerobot",
     root: Path | None = None,
     num_shards: int | None = None,
     shard_index: int | None = None,
     embed_contract: bool = True,
     writer_opts: dict[str, Any] | None = None,
 ) -> None:
-    """Port rosbag2 recordings to a policy-framework dataset.
+    """Port rosbag2 recordings to a dataset.
 
     The wiring shell: loads the contract, discovers bags, resolves the
-    ``--framework`` writer from the entry-point registry, and delegates the
+    ``--format`` writer from the entry-point registry, and delegates the
     actual writing to :func:`write_dataset`.
     """
     contract = load_contract(contract_path)
@@ -186,7 +185,7 @@ def port(
         for bag_dir in bag_dirs
     )
     write_dataset(
-        load_dataset_writer(framework),
+        load_dataset_writer(dataset_format),
         episodes,
         contract=contract,
         repo_id=repo_id,
@@ -201,11 +200,12 @@ def main():
     """CLI entry point."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    parser = argparse.ArgumentParser(description="Port ROS2 bags to a policy-framework dataset")
+    parser = argparse.ArgumentParser(description="Port ROS2 bags to a dataset")
     parser.add_argument(
-        "--framework",
+        "--format",
+        dest="dataset_format",
         default="lerobot",
-        help="Policy framework to write for (default: lerobot). Installed: "
+        help="Dataset writer to write with (default: lerobot). Installed: "
         + (", ".join(available_dataset_writers()) or "(none)"),
     )
     parser.add_argument("--raw-dir", type=Path, required=True, help="Directory of bag subdirs")
@@ -219,10 +219,10 @@ def main():
         dest="embed_contract",
         action="store_false",
         default=True,
-        help=f"Don't copy the contract into the dataset's {LEROBOT_CONTRACT_SIDECAR_PATH} sidecar",
+        help="Don't copy the contract into the dataset as its rosetta_contract.yaml sidecar",
     )
 
-    # Common and framework-specific writer options. Writers ignore options they
+    # Common and format-specific writer options. Writers ignore options they
     # don't use.
     parser.add_argument("--push-to-hub", action="store_true", help="[lerobot] Upload to HF Hub")
     parser.add_argument(
@@ -277,7 +277,7 @@ def main():
         raw_dir=args.raw_dir,
         repo_id=repo_id,
         contract_path=args.contract,
-        framework=args.framework,
+        dataset_format=args.dataset_format,
         root=args.root,
         num_shards=args.num_shards,
         shard_index=args.shard_index,

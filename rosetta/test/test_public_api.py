@@ -66,12 +66,7 @@ PUBLIC_API = {
         "discover_codecs",
         "load_interface",
     },
-    "rosetta.contract.sidecar": {
-        "CONTRACT_SIDECAR_FILENAME",
-        "LEROBOT_CONTRACT_SIDECAR_PATH",
-        "find_contract_for_pretrained",
-        "scan_inline_codec_paths",
-    },
+    "rosetta.contract.sidecar": {"CONTRACT_SIDECAR_FILENAME", "scan_inline_codec_paths"},
     "rosetta.contract.specs": {
         "ActionStreamSpec",
         "ObservationStreamSpec",

@@ -22,10 +22,11 @@ here. See :mod:`rosetta.policies` for how a package registers one.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import threading
+    from pathlib import Path
 
     from rosetta.contract.schema import Contract
 
@@ -117,10 +118,24 @@ class PolicyRunner(Protocol):
     other threads while :meth:`run` blocks; implementations must make those
     two safe against a concurrent ``run()``.
 
+    With no contract path, the node first asks :meth:`find_contract` for the
+    contract a checkpoint was trained with.
+
     Each ``run()`` owns whatever execution model the framework needs. The
     LeRobot impl delegates to ``RobotClient``'s async control loop; other
     implementations run their own fps loops.
     """
+
+    def find_contract(self, pretrained: str, *, warn: Callable[[str], None]) -> Path | None:
+        """The contract ``pretrained`` was trained with, or ``None``.
+
+        Called before :meth:`setup`, only when the host has no contract path:
+        where a checkpoint records its training data, and where that data keeps
+        its contract, is the framework's to know. ``pretrained`` is the
+        checkpoint as the user named it (a local path or a hub id). Must not
+        raise for a missing link: call ``warn`` naming it and return ``None``.
+        """
+        ...
 
     def setup(self, host: RunnerHost, contract: Contract) -> None:
         """Declare and read runner settings on ``host`` and prepare to run.

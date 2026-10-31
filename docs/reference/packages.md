@@ -59,7 +59,7 @@ and [Add a robot interface](../how-to/add-a-robot-interface.md) cover both.
 | `rosetta.robot_interfaces` | A class implementing `RobotInterface`, named after a contract's `robot_interface` value | Contract load | `ros2` by `rosetta_ros` |
 | `rosetta.codecs` | A module that calls `register_decoder` and `register_encoder` | Contract load | None |
 | `rosetta.operators` | A module that calls `register_operator` | Contract load | None |
-| `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --framework` | `lerobot` by `lerobot_dataset_rosetta` |
+| `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --format` | `lerobot` by `lerobot_dataset_rosetta` |
 | `rosetta.policy_runners` | A class implementing `PolicyRunner` | `policy_runner_node` parameter `framework` | `lerobot` by `lerobot_rosetta` |
 | `rerun_rosetta.layouts` | A class implementing `RecordingLayout`, named after a contract's `robot_interface` value | `rerun_rosetta.contract_dataset` | `ros2` by `rosetta_ros` |
 

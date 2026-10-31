@@ -46,6 +46,9 @@ class GoodWriter:
 
 
 class GoodRunner:
+    def find_contract(self, pretrained, *, warn):
+        pass
+
     def setup(self, host, contract):
         pass
 
@@ -75,6 +78,9 @@ class MissingMethodsWriter:
 class NeedsArgs:
     def __init__(self, required):
         self.required = required
+
+    def find_contract(self, pretrained, *, warn):
+        pass
 
     def setup(self, host, contract):
         pass

@@ -21,8 +21,7 @@ import json
 import sys
 
 import pytest
-
-from rosetta.contract.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH, find_contract_for_pretrained
+from lerobot_dataset_rosetta.sidecar import LEROBOT_CONTRACT_SIDECAR_PATH, find_contract_for_pretrained
 
 
 def _make_checkpoint(tmp_path, dataset: dict) -> str:
