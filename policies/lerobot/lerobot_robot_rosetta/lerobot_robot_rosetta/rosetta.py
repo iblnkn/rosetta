@@ -347,16 +347,18 @@ class Rosetta(Robot):
         """Stop the robot and release it: close our connection, or detach from the injected FrameIO."""
         if self._frames is None:
             return
-        if self._connection is not None:
+        # Let go first: a close that raises has still released what it could
+        # (Connection.close), so the robot reads as disconnected either way.
+        frames, connection = self._frames, self._connection
+        self._frames = self._connection = None
+        if connection is not None:
             # Closing sends the safety action and releases the middleware.
-            self._connection.close()
-            self._connection = None
+            connection.close()
         else:
             # Injected: stop the robot and clear state for the next episode, but
             # never tear down a FrameIO the robot side owns.
-            self._frames.send_safety_action()
-            self._frames.reset_state()
-        self._frames = None
+            frames.send_safety_action()
+            frames.reset_state()
 
     def reset(self) -> None:
         """Reset internal state tracking (e.g., between episodes)."""

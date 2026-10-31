@@ -228,3 +228,53 @@ def test_standalone_opens_the_contracts_robot_and_closes_it(monkeypatch, use_sim
     robot.disconnect()
     assert connection.closed
     assert not robot.is_connected
+
+
+class _DyingClock(_FakeClock):
+    """A frozen sim clock whose robot goes away after ``reads`` reads, as a dead connection's clock does."""
+
+    def __init__(self, reads):
+        super().__init__(active=True, t=0)
+        self.reads = reads
+
+    def now_ns(self):
+        self.reads -= 1
+        if self.reads < 0:
+            raise RuntimeError("NodeHost spin thread died")
+        return self.t
+
+
+def test_a_gated_call_raises_when_its_clock_dies():
+    robot, _bridge = _injected_robot(_DyingClock(reads=3))
+
+    errors = []
+
+    def _gated_calls():
+        robot.get_observation()  # anchors
+        try:
+            robot.get_observation()  # waits on the frozen clock until it raises
+        except RuntimeError as e:
+            errors.append(e)
+
+    worker = threading.Thread(target=_gated_calls, daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert not worker.is_alive(), "a gated call kept waiting on a dead clock"
+    assert "spin thread died" in str(errors[0])
+
+
+class _FailingConnection(_FakeConnection):
+    def close(self):
+        super().close()
+        raise RuntimeError("deactivate failed")
+
+
+def test_a_failed_close_still_disconnects(monkeypatch):
+    connection = _FailingConnection(_FakeClock(active=False))
+    monkeypatch.setattr(adapter, "load_robot_interface", lambda name: SimpleNamespace(connect=lambda **kw: connection))
+    robot = Rosetta(RosettaConfig(config_path=str(CONTRACTS / "so_101.yaml")))
+    robot.connect()
+    with pytest.raises(RuntimeError, match="deactivate failed"):
+        robot.disconnect()
+    assert connection.closed
+    assert not robot.is_connected

@@ -147,3 +147,32 @@ def test_close_stops_the_host_when_a_transition_raises(contract, monkeypatch):
     with pytest.raises(RuntimeError, match="transition refused"):
         conn.close()
     assert conn._host.node is None
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the crash is the point
+def test_a_connection_whose_spin_thread_died_raises_instead_of_serving_stale_frames(contract):
+    conn = _connect(contract)
+    node = conn._host.node
+    node.create_timer(0.01, lambda: (_ for _ in ()).throw(RuntimeError("callback boom")))
+    conn._host._spin_thread.join(timeout=5.0)
+
+    for call in (
+        conn.sample_frame,
+        lambda: conn.publish_frame({"action": np.zeros(2)}),
+        conn.events,
+        conn.clock.now_ns,
+        lambda: conn.warmed_up,
+    ):
+        with pytest.raises(RuntimeError, match="spin thread died"):
+            call()
+    conn.close()
+
+
+def test_a_closed_connection_raises(contract):
+    conn = _connect(contract)
+    clock = conn.clock
+    conn.close()
+    with pytest.raises(RuntimeError, match="is closed"):
+        conn.sample_frame()
+    with pytest.raises(RuntimeError, match="is closed"):
+        clock.now_ns()

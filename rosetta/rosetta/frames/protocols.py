@@ -73,6 +73,10 @@ class FrameIO(Protocol):
     expose richer robot-side methods beyond the protocol (e.g. TopicBridge's
     ``sample_values()``, the pre-assembly per-spec view); those never cross
     the robot/policy boundary.
+
+    Once the robot is gone (its transport stopped, or the I/O was closed),
+    every method and the clock raise. They never serve the last data as if
+    it were current.
     """
 
     def sample_frame(self, *, fill_missing: bool = True) -> dict[str, Any]:
@@ -125,5 +129,9 @@ class Connection(FrameIO, Protocol):
         ...
 
     def close(self) -> None:
-        """Stop sampling and publishing and release the middleware. Idempotent."""
+        """Stop sampling and publishing and release the middleware. Idempotent.
+
+        A close that raises has still released what it could, so the caller
+        drops the connection either way.
+        """
         ...

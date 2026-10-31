@@ -139,35 +139,45 @@ class RosConnection:
         except Exception:
             self.close()
             raise
-        self._node = node
-        self._bridge = node.bridge
+        self._clock = _LiveClock(self)
+
+    def _live(self) -> _ConnectionNode:
+        """The node, while it spins. Raises once its spin thread has died or the connection is closed.
+
+        Every call goes through here rather than a cached node, so a robot
+        that is gone raises instead of serving its last frames.
+        """
+        node = self._host.node  # raises if the spin thread died
+        if node is None:
+            raise RuntimeError("RosConnection is closed")
+        return node
 
     # FrameIO, served by the node's bridge.
 
     def sample_frame(self, *, fill_missing: bool = True) -> dict[str, Any]:
-        return self._bridge.sample_frame(fill_missing=fill_missing)
+        return self._live().bridge.sample_frame(fill_missing=fill_missing)
 
     @property
     def warmed_up(self) -> bool:
-        return self._bridge.warmed_up
+        return self._live().bridge.warmed_up
 
     @property
-    def clock(self) -> RosClock:
-        return self._bridge.clock
+    def clock(self) -> _LiveClock:
+        return self._clock
 
     def publish_frame(self, action_frame: dict[str, Any]) -> dict[str, Any]:
-        return self._bridge.publish_frame(action_frame)
+        return self._live().bridge.publish_frame(action_frame)
 
     def send_safety_action(self) -> None:
-        self._bridge.send_safety_action()
+        self._live().bridge.send_safety_action()
 
     def reset_state(self) -> None:
-        self._bridge.reset_state()
+        self._live().bridge.reset_state()
 
     # Connection.
 
     def events(self) -> dict[str, bool]:
-        return self._node.events()
+        return self._live().events()
 
     def close(self) -> None:
         try:
@@ -184,3 +194,27 @@ class RosConnection:
                     node.trigger_cleanup()
         finally:
             self._host.stop()
+
+
+class _LiveClock:
+    """The connection's :class:`RosClock`, read through its liveness check.
+
+    Callers keep the clock from connect, so a pacing loop waiting on a sim
+    clock that died with the spin thread raises on its next read instead of
+    waiting forever.
+    """
+
+    __slots__ = ("_connection",)
+
+    def __init__(self, connection: RosConnection) -> None:
+        self._connection = connection
+
+    def _clock(self) -> RosClock:
+        return self._connection._live().bridge.clock
+
+    @property
+    def simulated(self) -> bool:
+        return self._clock().simulated
+
+    def now_ns(self) -> int:
+        return self._clock().now_ns()
