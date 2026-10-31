@@ -38,7 +38,13 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile
 from std_srvs.srv import Trigger
 
-from rosetta_ros.bag_metadata import BAG_CUSTOM_DATA_KEY, BAG_GOAL_ID_KEY, BAG_METADATA_KEY, BAG_PROMPT_KEY
+from rosetta_ros.bag_metadata import (
+    BAG_CONTRACT_KEY,
+    BAG_CUSTOM_DATA_KEY,
+    BAG_GOAL_ID_KEY,
+    BAG_METADATA_KEY,
+    BAG_PROMPT_KEY,
+)
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
@@ -68,7 +74,8 @@ class _Recorder(EpisodeRecorderNode):
     def _create_bag_dir(self):
         return self.bag_dir
 
-    def _open_writer(self, bag_dir):
+    def _open_writer(self, bag_dir, custom_data=None):
+        self.opened_with = custom_data
         if self._open_error is not None:
             raise self._open_error
         bag_dir.mkdir(parents=True)
@@ -369,3 +376,33 @@ def test_subscriptions_write_the_bytes_they_receive(make_recorder):
     finally:
         node._writer = None
         node.destroy_subscription(sub)
+
+
+def test_provenance_is_handed_to_rosbag2_at_open(make_recorder):
+    """A storage plugin that writes metadata into the recording (rrd) only gets what open() hands it.
+
+    The same prompt, contract and goal id as the metadata.yaml update after close.
+    """
+    rec = make_recorder()
+    rec._contract_text = "robot_type: x\n"
+    rec._record("fold the towel", FakeGoalHandle(goal_uuid=bytes(range(16))))
+    assert rec.opened_with == {
+        BAG_PROMPT_KEY: "fold the towel",
+        BAG_CONTRACT_KEY: "robot_type: x\n",
+        BAG_GOAL_ID_KEY: "00010203-0405-0607-0809-0a0b0c0d0e0f",
+    }
+    assert rec.custom_data() == rec.opened_with
+
+
+def test_open_writer_hands_custom_data_to_rosbag2(make_recorder, tmp_path):
+    """The recorder's real open and close, with no metadata.yaml update after: the bag still has its provenance."""
+    from rosetta_ros.bag_metadata import read_bag_metadata, read_custom_field
+
+    rec = make_recorder(idle=True)
+    rec._storage_id = "mcap"
+    bag = tmp_path / "bag"
+    EpisodeRecorderNode._open_writer(rec, bag, {BAG_PROMPT_KEY: "fold the towel", BAG_GOAL_ID_KEY: "abc"})
+    EpisodeRecorderNode._close_writer(rec)
+    meta = read_bag_metadata(bag)
+    assert read_custom_field(meta, BAG_PROMPT_KEY) == "fold the towel"
+    assert read_custom_field(meta, BAG_GOAL_ID_KEY) == "abc"

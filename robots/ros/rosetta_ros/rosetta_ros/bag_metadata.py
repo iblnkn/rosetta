@@ -14,8 +14,10 @@
 
 """Bag metadata custom_data helpers: the recorder/porter seam.
 
-The episode recorder writes the operator prompt and embedded contract into
-rosbag2's metadata.yaml ``custom_data`` block. The bag porter reads them back.
+The episode recorder hands the operator prompt, embedded contract and goal id
+to rosbag2 as ``custom_data`` when it opens a bag, and writes them into
+metadata.yaml's ``custom_data`` block again after the bag closes. The bag
+porter reads them back.
 Keeping the key constants and the read/write helpers in one module means a
 drifted key literal cannot silently stop the porter from finding prompts or
 contracts in new bags. Readers default to empty on any absence.
@@ -81,15 +83,20 @@ def update_custom_data(meta_path: Path, entries: dict[str, str]) -> None:
         yaml.safe_dump(meta, f, sort_keys=False)
 
 
+def provenance_entries(*, prompt: str = "", contract_text: str = "", goal_id: str = "") -> dict[str, str]:
+    """The custom_data entries for a bag's prompt, contract text, and goal id, empty values skipped."""
+    return {
+        key: value
+        for key, value in ((BAG_PROMPT_KEY, prompt), (BAG_CONTRACT_KEY, contract_text), (BAG_GOAL_ID_KEY, goal_id))
+        if value
+    }
+
+
 def write_provenance(bag_dir: Path, *, prompt: str = "", contract_text: str = "", goal_id: str = "") -> None:
     """Store a closed bag's prompt, contract text, and goal id in its custom_data.
 
     Empty values are skipped, and with nothing to store the file is not touched.
     """
-    entries = {
-        key: value
-        for key, value in ((BAG_PROMPT_KEY, prompt), (BAG_CONTRACT_KEY, contract_text), (BAG_GOAL_ID_KEY, goal_id))
-        if value
-    }
+    entries = provenance_entries(prompt=prompt, contract_text=contract_text, goal_id=goal_id)
     if entries:
         update_custom_data(Path(bag_dir) / "metadata.yaml", entries)

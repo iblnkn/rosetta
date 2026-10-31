@@ -4,6 +4,10 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* The recorder hands the prompt, contract and goal id to rosbag2 as
+  ``custom_data`` when it opens a bag, not only after it closes, so a storage
+  plugin that keeps the metadata inside the recording (``rosbag2_storage_rrd``)
+  records them too.
 * Breaking: ``rosetta_port --framework`` is now ``--format``. It picks a
   dataset writer, and LeRobot's comes from the new ``lerobot_dataset_rosetta``.
 * ``policy_runner_node`` with no ``contract_path`` asks its policy runner's
