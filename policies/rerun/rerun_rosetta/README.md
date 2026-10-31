@@ -41,6 +41,14 @@ Sampling is Rerun's. The server's latest-at fill is the contract's `hold`
 alignment. The fixed-rate grid, windows, shuffling and worker/rank sharding
 are the dataloader's.
 
+Rerun's grid steps by a whole number of nanoseconds, `round(1e9 / fps)`,
+while the porter places tick `k` at `floor(k * 1e9 / fps)`. The grids match
+when `fps` divides 1e9 (10, 20, 25 or 50 fps, say). At other rates they
+drift apart by about one nanosecond every three ticks, 36 µs after an hour
+at 30 fps, and a message stamped inside that gap lands one frame apart from
+where the porter puts it. Rerun 0.41's `FixedRateSampling` takes only a rate,
+so the exact grid can't be requested.
+
 Warmup is a manifest rule. The manifest is built with every observation field
 required, so ticks before all observation streams have a sample are dropped,
 as the porter skips them.

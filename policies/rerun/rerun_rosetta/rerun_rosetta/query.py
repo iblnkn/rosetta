@@ -156,6 +156,7 @@ def compile_contract(
         index=layout.index,
         sampling=FixedRateSampling(rate_hz=float(contract.fps)),
         fields=fields,
+        # Rerun rounds the period to whole ns; see the README for the drift from the porter's grid.
         required=tuple(required),
         windows=windows,
     )
