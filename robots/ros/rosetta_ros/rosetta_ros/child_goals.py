@@ -15,11 +15,11 @@
 """Send and cancel goals on other action servers from inside a node's own work.
 
 For apps that orchestrate action servers as children, for example a manager
-that runs the episode recorder and a policy runner for each episode. Both
-functions block the calling thread while polling futures, so call them from
-work running under ``goal_work`` (an action execute callback or a
-service-started thread) on a multi-threaded executor, never from a callback
-the executor must return from to complete them.
+that runs the episode recorder and a policy runner for each episode. Waiting
+polls futures that only the node's executor completes, so call these from a
+work thread (a goal run by ``create_work_action_server``, or a
+service-started thread), never from a callback, and don't wait while a
+lifecycle transition holds the executor.
 """
 
 from __future__ import annotations
@@ -70,23 +70,21 @@ def cancel_goal(
     name: str,
     logger,
     wait_result: bool = False,
-    cancel_timeout: float = 5.0,
     result_timeout: float = 10.0,
 ):
     """Cancel a goal, best effort. ``handle`` may be None, which is a no-op.
 
-    With ``wait_result``, also wait until the goal has finished and return its
-    result message (None on timeout), so the server's work slot is free before
-    the next goal. A cancel timeout only warns, since the goal may still end.
+    The cancel request is sent at once. Without ``wait_result`` that is all.
+    With it, wait until the goal has finished and return its result message
+    (None on timeout), so the server's work slot is free before the next goal.
     Failures are logged, never raised.
     """
     if handle is None:
         return None
     try:
-        if not wait_until(handle.cancel_goal_async().done, cancel_timeout, poll=_POLL_SEC):
-            logger.warning(f"{name} cancel timed out")
+        handle.cancel_goal_async()
         if not wait_result:
-            logger.info(f"{name} cancelled")
+            logger.info(f"{name} cancel requested")
             return None
         result_future = handle.get_result_async()
         if not wait_until(result_future.done, result_timeout, poll=_POLL_SEC):

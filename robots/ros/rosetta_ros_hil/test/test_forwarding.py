@@ -112,5 +112,5 @@ def test_teleop_onto_a_shared_topic_is_rejected_and_cleaned_up(tmp_path):
     contract = _load(tmp_path, SHARED_TOPIC + TELEOP_ON_SHARED_TOPIC)
     node = FakeNode()
     with pytest.raises(ValueError, match="exactly one"):
-        CommandForwarder(node, contract, "/hil/policy", Controls(), callback_group=None)
+        CommandForwarder(node, contract, "/hil/policy", Controls())
     assert node.destroyed == 2  # the /cmd publisher and the /hil/policy/cmd subscription it had made

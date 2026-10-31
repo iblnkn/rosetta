@@ -36,6 +36,7 @@ from rosetta_ros.node_utils import (
     TERMINATION_STOPPED,
     wait_until,
 )
+from rosetta_ros_hil import hil_manager_node as hmn
 from rosetta_ros_hil.hil_episode import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
@@ -220,6 +221,22 @@ def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
     stop_event = _claimed(node)
     node.signal_stop(reason)
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == reason
+
+
+@pytest.mark.parametrize(
+    ("reason", "waits"),
+    [(TERMINATION_STOPPED, True), (TERMINATION_CANCELLED, True), (TERMINATION_NODE_DEACTIVATED, False)],
+)
+def test_children_are_waited_for_except_on_deactivation(node, monkeypatch, reason, waits):
+    """Deactivation holds the executor that completes the wait, so the cancel is only sent."""
+    sent = []
+    monkeypatch.setattr(hmn, "cancel_goal", lambda handle, *, name, logger, wait_result: sent.append(wait_result))
+    _claimed(node)
+    node.signal_stop(reason)
+
+    node._cancel_child(SimpleNamespace(), "Robot policy")
+
+    assert sent == [waits]
 
 
 # -------------------- Outcome: did the robot do the task? --------------------

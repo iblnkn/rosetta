@@ -47,8 +47,6 @@ import traceback
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.task import Future
 from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import load_contract
@@ -164,7 +162,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._cancel_service = None
         self._status_pub = None
         self._result_pub = None
-        self._cbg = ReentrantCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -219,15 +216,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._runner = load_policy_runner(framework)
         self._runner.setup(RosParameterHost(self), self._contract)
 
-        self._action_server = ActionServer(
-            self,
-            RunPolicy,
-            "run_policy",
-            execute_callback=self._execute_on_thread,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=self._cbg,
-        )
+        self._action_server = self.create_work_action_server(RunPolicy, "run_policy", self._execute)
 
         # Client to this server's own cancel service, so ~/cancel_policy can
         # perform a real cancel. Relative name, so it expands through the same
@@ -235,7 +224,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._cancel_client = self.create_client(
             CancelGoal,
             "run_policy/_action/cancel_goal",
-            callback_group=self._cbg,
         )
 
         # Service wrappers for callers that can call services but not actions
@@ -245,13 +233,11 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             StartPolicy,
             "~/start_policy",
             self._on_start_service,
-            callback_group=self._cbg,
         )
         self._cancel_service = self.create_service(
             Trigger,
             "~/cancel_policy",
             self._on_cancel_service,
-            callback_group=self._cbg,
         )
         # Feedback and result for every run, including service starts.
         self._status_pub = self.create_publisher(RunPolicyStatus, "~/status", STATUS_QOS)
@@ -336,24 +322,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         :meth:`RosettaLifecycleNode.cancel_current_work`.
         """
         return self.handle_cancel_service(response, self._cancel_client, what="policy run")
-
-    async def _execute_on_thread(self, goal_handle) -> RunPolicy.Result:
-        """Run :meth:`_execute` on its own thread and await it.
-
-        A run blocks for the whole goal. This node spins on the single-threaded
-        events executor (see :func:`main`), so a run inside the callback would
-        stop every subscription, and with them the frames the run reads.
-        """
-        done = Future()
-
-        def work():
-            try:
-                done.set_result(self._execute(goal_handle))
-            except BaseException as e:
-                done.set_exception(e)
-
-        threading.Thread(target=work, name="policy_run", daemon=True).start()
-        return await done
 
     def _execute(self, goal_handle) -> RunPolicy.Result:
         """Action-goal wrapper around the shared run loop."""
@@ -456,13 +424,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
 
 def main(args=None):
-    """Run the policy runner node.
-
-    On the events executor: with the multi-threaded one, the executor's Python
-    wait-set work holds the GIL on every incoming message, and the policy's
-    control loop woke up to seconds late under load.
-    """
-    return spin_lifecycle_node(PolicyRunnerNode, args=args, events_executor=True)
+    """Run the policy runner node."""
+    return spin_lifecycle_node(PolicyRunnerNode, args=args)
 
 
 if __name__ == "__main__":

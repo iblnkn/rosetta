@@ -52,7 +52,7 @@ class FakeNode:
     def create_publisher(self, msg_cls, topic, qos):
         return FakePublisher(msg_cls, self.published[topic])
 
-    def create_subscription(self, msg_cls, topic, callback, qos, callback_group=None):
+    def create_subscription(self, msg_cls, topic, callback, qos):
         self.callbacks[topic].append(callback)
         return topic
 
@@ -86,5 +86,5 @@ class Controls:
 def forwarder(contract):
     """A CommandForwarder for ``contract`` on a FakeNode; returns the node and its control switch."""
     node, control = FakeNode(), Controls()
-    CommandForwarder(node, contract, "/hil/policy", control, callback_group=None)
+    CommandForwarder(node, contract, "/hil/policy", control)
     return node, control

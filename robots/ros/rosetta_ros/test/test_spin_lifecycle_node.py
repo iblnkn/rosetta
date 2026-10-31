@@ -30,9 +30,6 @@ from rosetta_ros import node_utils
 class _FakeExecutor:
     """Stands in for the spin loop: Ctrl-C on the first spin."""
 
-    def __init__(self, num_threads):
-        pass
-
     def add_node(self, node):
         pass
 
@@ -68,7 +65,7 @@ def spin(monkeypatch):
     # init or shut it down here.
     monkeypatch.setattr(node_utils.rclpy, "init", lambda **kwargs: None)
     monkeypatch.setattr(node_utils.rclpy, "try_shutdown", lambda: None)
-    monkeypatch.setattr(node_utils, "MultiThreadedExecutor", _FakeExecutor)
+    monkeypatch.setattr(node_utils, "EventsExecutor", _FakeExecutor)
     return node_utils.spin_lifecycle_node
 
 

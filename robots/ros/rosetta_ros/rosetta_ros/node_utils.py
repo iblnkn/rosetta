@@ -28,7 +28,8 @@ from typing import Callable
 import rclpy
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException
+from rclpy.experimental import EventsExecutor
 from rclpy.lifecycle import LifecycleNode
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
@@ -216,7 +217,7 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 # =============================================================================
 
 
-def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None, events_executor: bool = False) -> int:
+def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
     """Run a lifecycle node until interrupted, driving the shutdown transition on exit.
 
     ``destroy_node()`` never runs ``on_shutdown``. Only the lifecycle state
@@ -227,28 +228,17 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None,
     when it matters. Signal handling is disabled and KeyboardInterrupt is the
     shutdown trigger instead.
 
-    By default the node spins on a 4-thread ``MultiThreadedExecutor``: enough
-    for a blocking execute callback plus feedback and service callbacks
-    alongside it. ``events_executor=True`` spins it on rclpy's single-threaded
-    ``EventsExecutor`` instead, whose wait and dispatch run in C++. The
-    multi-threaded executor rebuilds its wait set in Python on every wake, so
-    each incoming message holds the GIL there, and a Python control loop in the
-    same process wakes late. A node that asks for the events executor must
-    not block in a callback: it runs long work on its own thread. Where rclpy
-    has no ``EventsExecutor``, the node falls back to the multi-threaded one.
+    The node spins on rclpy's single-threaded ``EventsExecutor``, whose wait
+    and dispatch run in C++. A ``MultiThreadedExecutor`` rebuilds its wait set
+    in Python on every wake, so each incoming message holds the GIL there.
+    That cost several times the CPU and delayed the node's own work threads
+    by tens of milliseconds. One thread means no callback may block. Long work runs
+    on its own thread, through ``RosettaLifecycleNode.create_work_action_server``
+    or ``handle_start_service``.
     """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_factory()
-    executor = None
-    if events_executor:
-        try:
-            from rclpy.experimental import EventsExecutor
-        except ImportError:
-            node.get_logger().warning("rclpy has no EventsExecutor; spinning on MultiThreadedExecutor")
-        else:
-            executor = EventsExecutor()
-    if executor is None:
-        executor = MultiThreadedExecutor(num_threads=4)
+    executor = EventsExecutor()
     executor.add_node(node)
     try:
         # spin_once loop, not spin(): without rclpy's signal handlers a

@@ -35,6 +35,7 @@ cause, which is what stopped a deactivate from being reported as a human stop.
 """
 
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -51,6 +52,7 @@ from std_msgs.msg import String
 from rosetta.contract.model import SafetyBehavior
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec
+from rosetta_ros import rosetta_lifecycle_node as rln
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
@@ -194,6 +196,45 @@ def test_start_service_claims_then_runs_the_work_on_a_thread(base_node):
     assert ran.wait(5.0)
     assert base_node.busy  # released by the work itself (goal_work), not by the service
     base_node._busy = False
+
+
+def _work_server_execute(node, monkeypatch, execute):
+    """Build a work action server and return the execute callback it hands the ActionServer."""
+    built = {}
+    monkeypatch.setattr(rln, "ActionServer", lambda *args, **kwargs: built.update(kwargs) or "server")
+    assert node.create_work_action_server(object, "probe", execute) == "server"
+    assert (built["goal_callback"], built["cancel_callback"]) == (node.on_goal, node.on_cancel)
+    return built["execute_callback"]
+
+
+def _drive(coro):
+    """Step a coroutine the way an executor does, until it returns."""
+    while True:
+        try:
+            coro.send(None)
+        except StopIteration as stop:
+            return stop.value
+        time.sleep(0.01)
+
+
+def test_work_action_server_runs_each_goal_off_the_executor_thread(base_node, monkeypatch):
+    """The action server awaits the goal instead of running it, so the one
+    executor thread keeps delivering messages and cancels while a goal runs."""
+    ran_on = []
+    execute = _work_server_execute(base_node, monkeypatch, lambda h: ran_on.append(threading.current_thread()) or h)
+
+    assert _drive(execute("goal")) == "goal"
+    assert ran_on and ran_on[0] is not threading.current_thread()
+
+
+def test_work_action_server_reraises_in_the_awaiting_callback(base_node, monkeypatch):
+    def broken(_goal_handle):
+        raise RuntimeError("broken")
+
+    execute = _work_server_execute(base_node, monkeypatch, broken)
+
+    with pytest.raises(RuntimeError, match="broken"):
+        _drive(execute("goal"))
 
 
 @pytest.mark.parametrize(

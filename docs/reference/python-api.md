@@ -114,8 +114,8 @@ The node toolkit that `rosetta_ros_hil` builds on, and the live connection behin
 | Module | Names | Use | Imports ROS |
 |---|---|---|---|
 | `rosetta_ros.rosetta_lifecycle_node` | `RosettaLifecycleNode`, `BridgeLifecycleNode` | Base classes for lifecycle nodes. See [Lifecycle nodes](#lifecycle-nodes). | yes |
-| `rosetta_ros.node_utils` | `TERMINATION_STOPPED`, `TERMINATION_TIMEOUT`, `TERMINATION_COMPLETED`, `TERMINATION_CANCELLED`, `TERMINATION_NODE_DEACTIVATED`, `TERMINATION_ERROR`, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`, `RESULT_QOS` | The termination reasons, taken from the `.action` files. `finish_goal(goal_handle, result)` ends a goal `CANCELED` when a cancel was requested, `ABORTED` for `error`, `node_deactivated` or `cancelled`, and `SUCCEEDED` otherwise. `spin_lifecycle_node(factory)` runs a node on a 4-thread `MultiThreadedExecutor` and drives the shutdown transition on Ctrl+C. With `events_executor=True` it runs the node on rclpy's single-threaded `EventsExecutor` instead, falling back to the multi-threaded one where rclpy lacks it. Such a node must not block in a callback. `policy_runner_node` uses it. `positive_rate_descriptor` limits a rate parameter to 0.1 to 1000.0. `STATUS_QOS` is reliable, depth 10. `RESULT_QOS` is reliable, transient local, depth 1. | yes |
-| `rosetta_ros.child_goals` | `send_goal`, `cancel_goal` | Send and cancel goals on other action servers from inside a node's own work. Both block the calling thread. | yes |
+| `rosetta_ros.node_utils` | `TERMINATION_STOPPED`, `TERMINATION_TIMEOUT`, `TERMINATION_COMPLETED`, `TERMINATION_CANCELLED`, `TERMINATION_NODE_DEACTIVATED`, `TERMINATION_ERROR`, `finish_goal`, `spin_lifecycle_node`, `wait_until`, `positive_rate_descriptor`, `copy_fields`, `STATUS_QOS`, `RESULT_QOS` | The termination reasons, taken from the `.action` files. `finish_goal(goal_handle, result)` ends a goal `CANCELED` when a cancel was requested, `ABORTED` for `error`, `node_deactivated` or `cancelled`, and `SUCCEEDED` otherwise. `spin_lifecycle_node(factory)` runs a node on rclpy's single-threaded `EventsExecutor` and drives the shutdown transition on Ctrl+C. No callback may block: long work runs on its own thread, through `create_work_action_server` or `handle_start_service`. `positive_rate_descriptor` limits a rate parameter to 0.1 to 1000.0. `STATUS_QOS` is reliable, depth 10. `RESULT_QOS` is reliable, transient local, depth 1. | yes |
+| `rosetta_ros.child_goals` | `send_goal`, `cancel_goal` | Send and cancel goals on other action servers from inside a node's own work. `send_goal` blocks until the goal is accepted. `cancel_goal` sends the cancel and, with `wait_result=True`, blocks until the goal's result arrives. Call them from a work thread, never from a callback: the node's executor completes the futures they wait on. | yes |
 | `rosetta_ros.topic_bridge` | `TopicBridge`, `RosClock` | The ROS 2 `FrameIO`: subscriptions, lifecycle publishers and the action watchdog, created on a host lifecycle node by `setup(node)`. `RosClock` is its `clock`, simulated when the node has `use_sim_time`. | yes |
 | `rosetta_ros.live` | `RosConnection`, `read_events` | The `Connection` that `Ros2Interface.connect` opens: a `BridgeLifecycleNode` on a `NodeHost`, configured and activated, plus a subscription to the event map's channel. `use_sim_time` runs the node on `/clock`. `read_events` resolves an event map's selectors on one message, and a selector that fails keeps the event's last value. | yes |
 | `rosetta_ros.node_host` | `NodeHost` | Runs a node on a private rclpy context with its own executor thread, for processes Rosetta does not own. | yes |
@@ -153,7 +153,8 @@ work at a time and stops it on deactivate.
 | `teardown()` | override | Destroys what `setup()` created. Runs on cleanup, shutdown and error, so it must tolerate partial state. |
 | `unblock_stop()` | optional override | Wakes work blocked in I/O after a stop. Must be safe with no work active. |
 | `send_safety_action()` | optional override | Secures hardware after work stops. |
-| `on_goal`, `on_cancel` | action callbacks | Pass to the `ActionServer`. `on_goal` claims the work slot or rejects the goal. `on_cancel` stops work only when the cancel names the running goal. |
+| `create_work_action_server(action_type, name, execute)` | method | Serves the action. Each goal runs `execute(goal_handle)` on its own thread, so the executor keeps handling messages and cancels while it runs. |
+| `on_goal`, `on_cancel` | action callbacks | Wired by `create_work_action_server`. `on_goal` claims the work slot or rejects the goal. `on_cancel` stops work only when the cancel names the running goal. |
 | `goal_work(goal_handle)` | context manager | Yields the stop event and releases the work slot on every exit. `goal_handle` is `None` for service-started work. |
 | `signal_stop(reason, detail="")` | method | Stops the current work and records why. The first reason wins. |
 | `stop_reason`, `stop_detail` | properties | The recorded reason, or `None`, and its detail text. |
@@ -182,9 +183,6 @@ This node serves the `RunPolicy` action as `wait`. Each goal waits until it is
 cancelled or `max_duration_s` passes.
 
 ```python
-from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
-
 from rosetta_ros.node_utils import TERMINATION_COMPLETED, finish_goal, spin_lifecycle_node
 from rosetta_ros.rosetta_lifecycle_node import RosettaLifecycleNode
 from rosetta_interfaces.action import RunPolicy
@@ -198,15 +196,7 @@ class WaitNode(RosettaLifecycleNode):
         self._server = None
 
     def setup(self):
-        self._server = ActionServer(
-            self,
-            RunPolicy,
-            "wait",
-            execute_callback=self.execute,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=ReentrantCallbackGroup(),
-        )
+        self._server = self.create_work_action_server(RunPolicy, "wait", self.execute)
 
     def teardown(self):
         if self._server is not None:
@@ -232,5 +222,5 @@ if __name__ == "__main__":
 
 After `ros2 lifecycle set /wait_node configure` and `activate`, a goal with
 `max_duration_s: 1.0` ends `SUCCEEDED` with `termination_reason: completed`,
-and a cancelled goal ends `CANCELED` with `termination_reason: cancelled`. The
-reentrant callback group lets the cancel callback run while `execute` blocks.
+and a cancelled goal ends `CANCELED` with `termination_reason: cancelled`.
+`execute` runs on its own thread, so the node handles the cancel while it waits.

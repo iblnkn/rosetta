@@ -59,7 +59,7 @@ def _only_spec(specs: list[StreamSpec], topic: str, what: str) -> StreamSpec:
 class CommandForwarder:
     """Forwards the policy's commands or the human's onto the contract's action topics, per message.
 
-    Creates its publishers and subscriptions on ``node`` (in ``callback_group``)
+    Creates its publishers and subscriptions on ``node``
     and asks ``control`` who has control for every message. Raises ValueError
     if a teleop target or feedback origin topic is ambiguous (see :func:`_only_spec`).
     """
@@ -70,11 +70,9 @@ class CommandForwarder:
         contract: Contract,
         policy_prefix: str,
         control: Callable[[], Control],
-        callback_group,
     ) -> None:
         self._node = node
         self._control = control
-        self._callback_group = callback_group
         self._publishers: dict[str, object] = {}  # real action topic -> publisher
         self._feedback_publishers: list = []
         self._subscriptions: list = []
@@ -125,9 +123,7 @@ class CommandForwarder:
             raise
 
     def _subscribe(self, msg_cls, topic: str, qos, callback) -> None:
-        self._subscriptions.append(
-            self._node.create_subscription(msg_cls, topic, callback, qos, callback_group=self._callback_group)
-        )
+        self._subscriptions.append(self._node.create_subscription(msg_cls, topic, callback, qos))
 
     def destroy(self) -> None:
         """Destroy every publisher and subscription. Safe to call twice."""

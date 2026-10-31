@@ -42,7 +42,6 @@ import rosbag2_py
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from rclpy.serialization import serialize_message
 from rosidl_runtime_py.utilities import get_message
@@ -207,7 +206,6 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._writer_lock = threading.Lock()
         self._messages_written = 0
         self._topic_msg_counts: dict[str, int] = {}
-        self._cbg = ReentrantCallbackGroup()
         # _bag_lock guards which bag ~/delete_last_bag targets: the recording
         # in progress (deleted when it ends) or the last finished one.
         self._bag_lock = threading.Lock()
@@ -256,22 +254,13 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             if qos.durability != DurabilityPolicy.TRANSIENT_LOCAL:
                 self._subs[topic] = self._create_sub(topic, type_str, qos)
 
-        self._action_server = ActionServer(
-            self,
-            RecordEpisode,
-            "record_episode",
-            execute_callback=self._execute,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=self._cbg,
-        )
+        self._action_server = self.create_work_action_server(RecordEpisode, "record_episode", self._execute)
 
         # This server's own cancel service, so ~/cancel_recording performs a
         # real cancel. A relative name, so it expands under the node namespace.
         self._cancel_client = self.create_client(
             CancelGoal,
             "record_episode/_action/cancel_goal",
-            callback_group=self._cbg,
         )
 
         # Service wrappers for clients that can call services but not actions (Foxglove).
@@ -279,21 +268,18 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             Trigger,
             "~/cancel_recording",
             self._on_cancel_service,
-            callback_group=self._cbg,
         )
 
         self._start_service = self.create_service(
             StartRecording,
             "~/start_recording",
             self._on_start_service,
-            callback_group=self._cbg,
         )
 
         self._delete_last_bag_service = self.create_service(
             Trigger,
             "~/delete_last_bag",
             self._on_delete_last_bag_service,
-            callback_group=self._cbg,
         )
 
         # Feedback and result for every recording, including service starts,
@@ -432,7 +418,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 self.get_logger().error(write_error)
                 self.signal_stop(TERMINATION_ERROR, write_error)
 
-        return self.create_subscription(msg_cls, topic, callback, qos, callback_group=self._cbg)
+        return self.create_subscription(msg_cls, topic, callback, qos)
 
     # ---------- Action callbacks ----------
 

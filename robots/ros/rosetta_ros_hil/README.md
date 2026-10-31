@@ -57,8 +57,9 @@ Things to know before a run:
 `hil_manager_node` is a lifecycle node named `hil_manager`, configured and
 activated by `hil_launch.py`. Its defaults come from `params/hil_manager.yaml`.
 It runs one episode at a time. A start while an episode runs, or while the
-node is not active, is rejected. On deactivate it waits up to 10 s for a
-running episode to stop.
+node is not active, is rejected. On deactivate it waits up to 5 s for a
+running episode to stop. The episode sends its child goals their cancels and
+does not wait for their results.
 
 ### Parameters
 
