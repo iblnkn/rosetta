@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lerobot_dataset_rosetta</name>
+  <version>0.2.0</version>
+  <description>Rosetta's LeRobot dataset writer - ports recordings to a LeRobotDataset.</description>
+  <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rosetta</depend>
+  <depend>python3-numpy</depend>
+  <!-- lerobot has no rosdep key, so rosdep can neither install it nor report
+       it missing: install it with pip (it is in setup.py install_requires).
+       This package is not released to the ROS buildfarm (see CONTRIBUTING.md). -->
+
+  <test_depend>rosetta_ros</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

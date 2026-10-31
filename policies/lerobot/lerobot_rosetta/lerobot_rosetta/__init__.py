@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Rosetta's LeRobot backend adapter.
+"""Rosetta's LeRobot policy runner.
 
-Dataset writer, policy runner, and gRPC inference servers, registered with
-rosetta via entry points (rosetta.dataset_writers / rosetta.policy_runners,
-name 'lerobot'). Deliberately NOT named with a 'lerobot_robot_*'/
+Policy runner and gRPC inference servers. The runner is registered with
+rosetta on the rosetta.policy_runners entry-point group, name 'lerobot'. The
+dataset writer is in lerobot_dataset_rosetta. Deliberately NOT named with a 'lerobot_robot_*'/
 'lerobot_teleoperator_*' prefix so LeRobot's register_third_party_plugins()
 does not import it; the LeRobot-discovered Robot plugin lives in
 lerobot_robot_rosetta.

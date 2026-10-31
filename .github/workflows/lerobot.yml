@@ -9,10 +9,10 @@ name: lerobot
 # catches dependency changes that arrive without a change here.
 on:
   pull_request:
-    paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
+    paths: [rosetta/**, robots/ros/**, data/lerobot/**, policies/lerobot/**, .github/workflows/lerobot.yml]
   push:
     branches: [main, dev]
-    paths: [rosetta/**, robots/ros/**, policies/lerobot/**, .github/workflows/lerobot.yml]
+    paths: [rosetta/**, robots/ros/**, data/lerobot/**, policies/lerobot/**, .github/workflows/lerobot.yml]
   schedule:
     - cron: "0 7 * * *"
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
     env:
       ROS_DISTRO: lyrical
       ROS_REPO: main
-      TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
+      TARGET_WORKSPACE: "rosetta robots/ros data/lerobot policies/lerobot"
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       # Python 3.14 needs two overrides of LeRobot 0.6.1's pins, the same ones
       # pixi.toml carries: numpy>=2.3 (numpy<2.3 has no 3.14 builds) and the
