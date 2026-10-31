@@ -143,5 +143,30 @@ def test_load_layout_finds_the_registered_ros2_layout():
 
 
 def test_load_layout_names_what_is_installed():
-    with pytest.raises(ValueError, match="No Rerun recording layout for robot interface 'nope'"):
+    with pytest.raises(ValueError, match=r"No Rerun recording layout 'nope' registered .* Available: "):
         load_layout("nope")
+
+
+class _NoIndexLayout:
+    """A layout that forgot its ``index`` timeline."""
+
+    receive_timeline = "receive"
+
+    def column(self, channel, columns):
+        return None
+
+    def message(self, cell):
+        return cell
+
+
+def test_load_layout_names_a_missing_data_member(monkeypatch):
+    import types
+
+    import rerun_rosetta.layout as layout_mod
+
+    ep = types.SimpleNamespace(
+        name="bad", group=layout_mod.LAYOUT_GROUP, dist=types.SimpleNamespace(name="d"), load=lambda: _NoIndexLayout
+    )
+    monkeypatch.setattr(layout_mod, "entry_points", lambda group: [ep])
+    with pytest.raises(TypeError, match=r"does not implement RecordingLayout \(missing or non-callable: index\)"):
+        load_layout("bad")

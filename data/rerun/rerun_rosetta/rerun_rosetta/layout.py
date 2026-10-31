@@ -31,6 +31,8 @@ from collections.abc import Collection
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from rosetta.plugins import instantiate_entry_point
+
 if TYPE_CHECKING:
     import pyarrow as pa
 
@@ -66,22 +68,14 @@ class RecordingLayout(Protocol):
 def load_layout(robot_interface: str) -> RecordingLayout:
     """The layout registered for ``robot_interface``.
 
+    Resolved through Rosetta's shared entry-point loader, so it fails the way
+    every Rosetta registry does.
+
     Raises:
         ValueError: If no installed package, or more than one, registers a layout under that name.
-        TypeError: If the registered class doesn't implement :class:`RecordingLayout`.
+        TypeError: If the entry point isn't a class, or the class doesn't implement
+            :class:`RecordingLayout` (the error names each missing member).
 
     """
-    registered = entry_points(group=LAYOUT_GROUP)
-    matches = [ep for ep in registered if ep.name == robot_interface]
-    if not matches:
-        raise ValueError(
-            f"No Rerun recording layout for robot interface '{robot_interface}'. "
-            f"Installed: {sorted(ep.name for ep in registered) or 'none'}. The interface's package registers "
-            f"one under the '{LAYOUT_GROUP}' entry-point group."
-        )
-    if len(matches) > 1:
-        raise ValueError(f"More than one Rerun recording layout registered as '{robot_interface}': {matches}")
-    layout = matches[0].load()()
-    if not isinstance(layout, RecordingLayout):
-        raise TypeError(f"{matches[0].value} does not implement RecordingLayout")
-    return layout
+    eps = list(entry_points(group=LAYOUT_GROUP))
+    return instantiate_entry_point(eps, LAYOUT_GROUP, robot_interface, RecordingLayout, "Rerun recording layout")
