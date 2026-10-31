@@ -26,6 +26,8 @@ returns success=True on purpose -- it knows it was stopped, not by whom. Naming
 the cause is the node's job, and it reads the reason the stop recorded.
 """
 
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -190,3 +192,44 @@ def test_status_is_published_without_a_goal(node):
     claim(node)
     node._run("pick up cube")
     assert node._status_pub.published
+
+
+def _drive(coro):
+    """Step a coroutine the way an executor does, until it returns."""
+    while True:
+        try:
+            coro.send(None)
+        except StopIteration as stop:
+            return stop.value
+        time.sleep(0.01)
+
+
+def test_execute_on_thread_runs_the_goal_off_the_executor_thread(node):
+    """The action server awaits the run instead of running it, so a
+    single-threaded executor keeps delivering frames while a goal runs."""
+    ran_on = []
+
+    def run(_task):
+        ran_on.append(threading.current_thread())
+        return RunnerResult(success=True)
+
+    node._runner = FakeRunner(run=run)
+    claim(node)
+    handle = _handle()
+
+    result = _drive(node._execute_on_thread(handle))
+
+    assert ran_on and ran_on[0] is not threading.current_thread()
+    assert result.termination_reason == TERMINATION_COMPLETED
+    assert handle.calls == ["succeed"]
+    assert not node.busy
+
+
+def test_execute_on_thread_reraises_in_the_awaiting_callback(node, monkeypatch):
+    def broken(_goal_handle):
+        raise RuntimeError("broken")
+
+    monkeypatch.setattr(node, "_execute", broken)
+
+    with pytest.raises(RuntimeError, match="broken"):
+        _drive(node._execute_on_thread(_handle()))

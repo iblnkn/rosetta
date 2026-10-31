@@ -48,6 +48,7 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.task import Future
 from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import load_contract
@@ -222,7 +223,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             self,
             RunPolicy,
             "run_policy",
-            execute_callback=self._execute,
+            execute_callback=self._execute_on_thread,
             goal_callback=self.on_goal,
             cancel_callback=self.on_cancel,
             callback_group=self._cbg,
@@ -336,6 +337,24 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         """
         return self.handle_cancel_service(response, self._cancel_client, what="policy run")
 
+    async def _execute_on_thread(self, goal_handle) -> RunPolicy.Result:
+        """Run :meth:`_execute` on its own thread and await it.
+
+        A run blocks for the whole goal. This node spins on the single-threaded
+        events executor (see :func:`main`), so a run inside the callback would
+        stop every subscription, and with them the frames the run reads.
+        """
+        done = Future()
+
+        def work():
+            try:
+                done.set_result(self._execute(goal_handle))
+            except BaseException as e:
+                done.set_exception(e)
+
+        threading.Thread(target=work, name="policy_run", daemon=True).start()
+        return await done
+
     def _execute(self, goal_handle) -> RunPolicy.Result:
         """Action-goal wrapper around the shared run loop."""
         return self._run(
@@ -437,8 +456,13 @@ class PolicyRunnerNode(RosettaLifecycleNode):
 
 
 def main(args=None):
-    """Run the policy runner node."""
-    return spin_lifecycle_node(PolicyRunnerNode, args=args)
+    """Run the policy runner node.
+
+    On the events executor: with the multi-threaded one, the executor's Python
+    wait-set work holds the GIL on every incoming message, and the policy's
+    control loop woke up to seconds late under load.
+    """
+    return spin_lifecycle_node(PolicyRunnerNode, args=args, events_executor=True)
 
 
 if __name__ == "__main__":

@@ -216,7 +216,7 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 # =============================================================================
 
 
-def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
+def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None, events_executor: bool = False) -> int:
     """Run a lifecycle node until interrupted, driving the shutdown transition on exit.
 
     ``destroy_node()`` never runs ``on_shutdown``. Only the lifecycle state
@@ -226,12 +226,29 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     down before user code can react, making that transition impossible exactly
     when it matters. Signal handling is disabled and KeyboardInterrupt is the
     shutdown trigger instead.
+
+    By default the node spins on a 4-thread ``MultiThreadedExecutor``: enough
+    for a blocking execute callback plus feedback and service callbacks
+    alongside it. ``events_executor=True`` spins it on rclpy's single-threaded
+    ``EventsExecutor`` instead, whose wait and dispatch run in C++. The
+    multi-threaded executor rebuilds its wait set in Python on every wake, so
+    each incoming message holds the GIL there, and a Python control loop in the
+    same process wakes late. A node that asks for the events executor must
+    not block in a callback: it runs long work on its own thread. Where rclpy
+    has no ``EventsExecutor``, the node falls back to the multi-threaded one.
     """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_factory()
-    # 4 threads: enough for a blocking execute callback + feedback/service
-    # callbacks alongside it. No caller has needed to override it.
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = None
+    if events_executor:
+        try:
+            from rclpy.experimental import EventsExecutor
+        except ImportError:
+            node.get_logger().warning("rclpy has no EventsExecutor; spinning on MultiThreadedExecutor")
+        else:
+            executor = EventsExecutor()
+    if executor is None:
+        executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:
         # spin_once loop, not spin(): without rclpy's signal handlers a
