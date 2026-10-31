@@ -53,21 +53,6 @@ LAYERS = {
 
 SEAMS = frozenset({"rosetta.robots", "rosetta.data", "rosetta.policies"})
 
-# Violations still being untangled. The tests fail on a new violation and on an
-# entry that no longer occurs, so this list only shrinks.
-KNOWN_VIOLATIONS = frozenset(
-    {
-        "rosetta.contract.schema -> rosetta.frames.layout",
-        "rosetta.contract.schema -> rosetta.frames.naming",
-        "rosetta.contract.specs -> rosetta.frames.naming",
-    }
-)
-KNOWN_CYCLES = frozenset(
-    {
-        frozenset({"rosetta.contract.schema", "rosetta.contract.specs", "rosetta.frames.layout"}),
-    }
-)
-
 
 def _module_name(path: Path) -> str:
     parts = list(path.relative_to(ROOT.parent).with_suffix("").parts)
@@ -198,16 +183,12 @@ def test_every_module_has_a_layer():
 
 def test_imports_point_down():
     graph = _graph()
-    found = {f"{src} -> {dst}": why for src, dsts in graph.items() for dst in dsts if (why := _violation(src, dst))}
-    new = sorted(f"{edge} ({found[edge]})" for edge in found.keys() - KNOWN_VIOLATIONS)
-    stale = sorted(KNOWN_VIOLATIONS - found.keys())
-    assert not new, "Layering violations:\n" + "\n".join(new)
-    assert not stale, "Fixed; remove from KNOWN_VIOLATIONS:\n" + "\n".join(stale)
+    found = sorted(
+        f"{src} -> {dst} ({why})" for src, dsts in graph.items() for dst in dsts if (why := _violation(src, dst))
+    )
+    assert not found, "Layering violations:\n" + "\n".join(found)
 
 
 def test_no_import_cycles():
-    cycles = {frozenset(c) for c in _cycles(_graph())}
-    new = cycles - KNOWN_CYCLES
-    stale = KNOWN_CYCLES - cycles
-    assert not new, "Import cycles:\n" + "\n".join(" <-> ".join(sorted(c)) for c in new)
-    assert not stale, "Changed or fixed; update KNOWN_CYCLES:\n" + "\n".join(" <-> ".join(sorted(c)) for c in stale)
+    cycles = _cycles(_graph())
+    assert not cycles, "Import cycles:\n" + "\n".join(" <-> ".join(c) for c in cycles)

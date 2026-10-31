@@ -42,9 +42,10 @@ each module's ``__all__``; every other module is internal:
   arrays), ``operators`` (operator plugins), ``codecs`` (codec registry and
   codec plugins)
 - Contract: ``contract.schema``, ``contract.specs``, ``contract.interfaces``
-  (robot interfaces as contract loading sees them), ``contract.sidecar``
+  (robot interfaces as contract loading sees them), ``contract.naming``,
+  ``contract.sidecar``
 - Frames: ``frames.codecs`` (decoding and encoding), ``frames.layout``,
-  ``frames.naming``, ``frames.protocols``
+  ``frames.protocols``
 - Policies: ``policies``
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)
 

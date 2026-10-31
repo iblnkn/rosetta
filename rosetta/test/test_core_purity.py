@@ -33,7 +33,7 @@ import rosetta.contract.specs
 import rosetta.errors
 import rosetta.frames.codecs
 import rosetta.frames.layout
-import rosetta.frames.naming
+import rosetta.contract.naming
 import rosetta.frames.protocols
 import rosetta.frames.resample
 import rosetta.operators

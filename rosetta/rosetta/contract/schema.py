@@ -45,7 +45,6 @@ import yaml
 
 from ..codecs import SPECIAL_DTYPES, SUPPORTED_NUMERIC_DTYPES, is_valid_dtype, load_codec
 from ..errors import ContractValidationError
-from ..frames.naming import IMAGE_KEY_PREFIX
 from ..operators import lookup_operator
 from . import builtin_operators  # noqa: F401 - registers built-in operators
 from .interfaces import ContractInterface, available_robot_interfaces, discover_codecs, load_interface
@@ -71,6 +70,8 @@ from .model import (
     TeleopInputSource,
     owning_key,
 )
+from .naming import IMAGE_KEY_PREFIX
+from .specs import iter_specs, validate_key_groups
 
 __all__ = [
     "FRAME_SECTIONS",
@@ -721,11 +722,8 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
     )
 
     _validate_interface(contract, load_interface(robot_interface))
-    # Resolve every spec and lay out the frame now, so the registry-backed
-    # rules (decodability, encoders, image geometry, shared keys) fail at load.
-    # Imported here because specs and layout import this module.
-    from ..frames.layout import FrameLayout
-    from .specs import iter_specs
-
-    FrameLayout(list(iter_specs(contract)))
+    # Resolve every spec and check how they share frame keys now, so the
+    # registry-backed rules (decodability, encoders, image geometry, shared
+    # keys) fail at load.
+    validate_key_groups(iter_specs(contract))
     return contract

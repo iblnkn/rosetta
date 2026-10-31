@@ -22,7 +22,7 @@ whose sink needs a flat identifier apply ``sanitize_field_name`` on top.
 
 import pytest
 
-from rosetta.frames.naming import camera_name, sanitize_field_name
+from rosetta.contract.naming import camera_name, sanitize_field_name
 
 
 @pytest.mark.parametrize(
