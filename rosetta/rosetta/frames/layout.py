@@ -182,6 +182,11 @@ class KeyLayout:
         return sum(s.dim for s in self.slices)
 
     @property
+    def names(self) -> tuple[str, ...]:
+        """Namespaced selector names of every slice, in order. Empty for a slice without select."""
+        return tuple(name for sl in self.slices for name in sl.spec.namespaced_names)
+
+    @property
     def shape(self) -> tuple[int, ...]:
         """The key's value shape: its one spec's shape, or the concatenated vector of several."""
         if len(self.slices) == 1:
@@ -305,6 +310,21 @@ class FrameLayout:
     def __getitem__(self, key: str) -> KeyLayout:
         return self._layouts[key]
 
+    @property
+    def nameless_specs(self) -> tuple[StreamSpec, ...]:
+        """Numeric specs without select names: scalars, and streams with a declared shape.
+
+        A consumer that addresses values by name (LeRobot's per-name floats)
+        can't carry them.
+        """
+        return tuple(
+            sl.spec
+            for layout in self._layouts.values()
+            if layout.category == "numeric"
+            for sl in layout.slices
+            if not sl.spec.names
+        )
+
     # -------------------- assemble / split --------------------
 
     def assemble(self, values: Sequence[Any], *, fill_missing: bool = True) -> dict[str, Any]:
@@ -404,12 +424,9 @@ class FrameLayout:
             if layout.category in ("image", "string"):
                 feats[key] = build_feature(layout.slices[0].spec)
                 continue
-            names: list[str] = []
-            for sl in layout.slices:
-                names.extend(sl.spec.namespaced_names)
             feats[key] = {
                 "dtype": layout.dtype,
                 "shape": layout.shape,
-                "names": names or None,
+                "names": list(layout.names) or None,
             }
         return feats

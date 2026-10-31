@@ -397,6 +397,10 @@ source's codec and inverse `apply`. The feedback `select` must match the
 origin source in width. The loader checks neither width. A mismatch fails
 every message at runtime with a logged error.
 
+The LeRobot teleoperator addresses each value by its selected name, so it
+needs `select` on every `input` and `feedback` source and refuses a source
+without one at connect. `rosetta_ros_hil` forwarding needs no `select`.
+
 Event names are open. The loader accepts any name, and each consumer acts on
 the names it knows and logs the ones it ignores, so one contract can serve
 several consumers. The human-in-the-loop manager's names are in the

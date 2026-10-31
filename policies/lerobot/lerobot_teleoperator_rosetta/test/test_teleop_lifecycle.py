@@ -113,3 +113,33 @@ def test_disconnect_clean_and_reconnectable(teleop):
     teleop.connect()
     assert teleop.is_connected
     teleop.disconnect()
+
+
+SELECTLESS_INPUT = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /state, type: std_msgs/msg/Float64}
+    align: {strategy: hold, timeline: receive}
+    select: [data]
+actions:
+  action:
+    channel: {topic: /cmd, type: std_msgs/msg/Float64}
+    align: {strategy: hold, timeline: receive}
+teleop:
+  input:
+    - target: /cmd
+      channel: {topic: /human/cmd, type: std_msgs/msg/Float64}
+      align: {strategy: hold, timeline: receive}
+"""
+
+
+def test_connect_refuses_an_input_it_cannot_name(tmp_path):
+    path = tmp_path / "selectless.yaml"
+    path.write_text(SELECTLESS_INPUT)
+    teleop = RosettaTeleop(RosettaTeleopConfig(id="selectless", config_path=str(path)))
+    with pytest.raises(ValueError, match=r"without select: 'teleop.input.action' \(topic /human/cmd\)"):
+        teleop.connect()
+    assert not teleop.is_connected

@@ -127,15 +127,7 @@ def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
     # Select-less numeric streams have no selector names, and the live stack
     # derives its motor/feature names from selector names — so such a stream
     # is silently dropped live while the offline dataset keeps it.
-    nameless = [
-        sl.spec
-        for layout in (obs_layout, act_layout)
-        if layout is not None
-        for k in layout.keys
-        if layout[k].category == "numeric"
-        for sl in layout[k].slices
-        if not sl.spec.names
-    ]
+    nameless = [spec for layout in (obs_layout, act_layout) if layout is not None for spec in layout.nameless_specs]
     selectless = [f"'{s.key}' (topic {s.source.channel.topic})" for s in nameless if s.source.shape is None]
     tensors = [f"'{s.key}' (topic {s.source.channel.topic})" for s in nameless if s.source.shape is not None]
     if selectless:
@@ -200,12 +192,8 @@ class Rosetta(Robot):
     @cached_property
     def _obs_vector_names(self) -> dict[str, list[str]]:
         """Numeric observation key -> ordered namespaced selector names."""
-        feats = self._obs_layout.lerobot_features()
-        return {
-            key: list(feats[key]["names"] or [])
-            for key in self._obs_layout.keys
-            if self._obs_layout[key].category == "numeric"
-        }
+        layout = self._obs_layout
+        return {key: list(layout[key].names) for key in layout.keys if layout[key].category == "numeric"}
 
     @cached_property
     def _obs_image_keys(self) -> dict[str, str]:
@@ -219,12 +207,8 @@ class Rosetta(Robot):
     @cached_property
     def _act_vector_names(self) -> dict[str, list[str]]:
         """Action key -> ordered namespaced selector names."""
-        feats = self._act_layout.lerobot_features()
-        return {
-            key: list(feats[key]["names"] or [])
-            for key in self._act_layout.keys
-            if self._act_layout[key].category == "numeric"
-        }
+        layout = self._act_layout
+        return {key: list(layout[key].names) for key in layout.keys if layout[key].category == "numeric"}
 
     def _flatten_observation(self, frame: dict) -> RobotObservation:
         """Frame dict -> LeRobot observation (images by short key, state as floats)."""
