@@ -18,7 +18,7 @@ Rosetta: translation between pub/sub robots and policy-learning frameworks.
 Robots are messy; policies want structure. A **contract**
 (:mod:`rosetta.contract` — one YAML per robot) declares how the robot's
 pub/sub topics become clean fixed-rate **frames**
-(:mod:`rosetta.frames` — ``{contract_key: np.ndarray | str}``) and back.
+(:mod:`rosetta.frames` — ``{contract_key: array | str}``) and back.
 The **robot side** (:mod:`rosetta.robots`) adapts each pub/sub ecosystem
 onto that frame stream — ROS2 today; ROS1, zenoh, MQTT tomorrow. The
 **policy side** (:mod:`rosetta.policies`) adapts each learning framework
@@ -40,7 +40,8 @@ each module's ``__all__``; every other module is internal:
 
 - Contract: ``contract.schema``, ``contract.specs``, ``contract.errors``,
   ``contract.sidecar``, ``contract.operators`` (operator plugins)
-- Frames: ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
+- Frames: ``frames.arrays`` (device arrays),
+  ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)

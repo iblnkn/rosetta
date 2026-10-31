@@ -26,6 +26,13 @@ fails at load instead of silently corrupting actions.
 
 Operators should preserve the input dtype unless the transform is inherently
 a float conversion (``rad2deg``).
+
+``forward`` receives numpy arrays unless the operator sets
+``device_capable = True``. A device-capable operator may also receive a
+device array (see :mod:`rosetta.frames.arrays`). It must use only what every
+array library offers: ``shape``, ``dtype``, ``reshape``, basic slicing, and
+:func:`rosetta.frames.arrays.take`. It must also produce the same values as
+on numpy.
 """
 
 from __future__ import annotations
@@ -92,6 +99,11 @@ class Operator:
     output_hw: tuple[int, int] | None = None
     """Output image geometry ``(h, w)`` if the operator sets it. The last
     non-None value in a pipeline is the stream's image size."""
+
+    device_capable: bool = False
+    """``forward`` accepts device arrays, not just numpy. A robot
+    interface takes device memory for a stream only if every operator in its
+    pipeline sets this; otherwise the stream decodes as numpy."""
 
     def __init__(self, args: Any, ctx: OperatorContext) -> None:
         del ctx

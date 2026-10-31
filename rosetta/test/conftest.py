@@ -43,6 +43,7 @@ def scratch_registries():
         codecs.DTYPES,
         codecs.ENCODERS,
         codecs.DECODER_REQUIRES_SELECT,
+        codecs.DECODER_DEVICE_CAPABLE,
         codecs.ENCODER_REQUIRES_SELECT,
         OPERATOR_REGISTRY,
     ]

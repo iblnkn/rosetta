@@ -54,7 +54,9 @@ NaN/Inf gate inspects float64 and whose encoders do the wire-type cast. Casting
 to an int dtype here would launder a policy's NaN into INT_MIN, finite garbage
 that sails through the gate onto hardware.
 
-Pure numpy. No ROS dependency.
+Images pass through as they were decoded: numpy, or a device array when the
+transport delivered device memory (see :mod:`.arrays`).
+Missing images and numeric vectors are numpy. No ROS dependency.
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ from ..contract.specs import (
     ObservationStreamSpec,
     StreamSpec,
 )
+from .arrays import is_device_array
 from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
 __all__ = [
@@ -131,6 +134,14 @@ def zero_image_for_spec(spec: ObservationStreamSpec) -> np.ndarray:
         raise ValueError(f"Image spec '{spec.key}' must have image_resize")
     h, w = spec.image_resize
     return np.zeros((h, w, DECODED_IMAGE_CHANNELS), dtype=np.uint8)
+
+
+def _device_image(key: str, val: Any) -> Any:
+    """A device image passes through as is. Casting it would copy it to the host, so its dtype is checked instead."""
+    # Every array library spells uint8 "uint8", after its own prefix (torch.uint8).
+    if str(val.dtype).rsplit(".", 1)[-1] != "uint8":
+        raise ValueError(f"Image stream '{key}' produced dtype {val.dtype}, not uint8")
+    return val
 
 
 def _spec_category(spec: StreamSpec) -> str:
@@ -297,7 +308,8 @@ class FrameLayout:
         stream had no data). Numeric specs sharing a key concatenate in
         declaration order. Missing values zero-fill at the spec's static dim;
         with ``fill_missing=False`` a key with any missing value is left out.
-        Returns {contract_key: np.ndarray | str}.
+        Returns {contract_key: array | str}: numeric vectors as numpy, images
+        as decoded (see :mod:`.arrays`).
         """
         if len(values) != len(self.specs):
             raise ValueError(f"assemble() got {len(values)} values for {len(self.specs)} specs")
@@ -315,9 +327,12 @@ class FrameLayout:
 
             if layout.category == "image":
                 val = key_values[0]
-                frame[key] = (
-                    np.asarray(val, dtype=np.uint8) if val is not None else zero_image_for_spec(layout.slices[0].spec)
-                )
+                if val is None:
+                    frame[key] = zero_image_for_spec(layout.slices[0].spec)
+                elif is_device_array(val):
+                    frame[key] = _device_image(key, val)
+                else:
+                    frame[key] = np.asarray(val, dtype=np.uint8)
             elif layout.category == "string":
                 val = key_values[0]
                 if val is not None and not isinstance(val, str):

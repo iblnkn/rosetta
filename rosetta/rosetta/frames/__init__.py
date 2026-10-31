@@ -16,10 +16,12 @@
 Frames: the shared language both sides of Rosetta speak.
 
 A *frame* is one synchronized sample of every contract key at a single
-instant: a dict ``{contract_key: np.ndarray | str}`` covering all modalities
+instant: a dict ``{contract_key: array | str}`` covering all modalities
 at once (images, joint state, ...), emitted once per tick of the clock set by
-the contract's ``fps``. This is the LeRobot sense of the word (one row of a
-``LeRobotDataset``, ``add_frame()``), NOT a ROS/tf coordinate frame
+the contract's ``fps``. Arrays are numpy, except that an image the transport
+delivered in device memory stays there (:mod:`.arrays`). This is
+the LeRobot sense of the word (one row of a ``LeRobotDataset``,
+``add_frame()``), NOT a ROS/tf coordinate frame
 (``base_link``, ``map``, ...). This package has nothing to do with spatial
 transforms.
 
@@ -33,6 +35,8 @@ ROS or policy-framework dependencies:
   Live inference and offline bag conversion share it, so recorded and live
   frames match sample-for-sample by construction.
 - :mod:`.codecs`: the encoder/decoder registry (message <-> array).
+- :mod:`.arrays`: device arrays, images a transport delivered in device
+  memory, read through DLPack.
 - :mod:`.protocols` (``FrameIO``, ``Connection``, ``RobotClock``): the
   duck-typed surface a live robot presents to a policy.
 - :mod:`.naming`: shared frame-key naming helpers.
