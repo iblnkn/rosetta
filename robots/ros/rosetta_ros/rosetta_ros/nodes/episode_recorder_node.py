@@ -43,7 +43,6 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
-from rclpy.serialization import serialize_message
 from rosidl_runtime_py.utilities import get_message
 from std_srvs.srv import Trigger
 
@@ -390,18 +389,19 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         return discovered
 
     def _create_sub(self, topic: str, type_str: str, qos: QoSProfile):
-        """Create a subscription that writes to the bag whenever a writer is open."""
+        """Create a subscription that writes to the bag whenever a writer is open.
+
+        Raw: the recorder never reads a message, so it writes the serialized
+        bytes as received instead of deserializing and serializing them again.
+        """
         msg_cls = get_message(type_str)
 
-        def callback(msg: Any, _topic: str = topic) -> None:
+        def callback(serialized: bytes, _topic: str = topic) -> None:
             if self._writer is None:  # unlocked fast path; re-checked under the lock
                 return
             # Receive time as bag timestamp (standard rosbag2 behavior); the
             # header.stamp inside the message is preserved for TF lookups.
             timestamp_ns = self.get_clock().now().nanoseconds
-            # Serialize outside the lock: for image topics this is a ~MB copy,
-            # and every topic's callback contends the one writer lock.
-            serialized = serialize_message(msg)
             write_error: str | None = None
             with self._writer_lock:
                 if self._writer is None:
@@ -418,7 +418,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 self.get_logger().error(write_error)
                 self.signal_stop(TERMINATION_ERROR, write_error)
 
-        return self.create_subscription(msg_cls, topic, callback, qos)
+        return self.create_subscription(msg_cls, topic, callback, qos, raw=True)
 
     # ---------- Action callbacks ----------
 

@@ -4,6 +4,8 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* ``episode_recorder_node`` subscribes raw and writes each message's
+  serialized bytes as received, with no deserialize and serialize per message.
 * Every lifecycle node spins on rclpy's single-threaded ``EventsExecutor``.
   The ``MultiThreadedExecutor`` cost the recorder about 3x the CPU and delayed
   its messages by tens of milliseconds.

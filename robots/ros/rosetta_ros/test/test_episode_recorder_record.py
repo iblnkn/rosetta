@@ -29,10 +29,13 @@ Signalled beats loop-decided so a failed bag write landing in the same tick as
 a timeout still reports as an error rather than a clean finish.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import yaml
 from node_helpers import FakeGoalHandle, FakePublisher, claim
 from rclpy.parameter import Parameter
+from rclpy.qos import QoSProfile
 from std_srvs.srv import Trigger
 
 from rosetta_ros.bag_metadata import BAG_CUSTOM_DATA_KEY, BAG_GOAL_ID_KEY, BAG_METADATA_KEY, BAG_PROMPT_KEY
@@ -350,3 +353,19 @@ def test_service_start_publishes_status_and_its_result(make_recorder, open_error
     assert published.termination_reason == reason
     fields = ("termination_reason", "message", "bag_path", "messages_written")
     assert [getattr(published, f) for f in fields] == [getattr(result, f) for f in fields]
+
+
+def test_subscriptions_write_the_bytes_they_receive(make_recorder):
+    """Raw subscriptions: the bag gets the wire bytes, never a deserialize/serialize round trip."""
+    node = make_recorder(idle=True)
+    written = []
+    node._writer = SimpleNamespace(write=lambda topic, data, _ns: written.append((topic, data)))
+    sub = node._create_sub("/chatter", "std_msgs/msg/String", QoSProfile(depth=1))
+    try:
+        assert sub.raw
+        sub.callback(b"\x00\x01\x00\x00wire bytes")
+        assert written == [("/chatter", b"\x00\x01\x00\x00wire bytes")]
+        assert node._topic_msg_counts == {"/chatter": 1}
+    finally:
+        node._writer = None
+        node.destroy_subscription(sub)
