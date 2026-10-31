@@ -107,16 +107,17 @@ transforms, `rosetta.dataset_writers` and `rosetta.policy_runners` add a
 framework. A contract names its robot interface, message types and operators
 but never a framework.
 
-A frame's arrays are numpy, with one exception: an image a transport
-delivered in device memory. A ROS 2 Lyrical image from a CUDA publisher
-arrives that way when the policy runner's `buffer_backends` asks for it. The
-image stays on its device through decode and `resize`, and Rosetta reads it
-only through DLPack, so core never imports its array library. Where the
-image goes next is the framework adapter's call, the same as moving data to
-the model's device always was. LeRobot's observations are numpy, so its
-adapter copies each contract-sized image to the host once per frame. An
-adapter for a framework that takes device arrays would hand the image over
-where it is.
+A frame's arrays are numpy, with one exception: a value a transport
+delivered in device memory. A ROS 2 Lyrical image or `ExperimentalTensor`
+from a CUDA publisher arrives that way when the policy runner's
+`buffer_backends` asks for it and the stream's decoder and operators handle
+device memory. The value stays on its device through decode and `resize`, and
+Rosetta reads it only through DLPack, so core never imports its array
+library. Where it goes next is the framework adapter's call, the same as
+moving data to the model's device always was. LeRobot's observations are
+numpy, so its adapter copies each contract-sized image to the host once per
+frame, and it has no way to declare a tensor. An adapter for a framework that
+takes device arrays would hand either one over where it is.
 
 ## One numeric key on the live path
 

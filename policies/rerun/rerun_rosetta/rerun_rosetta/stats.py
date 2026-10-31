@@ -150,12 +150,12 @@ def load_stats(dataset_entry: DatasetEntry, contract_path: str | Path) -> dict[s
         if category == "image":
             stats[key] = histogram_stats(sum(row.reshape(-1, LEVELS) for row in rows), frames)
         else:
-            stats[key] = value_stats(np.concatenate([row.reshape(-1, frame_layout[key].dim) for row in rows]))
+            stats[key] = value_stats(np.concatenate([row.reshape(-1, *frame_layout[key].shape) for row in rows]))
     return stats
 
 
 def value_stats(values: np.ndarray) -> dict[str, np.ndarray]:
-    """Stats of ``(count, width)`` values, per column."""
+    """Stats of ``(count, *shape)`` values, per element."""
     stats = {
         "count": np.array([len(values)]),
         "mean": values.mean(axis=0),
