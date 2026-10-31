@@ -174,9 +174,13 @@ class RosConnection:
             node = self._host.node
         except RuntimeError:
             node = None  # the spin thread died; there is nothing left to transition
-        if node is not None:
-            if node.is_active:
-                node.trigger_deactivate()
-            if node.is_configured:
-                node.trigger_cleanup()
-        self._host.stop()
+        # The host stops even if a transition raises, so a failed close still
+        # releases the spin thread and context as the error propagates.
+        try:
+            if node is not None:
+                if node.is_active:
+                    node.trigger_deactivate()
+                if node.is_configured:
+                    node.trigger_cleanup()
+        finally:
+            self._host.stop()

@@ -103,7 +103,9 @@ def test_observations_sample_and_missing_keys_are_left_out_on_request(connection
     assert connection.sample_frame()["observation.state"].tolist() == [0.0, 0.0]
 
     msg = JointState(name=["a", "b"], position=[0.25, -0.5])
-    assert _publish_until(publisher_node, JointState, "/connection_test/joint_states", msg, lambda: connection.warmed_up)
+    assert _publish_until(
+        publisher_node, JointState, "/connection_test/joint_states", msg, lambda: connection.warmed_up
+    )
     np.testing.assert_allclose(connection.sample_frame(fill_missing=False)["observation.state"], [0.25, -0.5])
 
 
@@ -128,8 +130,20 @@ def test_use_sim_time_runs_the_connection_on_sim_time(contract):
         conn.close()
 
 
-
 def test_close_is_idempotent(contract):
     conn = _connect(contract)
     conn.close()
     conn.close()
+
+
+def test_close_stops_the_host_when_a_transition_raises(contract, monkeypatch):
+    conn = _connect(contract)
+    node = conn._host.node
+
+    def refuse():
+        raise RuntimeError("transition refused")
+
+    monkeypatch.setattr(node, "trigger_deactivate", refuse)
+    with pytest.raises(RuntimeError, match="transition refused"):
+        conn.close()
+    assert conn._host.node is None
