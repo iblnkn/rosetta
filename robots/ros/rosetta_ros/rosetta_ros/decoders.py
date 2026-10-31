@@ -271,7 +271,7 @@ def decode_tensor(msg: Any, shape: tuple[int, ...], dtype: str) -> Any:
 
     Reads the message as torch_conversions does: one-lane DLPack dtypes,
     element strides (empty means row-major contiguous), and a byte offset into
-    ``data``, all bounds-checked. A host message is copied, cast to ``dtype``.
+    ``data``, all bounds-checked (by :func:`message_tensor`). A host message is copied, cast to ``dtype``.
     A message in device memory stays there, cast on the device only when its
     dtype differs.
     """
@@ -299,14 +299,7 @@ def decode_tensor(msg: Any, shape: tuple[int, ...], dtype: str) -> Any:
             "ExperimentalTensor message has no data. From a CUDA-backed publisher, the message was taken after "
             "its memory was recycled: keep the subscription's QoS history shallow and its callbacks fast."
         )
-    span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
-    byte_offset = int(msg.byte_offset)
-    if byte_offset + span * int(msg.dtype_bits) // 8 > len(msg.data):
-        raise ValueError(
-            f"ExperimentalTensor of shape {list(shape)} and strides {list(strides)} at byte offset "
-            f"{byte_offset} reads past its {len(msg.data)} bytes of data"
-        )
-    tensor = message_tensor(msg.data, msg_dtype, shape, strides, byte_offset)
+    tensor = message_tensor(msg.data, msg_dtype, shape, strides, int(msg.byte_offset))
     if isinstance(tensor, np.ndarray):
         return tensor.astype(dtype)  # a copy, so the frame doesn't hold the message's buffer
     if msg_dtype == dtype:

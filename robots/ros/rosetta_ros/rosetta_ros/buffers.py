@@ -72,6 +72,8 @@ DLPACK_DTYPES: dict[tuple[int, int], str] = {
 torch_conversions reads, with the names numpy and torch both use. numpy has no
 bfloat16, so a bfloat16 value can only be read in device memory."""
 
+_ITEMSIZE = {name: bits // 8 for (_, bits), name in DLPACK_DTYPES.items()}
+
 
 def message_bytes(data: Any) -> Any:
     """A message's ``uint8[]`` field as a flat uint8 array, without copying it.
@@ -87,19 +89,24 @@ def message_bytes(data: Any) -> Any:
 def message_tensor(data: Any, dtype: str, shape: tuple[int, ...], strides: tuple[int, ...], byte_offset: int) -> Any:
     """A message's ``uint8[]`` field viewed as a ``dtype`` array, without copying it.
 
-    ``strides`` are in elements and ``byte_offset`` is where the first element
-    starts, as in a DLTensor; the caller has checked they stay inside
-    ``data``. Host data becomes a read-only numpy view. Device data becomes a
-    torch tensor on its device.
+    ``strides`` are in elements and non-negative, and ``byte_offset`` is where
+    the first element starts, as in a DLTensor. Raises ValueError when they
+    reach past ``data``. Host data becomes a read-only numpy view. Device
+    data becomes a torch tensor on its device.
     """
+    # Elements from the first to the last one the view reaches.
+    span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
+    if byte_offset + span * _ITEMSIZE[dtype] > len(data):
+        raise ValueError(
+            f"A {dtype} tensor of shape {list(shape)} and strides {list(strides)} at byte offset "
+            f"{byte_offset} reads past its {len(data)} bytes of data"
+        )
     if not _on_host(data):
         return _device_tensor(data, dtype, shape, strides, byte_offset)
     if dtype == "bfloat16":
         raise ValueError("bfloat16 message data can only be read in device memory")
-    itemsize = np.dtype(dtype).itemsize
-    span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
     flat = np.frombuffer(data, dtype=dtype, count=span, offset=byte_offset)
-    return np.lib.stride_tricks.as_strided(flat, shape, tuple(s * itemsize for s in strides), writeable=False)
+    return np.lib.stride_tricks.as_strided(flat, shape, tuple(s * flat.itemsize for s in strides), writeable=False)
 
 
 def _on_host(data: Any) -> bool:

@@ -281,3 +281,16 @@ def test_cuda_bfloat16_tensor_matches_torch_conversions_after_the_cast():
     ours = decode_tensor(msg, (3, 4), "float32")
     theirs = torch_conversions.from_input_tensor_msg(msg).to(torch.float32)
     torch.testing.assert_close(ours, theirs, rtol=0, atol=0)
+
+
+class _DeviceData(bytes):
+    """Message data that says it lives in CUDA memory, for checks that run before any device import."""
+
+    backend_type = "cuda"
+
+
+def test_out_of_range_layouts_are_refused_before_touching_device_memory():
+    from rosetta_ros.buffers import message_tensor
+
+    with pytest.raises(ValueError, match="reads past its 24 bytes"):
+        message_tensor(_DeviceData(24), "float32", (2, 3), (3, 1), 4)
