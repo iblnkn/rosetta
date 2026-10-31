@@ -32,6 +32,8 @@ from ..contract.model import ResamplePolicy
 if TYPE_CHECKING:
     from ..contract.specs import StreamSpec
 
+__all__ = ["StreamBuffer", "num_ticks", "step_ns", "tick_ns"]
+
 # A buffered stamp this far in the future of the sampling clock is treated as
 # a clock reset (sim restart, bag-replay loop) rather than skew. Cross-host
 # NTP skew is normally well under 100 ms. Real resets jump backwards by whole

@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rosetta.contract.model import Channel
+from rosetta.contract.schema import Channel
 
 pa = pytest.importorskip("pyarrow")
 

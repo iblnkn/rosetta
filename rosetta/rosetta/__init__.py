@@ -45,8 +45,9 @@ each module's ``__all__``; every other module is internal:
   (robot interfaces as contract loading sees them), ``contract.naming``,
   ``contract.sidecar``
 - Frames: ``frames.codecs`` (decoding and encoding), ``frames.layout``,
-  ``frames.protocols``
-- Policies: ``policies``
+  ``frames.protocols``, ``frames.resample`` (fixed-rate resampling)
+- Data: ``data`` (dataset writer plugins)
+- Policies: ``policies`` (policy runner plugins)
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)
 
 Usage::

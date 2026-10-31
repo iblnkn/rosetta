@@ -98,6 +98,7 @@ PUBLIC_API = {
     "rosetta.frames.layout": {"FrameLayout", "KeyLayout", "SpecSlice"},
     "rosetta.contract.naming": {"IMAGE_KEY_PREFIX", "camera_name", "sanitize_field_name"},
     "rosetta.frames.protocols": {"Connection", "FrameIO", "RobotClock"},
+    "rosetta.frames.resample": {"StreamBuffer", "num_ticks", "step_ns", "tick_ns"},
     "rosetta.data": {"DATASET_WRITER_GROUP", "DatasetWriter", "available_dataset_writers", "load_dataset_writer"},
     "rosetta.policies": {
         "POLICY_RUNNER_GROUP",

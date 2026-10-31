@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from rosetta.contract.model import TeleopEventMap
+    from rosetta.contract.schema import TeleopEventMap
     from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 
     from .live import RosConnection
