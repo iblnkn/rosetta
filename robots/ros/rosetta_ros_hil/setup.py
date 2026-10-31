@@ -30,7 +30,7 @@ setup(
         (os.path.join("share", package_name, "params"), glob("params/*.yaml")),
         (os.path.join("share", package_name, "contracts"), glob("contracts/*.yaml")),
     ],
-    install_requires=["setuptools", "pyyaml", "rclpy"],
+    install_requires=["setuptools", "pyyaml", "rclpy", "rosetta", "rosetta_ros"],
     entry_points={
         "console_scripts": [
             "hil_manager_node = rosetta_ros_hil.hil_manager_node:main",
