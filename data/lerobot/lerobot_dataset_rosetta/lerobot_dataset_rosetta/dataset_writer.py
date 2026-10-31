@@ -45,7 +45,7 @@ def build_lerobot_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]
     overrides and custom-decoder streams work). Adds the
     is_first/is_last/is_terminal boundary markers.
     """
-    features = FrameLayout(specs).lerobot_features()
+    features = FrameLayout(specs).features()
     features["is_first"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_last"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_terminal"] = {"dtype": "bool", "shape": (1,), "names": None}

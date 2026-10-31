@@ -100,7 +100,7 @@ PUBLIC_API = {
         "encode_value",
         "host_only_reason",
     },
-    "rosetta.frames.layout": {"FrameLayout", "KeyLayout", "SpecSlice", "build_feature"},
+    "rosetta.frames.layout": {"FrameLayout", "KeyLayout", "SpecSlice"},
     "rosetta.contract.naming": {"IMAGE_KEY_PREFIX", "camera_name", "sanitize_field_name"},
     "rosetta.frames.protocols": {"Connection", "FrameIO", "RobotClock"},
     "rosetta.data": {"DATASET_WRITER_GROUP", "DatasetWriter", "available_dataset_writers", "load_dataset_writer"},

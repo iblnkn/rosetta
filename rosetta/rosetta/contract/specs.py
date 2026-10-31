@@ -650,7 +650,7 @@ def validate_key_groups(specs: Iterable[StreamSpec]) -> dict[str, list[StreamSpe
         # Rendered feature names must be unique per key: two sources can
         # legally flatten to the same name via different (namespace, name)
         # pairs (e.g. namespace None + "b.data" vs namespace "b" + "data"),
-        # which would silently collide in FrameLayout.lerobot_features().
+        # which would silently collide in FrameLayout.features().
         seen_names: dict[str, str] = {}
         for s in group:
             for name in s.namespaced_names:

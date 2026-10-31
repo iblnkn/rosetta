@@ -275,7 +275,7 @@ def test_features_match_layout(contract, dataset_name, catalog_url):
     from rosetta.frames.layout import FrameLayout
 
     frames = contract_dataset(catalog_url, dataset_name, contract)
-    assert frames.features == FrameLayout(list(iter_policy_specs(contract))).lerobot_features()
+    assert frames.features == FrameLayout(list(iter_policy_specs(contract))).features()
 
 
 def test_raw_only_recording_raises_with_the_fix(contract, catalog_url, tmp_path_factory):

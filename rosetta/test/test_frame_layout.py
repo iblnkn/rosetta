@@ -25,7 +25,7 @@ import pytest
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta.errors import ContractValidationError
-from rosetta.frames.layout import FrameLayout, build_feature
+from rosetta.frames.layout import FrameLayout, _feature
 
 
 def obs_spec(key, names, *, topic="/t", dtype="float32", namespace=None, **over):
@@ -127,7 +127,7 @@ def test_assemble_shapes_match_features():
         obs_spec("task2", [], topic="/str", dtype="string"),
     ]
     layout = FrameLayout(specs)
-    feats = layout.lerobot_features()
+    feats = layout.features()
     frame = layout.assemble([None] * len(specs))  # all missing -> zero-fill
 
     for key, feat in feats.items():
@@ -142,15 +142,15 @@ def test_assemble_shapes_match_features():
 
 
 def test_string_feature_is_a_lerobot_string():
-    feats = FrameLayout([obs_spec("task2", [], topic="/str", dtype="string")]).lerobot_features()
+    feats = FrameLayout([obs_spec("task2", [], topic="/str", dtype="string")]).features()
     assert feats["task2"] == {"dtype": "string", "shape": (1,), "names": None}
 
 
 def test_build_feature_rejects_numeric_specs():
     # A numeric key's feature must cover the whole concatenated vector, which
-    # one spec cannot know; only FrameLayout.lerobot_features() builds it.
-    with pytest.raises(ValueError, match="lerobot_features"):
-        build_feature(obs_spec("observation.state", ["a", "b"]))
+    # one spec cannot know; only FrameLayout.features() builds it.
+    with pytest.raises(ValueError, match="FrameLayout.features"):
+        _feature(obs_spec("observation.state", ["a", "b"]))
 
 
 def test_duplicate_rendered_names_rejected():
@@ -169,7 +169,7 @@ def test_namespaced_names_in_features():
         obs_spec("observation.state", ["pos"], topic="/arm/state", namespace="arm"),
         obs_spec("observation.state", ["pos"], topic="/base/state", namespace="base"),
     ]
-    feats = FrameLayout(specs).lerobot_features()
+    feats = FrameLayout(specs).features()
     assert feats["observation.state"]["names"] == ["arm.pos", "base.pos"]
 
 
@@ -369,7 +369,7 @@ def test_tensor_value_of_the_wrong_size_is_rejected():
 
 
 def test_tensor_feature_declares_its_shape():
-    feats = FrameLayout([tensor_spec("observation.features", (4, 2, 2))]).lerobot_features()
+    feats = FrameLayout([tensor_spec("observation.features", (4, 2, 2))]).features()
     assert feats["observation.features"] == {"dtype": "float32", "shape": (4, 2, 2), "names": None}
 
 
