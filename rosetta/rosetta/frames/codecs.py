@@ -40,7 +40,7 @@ for the annotated reference):
 
 A decoder registered ``device_capable=True`` handles messages whose data is in
 device memory, returning the value as a device array (see
-:mod:`rosetta.frames.arrays`) instead of copying it to the host. A robot
+:mod:`rosetta.arrays`) instead of copying it to the host. A robot
 interface delivers device memory only to streams :func:`host_only_reason`
 clears, so every other stream decodes as numpy, as always.
 """
@@ -53,9 +53,9 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
 
-from ..contract.operators import forward_pipeline, inverse_pipeline
-from ..contract.plugins import load_entry_point_plugins
-from .arrays import is_device_array
+from ..arrays import is_device_array
+from ..operators import forward_pipeline, inverse_pipeline
+from ..plugins import load_entry_point_plugins
 
 __all__ = [
     "CODEC_ENTRY_POINT_GROUP",
@@ -180,7 +180,7 @@ def register_decoder(
         stream silently zero-fills).
     device_capable: The decoder handles a message whose data is in device
         memory, returning the value on that device as a device array of the
-        stream's dtype (see :mod:`rosetta.frames.arrays`). It must produce the
+        stream's dtype (see :mod:`rosetta.arrays`). It must produce the
         same values it would on the host, and still return numpy for a
         message whose data is on the host.
 
@@ -265,7 +265,7 @@ def discover_codecs(robot_interface: str | None = None) -> None:
     ``encoder:`` path (per-spec, deterministic).
 
     Idempotent, hard-error semantics live in the shared loader (see
-    :func:`rosetta.contract.plugins.load_entry_point_plugins`): a plugin that
+    :func:`rosetta.plugins.load_entry_point_plugins`): a plugin that
     fails to import raises ContractValidationError, and that failure is
     latched, so every later call re-raises the same error until the process
     restarts with a fixed environment.
@@ -389,7 +389,7 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
 
     An image whose message data was in device memory stays there, as a device
     array, with its work queued on the device's legacy default stream (see
-    :mod:`rosetta.frames.arrays`).
+    :mod:`rosetta.arrays`).
 
     The codec (custom or registry) reduces the message to a numeric array via
     field selection. ``spec.operators`` is then applied front-to-back (the build /
@@ -467,7 +467,7 @@ class NonFiniteActionError(ValueError):
     """A policy command contained NaN/Inf and must never be encoded onto a channel.
 
     Subclasses ValueError to keep the runtime-backstop convention (see
-    rosetta.contract.errors) while letting the serve path catch exactly this
+    rosetta.errors) while letting the serve path catch exactly this
     condition (drop the frame, let the watchdog's ``channel.safety`` take
     over) without masking other encoder errors.
     """

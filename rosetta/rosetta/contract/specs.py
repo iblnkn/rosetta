@@ -34,6 +34,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from ..errors import ContractValidationError
 from ..frames.codecs import (
     decoder_requires_select,
     encoder_requires_select,
@@ -42,8 +43,7 @@ from ..frames.codecs import (
     has_encoder,
 )
 from ..frames.naming import IMAGE_KEY_PREFIX
-from .errors import ContractValidationError
-from .operators import Operator, OperatorContext, build_operator
+from ..operators import Operator, OperatorContext, build_operator
 from .schema import (
     EXTENDED_SECTIONS,
     SUPPORTED_NUMERIC_DTYPES,

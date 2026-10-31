@@ -35,8 +35,8 @@ from __future__ import annotations
 import importlib.metadata as _ilm
 import threading
 
-from ..contract.errors import ContractValidationError
-from ..contract.plugins import instantiate_entry_point
+from ..errors import ContractValidationError
+from ..plugins import instantiate_entry_point
 from .protocols import RobotInterface
 
 __all__ = ["ROBOT_INTERFACE_GROUP", "available_robot_interfaces", "load_robot_interface"]
@@ -73,7 +73,7 @@ def register_interface_codecs(required: str | None = None) -> None:
 
     Every interface is tried, so one broken package never blocks contracts for
     the others. Each failure is latched like a failed codec plugin (see
-    :func:`rosetta.contract.plugins.load_entry_point_plugins`): an interface that
+    :func:`rosetta.plugins.load_entry_point_plugins`): an interface that
     registered some codecs before failing would trip the duplicate-registration
     guard on a retry and hide the real error. It is raised, as
     ContractValidationError, only when ``required`` names that interface.

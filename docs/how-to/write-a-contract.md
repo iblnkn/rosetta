@@ -225,7 +225,7 @@ accepts the `qos`. It raises `ContractValidationError` naming the entry at
 fault, for example:
 
 ```text
-rosetta.contract.errors.ContractValidationError: actions.action.align: timeline 'header' is not provided by 'std_msgs/msg/Float64MultiArray'. This channel provides: ['receive']
+rosetta.errors.ContractValidationError: actions.action.align: timeline 'header' is not provided by 'std_msgs/msg/Float64MultiArray'. This channel provides: ['receive']
 ```
 
 Fix what it reports until it prints `OK`. Loading doesn't apply the LeRobot

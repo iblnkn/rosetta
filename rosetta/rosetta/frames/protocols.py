@@ -83,7 +83,7 @@ class FrameIO(Protocol):
         """Current observation frame: ``{contract_key: array | str}``.
 
         Values are numpy, or device arrays when the transport delivered them
-        in device memory (see :mod:`rosetta.frames.arrays`).
+        in device memory (see :mod:`rosetta.arrays`).
 
         A stream with no data yet zero-fills, so every key is present. With
         ``fill_missing=False`` a key with any such stream is left out instead,

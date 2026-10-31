@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
+from rosetta.errors import ContractValidationError
 
 CONTRACTS_DIR = Path(__file__).resolve().parent.parent / "contracts"
 

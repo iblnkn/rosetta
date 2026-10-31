@@ -21,9 +21,9 @@ import numpy as np
 import pytest
 from fake_interface import FakeVector
 
-from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
+from rosetta.errors import ContractValidationError
 from rosetta.frames.codecs import decode_value, encode_value
 from rosetta.frames.protocols import Connection, RobotClock
 from rosetta.robots import registry

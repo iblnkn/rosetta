@@ -17,8 +17,8 @@ The contract: one YAML file per robot declaring what to translate.
 
 - :mod:`.schema`: ``load_contract`` and the document types (from :mod:`.model`).
 - :mod:`.specs`: the runtime ``StreamSpec`` family and ``iter_*_specs``.
-- :mod:`.operators`, :mod:`.builtin_operators`: the ``apply`` pipeline.
-- :mod:`.plugins`: entry-point loader for operators and codecs.
+- :mod:`.builtin_operators`: the built-in ``apply`` operators, registered on
+  :mod:`rosetta.operators`.
 - :mod:`.sidecar`: finding a dataset's or checkpoint's contract file.
 
 With :mod:`rosetta.frames`, this is the only code the robot side

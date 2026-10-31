@@ -25,9 +25,9 @@ from typing import Any
 
 import numpy as np
 
-from ..frames.arrays import take
-from .errors import ContractValidationError
-from .operators import Invertibility, Operator, OperatorContext, register_operator
+from ..arrays import take
+from ..errors import ContractValidationError
+from ..operators import Invertibility, Operator, OperatorContext, register_operator
 
 
 @register_operator("rad2deg", kind=Invertibility.BIJECTIVE)

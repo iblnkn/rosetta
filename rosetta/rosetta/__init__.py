@@ -38,10 +38,10 @@ entry points: robot interfaces such as ``rosetta_ros`` (see
 Public API. Other packages import only these modules, and only the names in
 each module's ``__all__``; every other module is internal:
 
-- Contract: ``contract.schema``, ``contract.specs``, ``contract.errors``,
-  ``contract.sidecar``, ``contract.operators`` (operator plugins)
-- Frames: ``frames.arrays`` (device arrays),
-  ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
+- Base: ``errors``, ``plugins`` (entry-point loading), ``arrays`` (device
+  arrays), ``operators`` (operator plugins)
+- Contract: ``contract.schema``, ``contract.specs``, ``contract.sidecar``
+- Frames: ``frames.codecs`` (codecs and codec plugins), ``frames.layout``,
   ``frames.naming``, ``frames.protocols``
 - Policies: ``policies``
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)

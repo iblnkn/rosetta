@@ -21,8 +21,8 @@ import fake_codecs  # noqa: F401  (registered before any scratch_registries snap
 import pytest
 
 import rosetta.contract.schema  # noqa: F401  (registers the built-in operators, likewise)
-from rosetta.contract.operators import OPERATOR_REGISTRY
 from rosetta.frames import codecs
+from rosetta.operators import OPERATOR_REGISTRY
 from rosetta.robots import registry
 
 

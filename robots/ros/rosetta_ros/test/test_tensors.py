@@ -29,9 +29,9 @@ import numpy as np
 import pytest
 from codec_helpers import require_message
 
+from rosetta.arrays import to_host
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_observation_specs
-from rosetta.frames.arrays import to_host
 from rosetta.frames.codecs import host_only_reason
 from rosetta_ros import decoders
 from rosetta_ros.decoders import TensorDataMissing, decode_tensor

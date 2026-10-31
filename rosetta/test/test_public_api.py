@@ -24,8 +24,9 @@ import importlib
 import pytest
 
 PUBLIC_API = {
-    "rosetta.contract.errors": {"ContractValidationError"},
-    "rosetta.contract.operators": {
+    "rosetta.errors": {"ContractValidationError"},
+    "rosetta.plugins": {"instantiate_entry_point", "load_entry_point_plugins", "resolve_entry_point"},
+    "rosetta.operators": {
         "Invertibility",
         "OPERATOR_ENTRY_POINT_GROUP",
         "Operator",
@@ -71,7 +72,7 @@ PUBLIC_API = {
         "iter_teleop_feedback_specs",
         "iter_teleop_input_specs",
     },
-    "rosetta.frames.arrays": {"is_device_array", "take", "to_host"},
+    "rosetta.arrays": {"is_device_array", "take", "to_host"},
     "rosetta.frames.codecs": {
         "CODEC_ENTRY_POINT_GROUP",
         "DecoderFn",

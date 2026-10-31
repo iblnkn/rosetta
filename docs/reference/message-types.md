@@ -148,8 +148,8 @@ There are two ways to make Rosetta use a codec:
 ## Custom operators
 
 ```python
-from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.operators import Invertibility, Operator, register_operator
+from rosetta.errors import ContractValidationError
+from rosetta.operators import Invertibility, Operator, register_operator
 
 
 @register_operator("scale", kind=Invertibility.BIJECTIVE)

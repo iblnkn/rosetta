@@ -43,6 +43,7 @@ from typing import Any, Iterable, TypeVar
 
 import yaml
 
+from ..errors import ContractValidationError
 from ..frames.codecs import (
     SPECIAL_DTYPES,
     SUPPORTED_NUMERIC_DTYPES,
@@ -51,10 +52,10 @@ from ..frames.codecs import (
     load_codec,
 )
 from ..frames.naming import IMAGE_KEY_PREFIX
+from ..operators import lookup_operator
 from ..robots.protocols import RobotInterface
 from ..robots.registry import available_robot_interfaces, load_robot_interface
 from . import builtin_operators  # noqa: F401 - registers built-in operators
-from .errors import ContractValidationError
 
 # Re-exported: callers import the document model from here.
 from .model import (
@@ -77,7 +78,6 @@ from .model import (
     TeleopInputSource,
     owning_key,
 )
-from .operators import lookup_operator
 
 __all__ = [
     "FRAME_SECTIONS",

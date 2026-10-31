@@ -23,8 +23,8 @@ import warnings
 
 import pytest
 
-from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract, parse_contract
+from rosetta.errors import ContractValidationError
 
 pytestmark = pytest.mark.usefixtures("fake_interface")
 

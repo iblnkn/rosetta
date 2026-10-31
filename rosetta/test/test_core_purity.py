@@ -27,7 +27,7 @@ import sys
 import rosetta
 import rosetta.contract.schema
 import rosetta.contract.specs
-import rosetta.frames.arrays
+import rosetta.arrays
 import rosetta.frames.codecs
 import rosetta.frames.layout
 import rosetta.frames.naming

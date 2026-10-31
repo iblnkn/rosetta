@@ -25,8 +25,6 @@ so they hold for any decodable type.
 
 import pytest
 
-from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.operators import Invertibility, Operator, register_operator
 from rosetta.contract.schema import (
     Align,
     Channel,
@@ -46,6 +44,8 @@ from rosetta.contract.specs import (
     iter_teleop_feedback_specs,
     iter_teleop_input_specs,
 )
+from rosetta.errors import ContractValidationError
+from rosetta.operators import Invertibility, Operator, register_operator
 
 pytestmark = pytest.mark.usefixtures("fake_interface", "scratch_registries")
 

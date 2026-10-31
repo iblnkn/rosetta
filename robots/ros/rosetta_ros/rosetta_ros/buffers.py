@@ -20,7 +20,7 @@ when the subscription accepts a buffer backend (rclpy's
 ``acceptable_buffer_backends``) and the publisher wrote it there. Rosetta
 imports such a field without copying it: :func:`message_bytes` wraps it in a
 DLPack view and imports that as a torch tensor, a device array (see
-:mod:`rosetta.frames.arrays`) any other library can take through DLPack.
+:mod:`rosetta.arrays`) any other library can take through DLPack.
 
 Only the ``cuda`` backend is supported, through ``cuda_buffer`` and
 ``torch_conversions`` from ros2/rosidl_buffer_backends, which need torch.

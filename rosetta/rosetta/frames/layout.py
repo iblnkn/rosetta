@@ -58,7 +58,7 @@ to an int dtype here would launder a policy's NaN into INT_MIN, finite garbage
 that sails through the gate onto hardware.
 
 A value the transport delivered in device memory stays a device array (see
-:mod:`.arrays`) when it alone fills its key. Its decoder produced the key's
+:mod:`rosetta.arrays`) when it alone fills its key. Its decoder produced the key's
 dtype, which assembly checks rather than casts. A key that concatenates
 several specs is numpy, as are missing values. No ROS dependency.
 """
@@ -70,13 +70,13 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from ..contract.errors import ContractValidationError
+from ..arrays import is_device_array, to_host
 from ..contract.specs import (
     ActionStreamSpec,
     ObservationStreamSpec,
     StreamSpec,
 )
-from .arrays import is_device_array, to_host
+from ..errors import ContractValidationError
 from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
 __all__ = [
@@ -337,7 +337,7 @@ class FrameLayout:
         order. Missing values zero-fill; with ``fill_missing=False`` a key with
         any missing value is left out. Returns {contract_key: array | str}:
         numpy, or a device array for a single-spec key whose value is one (see
-        :mod:`.arrays`).
+        :mod:`rosetta.arrays`).
         """
         if len(values) != len(self.specs):
             raise ValueError(f"assemble() got {len(values)} values for {len(self.specs)} specs")

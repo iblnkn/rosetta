@@ -70,8 +70,8 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
 
+from rosetta.arrays import take
 from rosetta.contract.specs import DECODED_IMAGE_CHANNELS
-from rosetta.frames.arrays import take
 from rosetta.frames.codecs import register_decoder
 from rosetta_ros.buffers import DLPACK_DTYPES, message_bytes, message_tensor
 from rosetta_ros.field_access import (

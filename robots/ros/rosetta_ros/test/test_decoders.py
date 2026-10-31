@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 from codec_helpers import load_specs, require_message
 
-from rosetta.contract.errors import ContractValidationError
+from rosetta.errors import ContractValidationError
 from rosetta.frames.codecs import decode_value
 
 
