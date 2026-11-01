@@ -167,6 +167,10 @@ class ContractFrames(torch.utils.data.IterableDataset):
         self._windowed = {
             key: (FrameLayout([spec for _, spec in group]), [fk for fk, _ in group]) for key, group in windowed.items()
         }
+        # The other keys assemble once through a layout without the windowed
+        # specs, so a windowed key is never zero-filled just to be replaced.
+        flat = [(field_key(i), spec) for i, spec in enumerate(self._query.specs) if spec.key not in self._windowed]
+        self._flat = (FrameLayout([spec for _, spec in flat]), [fk for fk, _ in flat]) if flat else None
 
     @property
     def features(self) -> dict[str, Any]:
@@ -195,9 +199,10 @@ class ContractFrames(torch.utils.data.IterableDataset):
         return state
 
     def _assemble(self, sample: dict[str, Any]) -> dict[str, Any]:
-        frame = self._layout.assemble(
-            [None if spec.key in self._windowed else sample.get(field_key(i)) for i, spec in enumerate(self._query.specs)]
-        )
+        frame: dict[str, Any] = {}
+        if self._flat is not None:
+            layout, keys = self._flat
+            frame.update(layout.assemble([sample.get(k) for k in keys]))
         for key, (layout, keys) in self._windowed.items():
             start, end = self._query.windows[key]
             per_offset = []
@@ -205,7 +210,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
                 values = [None if sample.get(k) is None else sample[k][offset] for k in keys]
                 per_offset.append(layout.assemble(values)[key])
             frame[key] = np.stack(per_offset)
-        return frame
+        return {key: frame[key] for key in self._layout.keys}
 
 
 def _check_manifest(
