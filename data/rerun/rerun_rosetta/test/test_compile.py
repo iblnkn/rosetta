@@ -28,6 +28,7 @@ import pytest
 pytest.importorskip("rerun")
 
 from rerun_rosetta import RecordingLayout, compile_contract, load_layout
+from rerun_rosetta.query import POSITION_FIELD
 
 from rosetta.contract.schema import load_contract
 
@@ -183,3 +184,34 @@ def test_load_layout_names_a_missing_data_member(monkeypatch):
     monkeypatch.setattr(layout_mod, "entry_points", lambda group: [ep])
     with pytest.raises(TypeError, match=r"does not implement RecordingLayout \(missing or non-callable: index\)"):
         load_layout("bad")
+
+
+ACTIONS_ONLY = textwrap.dedent(
+    """
+    robot_type: compile_test
+    robot_interface: ros2
+    fps: 15
+
+    actions:
+      action:
+        channel: {topic: /cmd, type: sensor_msgs/msg/JointState,
+                  qos: {reliability: best_effort, history: keep_last, depth: 10}}
+        align: {strategy: hold, timeline: receive}
+        select: [position.a]
+    """
+)
+
+
+def test_positions_without_observation_streams_ride_on_another_column(tmp_path):
+    path = tmp_path / "contract.yaml"
+    path.write_text(ACTIONS_ONLY)
+    q = compile_contract(load_contract(path), [CMD], FakeLayout(), positions=True)
+    assert q.required == ()
+    assert q.fields[POSITION_FIELD].path == CMD
+
+
+def test_positions_with_no_column_at_all_say_so(tmp_path):
+    path = tmp_path / "contract.yaml"
+    path.write_text(ACTIONS_ONLY)
+    with pytest.raises(ValueError, match="none of the contract's streams"):
+        compile_contract(load_contract(path), [], FakeLayout(), positions=True)

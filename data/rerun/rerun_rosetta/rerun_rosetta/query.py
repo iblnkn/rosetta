@@ -171,9 +171,15 @@ def compile_contract(
         )
 
     if positions:
-        # On a required column, so every sample has it. A non-image one keeps
-        # the extra fetch small.
-        by_size = sorted(required, key=lambda k: specs[int(k[1:])].is_image)
+        # On a required column, so every sample has it, or on any column when
+        # the contract has no observation stream. A non-image one keeps the
+        # extra fetch small.
+        candidates = required or list(fields)
+        if not candidates:
+            raise ValueError(
+                "The recordings hold none of the contract's streams, so there is no column to number samples on."
+            )
+        by_size = sorted(candidates, key=lambda k: specs[int(k[1:])].is_image)
         fields[POSITION_FIELD] = Field(path=fields[by_size[0]].path, decode=PositionDecoder())
 
     return CompiledQuery(
