@@ -251,7 +251,9 @@ def test_action_chunks_match_porter(bag_dir, dataset_name, contract, catalog_url
     for i, sample in enumerate(frames):
         assert sample["action"].shape == (chunk, 2)
         for p in range(chunk):
-            np.testing.assert_array_equal(sample["action"][p], expected[i + p]["action"], err_msg=f"sample {i} offset {p}")
+            np.testing.assert_array_equal(
+                sample["action"][p], expected[i + p]["action"], err_msg=f"sample {i} offset {p}"
+            )
         np.testing.assert_array_equal(sample["observation.images.cam"], expected[i]["observation.images.cam"])
 
 
@@ -268,6 +270,7 @@ def test_shuffle_is_a_permutation(dataset_name, contract, catalog_url):
 
 def test_features_match_layout(contract, dataset_name, catalog_url):
     from rerun_rosetta import contract_dataset
+
     from rosetta.contract.specs import iter_policy_specs
     from rosetta.frames.layout import FrameLayout
 
@@ -292,7 +295,6 @@ def _as_list(samples):
 def test_spawned_workers_yield_the_same_samples(dataset_name, contract, catalog_url):
     """``num_workers > 0`` needs the dataset to pickle into spawned workers."""
     import torch.utils.data
-
     from rerun_rosetta import contract_dataset
 
     key = lambda f: (f["observation.state"].tobytes(), f["action"].tobytes(), f["observation.images.cam"].tobytes())  # noqa: E731
@@ -434,7 +436,6 @@ def _epoch_ticks(frames, loader, epoch: int) -> list[tuple[int, int]]:
 
 def test_persistent_workers_reshuffle_each_epoch(ticking_dataset, contract, catalog_url):
     import torch.utils.data
-
     from rerun_rosetta import contract_dataset
 
     def loader(frames, persistent):

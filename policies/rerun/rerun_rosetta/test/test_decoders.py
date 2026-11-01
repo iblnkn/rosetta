@@ -26,7 +26,6 @@ import pytest
 pytest.importorskip("rerun")
 
 from rerun.experimental.dataloader import DecodeRequest, FieldBatch
-
 from rerun_rosetta import decoders
 
 

@@ -19,7 +19,7 @@ import pytest
 
 pytest.importorskip("rerun")
 
-from rerun_rosetta.stats import QUANTILES, histogram_stats, quantile_name, value_stats  # noqa: E402
+from rerun_rosetta.stats import QUANTILES, histogram_stats, quantile_name, value_stats
 
 
 def _numpy_stats(values):

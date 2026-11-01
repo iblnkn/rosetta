@@ -43,7 +43,6 @@ import numpy as np
 import torch
 from rerun.catalog import CatalogClient, OnDuplicateSegmentLayer
 from rerun.experimental.dataloader import BlockShuffle, SampleShuffle
-
 from rerun_rosetta import contract_dataset, load_stats, write_stats_layer
 
 
@@ -53,9 +52,8 @@ def lerobot_stats(stats: dict, image_keys: set[str]) -> dict:
     for key, key_stats in stats.items():
         out[key] = {}
         for name, value in key_stats.items():
-            if key in image_keys and name != "count":
-                value = value.reshape(-1, 1, 1) / 255.0
-            out[key][name] = torch.from_numpy(np.asarray(value, dtype=np.float64 if name == "count" else np.float32))
+            scaled = value.reshape(-1, 1, 1) / 255.0 if key in image_keys and name != "count" else value
+            out[key][name] = torch.from_numpy(np.asarray(scaled, dtype=np.float64 if name == "count" else np.float32))
     return out
 
 

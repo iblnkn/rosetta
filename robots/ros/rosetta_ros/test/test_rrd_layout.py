@@ -78,7 +78,7 @@ def test_sequence_of_structs():
 def test_unknown_field_raises():
     msg = _view({"data": "x"})
     with pytest.raises(AttributeError, match="no field 'nope'"):
-        msg.nope
+        _ = msg.nope
 
 
 def test_non_struct_rejected():

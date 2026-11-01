@@ -27,8 +27,9 @@ import pytest
 
 pytest.importorskip("rerun")
 
-from rerun_rosetta import RecordingLayout, compile_contract, load_layout  # noqa: E402
-from rosetta.contract.schema import load_contract  # noqa: E402
+from rerun_rosetta import RecordingLayout, compile_contract, load_layout
+
+from rosetta.contract.schema import load_contract
 
 BASE = textwrap.dedent(
     """

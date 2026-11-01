@@ -82,7 +82,7 @@ class MessageView:
     doesn't have raises ``AttributeError``, as it would on the real message.
     """
 
-    __slots__ = ("_row", "_fields")
+    __slots__ = ("_fields", "_row")
 
     def __init__(self, row: pa.StructScalar) -> None:
         if not pa.types.is_struct(row.type):

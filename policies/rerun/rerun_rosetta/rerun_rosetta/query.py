@@ -105,7 +105,9 @@ def compile_contract(
         if start > end:
             raise ValueError(f"windows[{key!r}]: start {start} > end {end}")
 
-    unsupported = sorted(f"{s.key} ({s.source.align.strategy})" for s in specs if s.source.align.strategy != ResamplePolicy.HOLD)
+    unsupported = sorted(
+        f"{s.key} ({s.source.align.strategy})" for s in specs if s.source.align.strategy != ResamplePolicy.HOLD
+    )
     if unsupported:
         raise ValueError(
             f"Rerun-backed training supports only 'hold' alignment; streams using asof/drop: {unsupported}. "
