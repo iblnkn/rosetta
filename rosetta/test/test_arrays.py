@@ -196,7 +196,7 @@ def test_device_value_of_the_wrong_size_is_refused_at_decode(decoders):
 
 def test_device_message_on_a_host_only_operator_is_refused(decoders):
     spec = _spec(ops=(("_test_host_only", None), *_RESIZE))
-    with pytest.raises(ValueError, match="_test_host_only run on numpy only"):
+    with pytest.raises(ValueError, match="_test_host_only run on the host"):
         decode_value(FakeDeviceMemory(_image()), spec)
 
 

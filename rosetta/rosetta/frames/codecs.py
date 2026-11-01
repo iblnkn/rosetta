@@ -439,12 +439,11 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
                 f"{type(val).__name__}, not an array; operators transform numeric arrays only"
             )
         if on_device:
-            host_ops = [op.name for op in operators if not op.device_capable]
-            if host_ops:
+            reason = host_only_reason(spec)
+            if reason is not None:
                 raise ValueError(
-                    f"stream '{spec.key}' decoded to device memory, but operator(s) "
-                    f"{', '.join(host_ops)} run on numpy only; the robot interface must not "
-                    f"request device memory for this stream (see host_only_reason)"
+                    f"stream '{spec.key}' decoded to device memory, but {reason}; the robot "
+                    f"interface must not request device memory for this stream (see host_only_reason)"
                 )
         val = forward_pipeline(val, operators)
 
