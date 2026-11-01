@@ -29,6 +29,7 @@ import signal
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 
 import pytest
@@ -87,7 +88,7 @@ def spin(monkeypatch):
     # The session context belongs to conftest: spin_lifecycle_node must not
     # init or shut it down here.
     monkeypatch.setattr(node_utils.rclpy, "init", lambda **kwargs: None)
-    monkeypatch.setattr(node_utils.rclpy, "try_shutdown", lambda: None)
+    monkeypatch.setattr(node_utils.rclpy, "try_shutdown", lambda **kwargs: None)
     monkeypatch.setattr(node_utils, "EventsExecutor", _FakeExecutor)
     monkeypatch.setattr(_FakeExecutor, "spins", 0)
     saved = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
@@ -178,16 +179,32 @@ _CHILD = textwrap.dedent(
 
 
 def _run_child(signals: list[tuple[int, float]]) -> tuple[int, str]:
+    # Read on a thread, with deadlines: the middleware can print to stdout
+    # before "spinning" (Fast DDS logs a shared-memory port it cannot lock,
+    # say), and a child that never starts must fail the test, not hang it.
     proc = subprocess.Popen([sys.executable, "-c", _CHILD], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines, spinning = [], threading.Event()
+
+    def read():
+        for line in proc.stdout:
+            lines.append(line)
+            if line.strip() == "spinning":
+                spinning.set()
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
     try:
-        assert proc.stdout.readline().strip() == "spinning"
+        assert spinning.wait(30), "".join(lines)
         for signum, gap in signals:
             proc.send_signal(signum)
             time.sleep(gap)
-        out, _ = proc.communicate(timeout=20)
+        proc.wait(timeout=20)
     finally:
         proc.kill()
-    return proc.returncode, out
+        proc.wait()
+    reader.join(5)
+    out = "".join(lines)
+    return proc.returncode, out[out.index("spinning\n") + len("spinning\n") :]
 
 
 @pytest.mark.parametrize(

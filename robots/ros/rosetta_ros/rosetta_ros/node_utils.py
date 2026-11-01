@@ -257,11 +257,15 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
         executor; the traceback is logged before the shutdown transition runs.
 
     """
-    stop = threading.Event()
+    # A plain list, not a threading.Event: Python runs handlers on the main
+    # thread between bytecodes, including inside a handler already running,
+    # so a burst of signals nests Event.set() (a lock and a notify) inside
+    # itself until the nesting raises. A list.append cannot be interrupted.
+    stop = []
     previous = {}
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
-            previous[signum] = signal.signal(signum, lambda *_: stop.set())
+            previous[signum] = signal.signal(signum, lambda *_: stop.append(True))
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     exit_code = 0
     try:
@@ -272,7 +276,7 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
             # spin_once loop, not spin(): without rclpy's signal handlers a
             # blocking rcl_wait never wakes on a signal, so return to Python
             # regularly to see the flag.
-            while not stop.is_set():
+            while not stop:
                 executor.spin_once(timeout_sec=0.1)
         except ExternalShutdownException:
             pass
@@ -285,7 +289,10 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
             node.get_logger().warning(f"Shutdown transition not driven: {e}")
         node.destroy_node()
     finally:
-        rclpy.try_shutdown()
+        # uninstall_handlers=False: rclpy installed none, and its uninstall
+        # reads each old handler by setting SIG_DFL and putting it back, so a
+        # signal landing in between would kill the process (exit -2).
+        rclpy.try_shutdown(uninstall_handlers=False)
         for signum, handler in previous.items():
             # None: a handler installed outside Python, which signal() cannot reinstall.
             default = handler in (signal.default_int_handler, signal.SIG_DFL, None)
