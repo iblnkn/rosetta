@@ -42,6 +42,7 @@ setup(
         "numpy",
         "rosetta",  # contract/specs/frames machinery; parity comes from reusing it
         "rerun-sdk[dataloader,catalog]>=0.41",
+        "torch",  # ContractFrames is a torch IterableDataset
     ],
     extras_require={"test": ["pytest"]},
     zip_safe=True,

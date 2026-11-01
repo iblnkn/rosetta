@@ -12,6 +12,7 @@ preview = ["pixi-build"]
 ros-lyrical-lerobot-robot-rosetta = { path = "policies/lerobot/lerobot_robot_rosetta/package.xml" }
 ros-lyrical-lerobot-rosetta = { path = "policies/lerobot/lerobot_rosetta/package.xml" }
 ros-lyrical-lerobot-teleoperator-rosetta = { path = "policies/lerobot/lerobot_teleoperator_rosetta/package.xml" }
+ros-lyrical-rerun-rosetta = { path = "policies/rerun/rerun_rosetta/package.xml" }
 ros-lyrical-rosetta = { path = "rosetta/package.xml" }
 ros-lyrical-rosetta-interfaces = { path = "robots/ros/rosetta_interfaces/package.xml" }
 ros-lyrical-rosetta-ros = { path = "robots/ros/rosetta_ros/package.xml" }
@@ -92,6 +93,11 @@ lerobot = { version = "==0.6.1", extras = ["dataset", "async", "training", "peft
 convert-bags = { cmd = "rosetta_port", description = "Convert bags to a LeRobot dataset (see rosetta_port --help)" }
 train = { cmd = "lerobot-train", description = "Train a LeRobot policy (see lerobot-train --help)" }
 
+# Rerun, the catalog server and dataloader rerun_rosetta reads from. It's
+# pip-only, so no package.xml key covers it.
+[feature.rerun.pypi-dependencies]
+rerun-sdk = { version = ">=0.41", extras = ["dataloader", "catalog"] }
+
 # The Sphinx site in docs/. No ROS needed.
 [feature.docs.dependencies]
 python = "3.12.*"
@@ -109,5 +115,5 @@ docs-serve = { cmd = "sphinx-autobuild --open-browser docs build/docs", descript
 docs-linkcheck = { cmd = "sphinx-build -b linkcheck docs build/docs-linkcheck", description = "Check the docs' external links" }
 
 [environments]
-default = { features = ["lerobot"] }
+default = { features = ["lerobot", "rerun"] }
 docs = { features = ["docs"], no-default-feature = true }

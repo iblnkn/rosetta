@@ -735,6 +735,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/a7/b2/fabede9fafd976b991e9f1b9c8c873ed86f202889b864756f240ce6dd855/frozenlist-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a8/2f/7b57e29836ea8714f81e9898409196f47d772d5ddedddf1592eadb8ab743/nvidia_cufft-12.0.0.61-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/a8/81/e69008e3479f4d0134875bc4ae39503bedcd55ca2597e71392c963c651b4/datafusion-54.0.0-cp310-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a9/4d/041d9458a645fee4fce4d642a89d27271a3cfcd91095104f6dde44da70bf/regex-2026.9.29-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b0/b4/878fefaad5b2bcc6fcf8d474a25e3e3774bc5133e4b58adff4d0bca238bc/nvidia_nccl_cu13-2.28.9-py3-none-manylinux_2_18_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/b2/88/cabf98d017d7b940720e514e5f8ee02e3e6f7495caf93c30735a38387ec4/sentry_sdk-2.73.0-py3-none-any.whl
@@ -754,6 +755,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/e6/ab/fb21f4c939bb440104cc2b396d3be1d9b7a9fd3c6c2a53d98c45b3d7c954/fsspec-2026.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e7/44/423ac00af4dd95a5aeb27207e2c0d9b7118702149bf4704c3ddb55bb7429/nvidia_cublas-13.1.0.3-py3-none-manylinux_2_27_x86_64.whl
+      - pypi: https://files.pythonhosted.org/packages/f1/b4/5617efc71fb08478abf87523215e4519746a85fab79bfb4e980bb4ef6b6c/rerun_sdk-0.41.0-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/1e/1e8ecc05ef034e9a95c18ed32d2ec07905a7cd2ca611a9d88e25ee1f4850/hf_xet-1.8.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/f8/62/d9ba6323b9202dd2fe166beab8a86d29465c41a0288cbe229fac60c1ab8d/jsonlines-4.0.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fa/18/623c77619c31d62efd55302939756966f3ecc8d724a14dab2b75f1508850/nvidia_cusparse-12.6.3.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
@@ -1464,6 +1466,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/b6/ea/91fdf7c2b8bbd49cde056f00a9df6773532987e1c00fe2830b895af95c7e/protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/b7/dc/6bb80850e0b7edd6588d560758f17e0550893a1feaf436807d64d2da040f/nvidia_cuda_nvrtc-13.0.88-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c6/5e/dbb9e6e3e5006d34f295d7ac73f1302c8f2df140666402a06e6c55028edb/datafusion-54.0.0-cp310-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/c7/86/7cd7c66cb9cec6be330fff36db5bd0eef386d80c031b581ec81be1d4b26c/torch-2.11.0-cp314-cp314-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/c8/c3/b30c9e935fc01e3da443ec0116ed1b2a009bb867f5324d3f2d7e533e776b/nvidia_cusolver-12.0.4.66-py3-none-manylinux_2_27_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/ca/05/d01ef80a7a3a12b2f8bbf16daba1e17c98a2f039cbc8e2f77a2c5a63d382/pandas-2.3.3-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl
@@ -1478,6 +1481,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/e6/ab/fb21f4c939bb440104cc2b396d3be1d9b7a9fd3c6c2a53d98c45b3d7c954/fsspec-2026.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/e6/f0/d71d1dd45caa358a39c6898dcc9f1bd22a9f22b92376b967835c047b50bc/cuda_bindings-13.4.4-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/eb/c0/e42cfb87a01aed43e4c573b597aa782af7e10b8f726ac255291fe08fe621/rerun_sdk-0.41.0-cp311-abi3-manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f1/74/70ac8430e28f21e442c7bcb964eb46c4363f6881ade4aa0e978bfd8d503a/propcache-0.5.4-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f1/84/26025437c1e6b61a707442184fa0c03d083b661adf3a3eecfd6d21677740/nvidia_cudnn_cu13-9.19.0.56-py3-none-manylinux_2_27_aarch64.whl
       - pypi: https://files.pythonhosted.org/packages/f2/b5/469b69dadb2c413706f16e0c3e7a2749cc70abaab10d718873603bec29b2/grpcio-1.85.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
@@ -2116,6 +2120,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/65/99/00f3196036501b53032c4b1ab8337a0b978dee832ed276dae3815df4e8b5/datasets-4.8.5-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/65/f3/107a22063bf27bdccf2024833d3445f4eea42b2e598abfbd46f6a63b6cb0/typing_inspect-0.9.0-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/66/e5/5e4dbd42ce9a2affb3be90d9ab17cebde1a6f28b0d9fb4b83d612d5c8e42/datafusion-54.0.0-cp310-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6b/50/2a923c4dc02522ff9567f07c67ed1deca6d5fa9474f4708168b8088dfa37/gitpython-3.2.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6e/bb/dda344765ffd3430afe1a1c66c866a57fae67786537d4f14607df6505ac1/yarl-1.25.1-cp314-cp314-macosx_11_0_arm64.whl
@@ -2149,6 +2154,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c4/b7/8d6ee76fca0cfefec01402f33c11766455da2b8460cb9191cdc34f8defc0/torchcodec-0.11.1-cp314-cp314-macosx_12_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/c8/ea/6f587cfa43ac41c793bd1b30d2fed4ffbde2dfbff013059e898292fad323/xxhash-4.0.2-cp314-cp314-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/cc/1f/e6c5d75dd2fc55b87f3676047698aa1a2b8cad2af55e7682b10070c93552/rerun_sdk-0.41.0-cp311-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/ce/b5/05b8ac39a76ff4bca89f42a4c2471560c71f894ff6e4bc16158c951874e3/aiohttp-3.14.5-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/d4/f2/ef25e2085e92dcaeaa675331e443923aed2006f6fe2d984e15d8b8d40766/hf_xet-1.8.0-cp38-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/d6/5b/545e9267a1cc080c8a1be2746113a063e34bcdd0f5173fd665a5c13cb234/num2words-0.5.14-py3-none-any.whl
@@ -33745,6 +33751,16 @@ packages:
   - mypy-extensions>=0.3.0
   - typing-extensions>=3.7.4
   - typing>=3.7.4 ; python_full_version < '3.5'
+- pypi: https://files.pythonhosted.org/packages/66/e5/5e4dbd42ce9a2affb3be90d9ab17cebde1a6f28b0d9fb4b83d612d5c8e42/datafusion-54.0.0-cp310-abi3-macosx_11_0_arm64.whl
+  name: datafusion
+  version: 54.0.0
+  sha256: 2a3bf43185c7e43e25242e5fb17b6a11b86bf976434c0bc493fdedbd9a080969
+  requires_dist:
+  - cloudpickle>=2.0
+  - pyarrow>=16.0.0 ; python_full_version < '3.14'
+  - pyarrow>=22.0.0 ; python_full_version >= '3.14'
+  - typing-extensions ; python_full_version < '3.13'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl
   name: typing-inspection
   version: 0.4.4
@@ -34442,6 +34458,16 @@ packages:
   version: 13.0.85
   sha256: cb7780edb6b14107373c835bf8b72e7a178bac7367e23da7acb108f973f157a6
   requires_python: '>=3'
+- pypi: https://files.pythonhosted.org/packages/a8/81/e69008e3479f4d0134875bc4ae39503bedcd55ca2597e71392c963c651b4/datafusion-54.0.0-cp310-abi3-manylinux_2_28_x86_64.whl
+  name: datafusion
+  version: 54.0.0
+  sha256: 3bcd4d213fa74710e75e6e182cc468c2bdbc5ffc74a08c8155d414fbbfa1b3f6
+  requires_dist:
+  - cloudpickle>=2.0
+  - pyarrow>=16.0.0 ; python_full_version < '3.14'
+  - pyarrow>=22.0.0 ; python_full_version >= '3.14'
+  - typing-extensions ; python_full_version < '3.13'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/a9/4d/041d9458a645fee4fce4d642a89d27271a3cfcd91095104f6dde44da70bf/regex-2026.9.29-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   name: regex
   version: 2026.9.29
@@ -34705,6 +34731,16 @@ packages:
   - pytest ; extra == 'dev'
   - pillow ; extra == 'dev'
   requires_python: '>=3.10'
+- pypi: https://files.pythonhosted.org/packages/c6/5e/dbb9e6e3e5006d34f295d7ac73f1302c8f2df140666402a06e6c55028edb/datafusion-54.0.0-cp310-abi3-manylinux_2_28_aarch64.whl
+  name: datafusion
+  version: 54.0.0
+  sha256: 9432bf162381e9282cbc74915b8b773895de18be836f7e3f6d0de4d981f24630
+  requires_dist:
+  - cloudpickle>=2.0
+  - pyarrow>=16.0.0 ; python_full_version < '3.14'
+  - pyarrow>=22.0.0 ; python_full_version >= '3.14'
+  - typing-extensions ; python_full_version < '3.13'
+  requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/c7/86/7cd7c66cb9cec6be330fff36db5bd0eef386d80c031b581ec81be1d4b26c/torch-2.11.0-cp314-cp314-manylinux_2_28_aarch64.whl
   name: torch
   version: 2.11.0
@@ -34849,6 +34885,43 @@ packages:
   name: websockets
   version: '17.4'
   sha256: 9ae1429ee9e52b139167ed0169757806a27ed7307e942e8c62037a9184e9843b
+  requires_python: '>=3.11'
+- pypi: https://files.pythonhosted.org/packages/cc/1f/e6c5d75dd2fc55b87f3676047698aa1a2b8cad2af55e7682b10070c93552/rerun_sdk-0.41.0-cp311-abi3-macosx_11_0_arm64.whl
+  name: rerun-sdk
+  version: 0.41.0
+  sha256: d7fae343dd4c3b292e1bc243134c7637e03333a86a1d989bf1a32ff11c63e09d
+  requires_dist:
+  - attrs>=23.1.0
+  - numpy>=2
+  - pillow>=8.0.0
+  - psutil>=7.0
+  - pyarrow>=18.0.0
+  - typing-extensions>=4.5
+  - datafusion==54.0.0 ; extra == 'all'
+  - pandas>=2 ; extra == 'all'
+  - rerun-notebook==0.41.0 ; extra == 'all'
+  - datafusion==54.0.0 ; extra == 'catalog'
+  - pandas>=2 ; extra == 'catalog'
+  - torch>=2.5 ; extra == 'dataloader'
+  - torchvision ; extra == 'dataloader'
+  - av ; extra == 'dataloader'
+  - pillow>=8.0.0 ; extra == 'dataloader'
+  - rerun-notebook==0.41.0 ; extra == 'notebook'
+  - av>=14.2.0 ; extra == 'tests'
+  - inline-snapshot==0.31.1 ; extra == 'tests'
+  - opencv-python>4.6 ; extra == 'tests'
+  - pandas>=2 ; extra == 'tests'
+  - polars==1.36.1 ; extra == 'tests'
+  - pytest==9.0.3 ; extra == 'tests'
+  - semver>=3.0,<3.1 ; extra == 'tests'
+  - syrupy==5.0.0 ; extra == 'tests'
+  - tomli==2.0.1 ; extra == 'tests'
+  - torch>=2.5 ; extra == 'tests'
+  - torchvision ; extra == 'tests'
+  - datafusion==54.0.0 ; extra == 'tests'
+  - opentelemetry-api ; extra == 'tracing'
+  - opentelemetry-sdk ; extra == 'tracing'
+  - opentelemetry-exporter-otlp-proto-grpc ; extra == 'tracing'
   requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/ce/b5/05b8ac39a76ff4bca89f42a4c2471560c71f894ff6e4bc16158c951874e3/aiohttp-3.14.5-cp314-cp314-macosx_11_0_arm64.whl
   name: aiohttp
@@ -35195,6 +35268,43 @@ packages:
   version: 3.5.2
   sha256: ed2a239c0ea213acc1908150a3037257083c7c083128f1a4cec2ec4b97dca491
   requires_python: '>=3.7'
+- pypi: https://files.pythonhosted.org/packages/eb/c0/e42cfb87a01aed43e4c573b597aa782af7e10b8f726ac255291fe08fe621/rerun_sdk-0.41.0-cp311-abi3-manylinux_2_28_aarch64.whl
+  name: rerun-sdk
+  version: 0.41.0
+  sha256: 92e57482556ec0897299cc14c71caf67e96539ef183711bd21219fb38ac39144
+  requires_dist:
+  - attrs>=23.1.0
+  - numpy>=2
+  - pillow>=8.0.0
+  - psutil>=7.0
+  - pyarrow>=18.0.0
+  - typing-extensions>=4.5
+  - datafusion==54.0.0 ; extra == 'all'
+  - pandas>=2 ; extra == 'all'
+  - rerun-notebook==0.41.0 ; extra == 'all'
+  - datafusion==54.0.0 ; extra == 'catalog'
+  - pandas>=2 ; extra == 'catalog'
+  - torch>=2.5 ; extra == 'dataloader'
+  - torchvision ; extra == 'dataloader'
+  - av ; extra == 'dataloader'
+  - pillow>=8.0.0 ; extra == 'dataloader'
+  - rerun-notebook==0.41.0 ; extra == 'notebook'
+  - av>=14.2.0 ; extra == 'tests'
+  - inline-snapshot==0.31.1 ; extra == 'tests'
+  - opencv-python>4.6 ; extra == 'tests'
+  - pandas>=2 ; extra == 'tests'
+  - polars==1.36.1 ; extra == 'tests'
+  - pytest==9.0.3 ; extra == 'tests'
+  - semver>=3.0,<3.1 ; extra == 'tests'
+  - syrupy==5.0.0 ; extra == 'tests'
+  - tomli==2.0.1 ; extra == 'tests'
+  - torch>=2.5 ; extra == 'tests'
+  - torchvision ; extra == 'tests'
+  - datafusion==54.0.0 ; extra == 'tests'
+  - opentelemetry-api ; extra == 'tracing'
+  - opentelemetry-sdk ; extra == 'tracing'
+  - opentelemetry-exporter-otlp-proto-grpc ; extra == 'tracing'
+  requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/ed/23/7a778b6bd0b9a8039df8b1b1d80e2e2ad78aa04171592c8a5c43a56a6af4/pyyaml-6.0.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
   name: pyyaml
   version: 6.0.3
@@ -35212,6 +35322,43 @@ packages:
   requires_dist:
   - nvidia-cublas
   requires_python: '>=3'
+- pypi: https://files.pythonhosted.org/packages/f1/b4/5617efc71fb08478abf87523215e4519746a85fab79bfb4e980bb4ef6b6c/rerun_sdk-0.41.0-cp311-abi3-manylinux_2_28_x86_64.whl
+  name: rerun-sdk
+  version: 0.41.0
+  sha256: de65e3b77be909edc5fb2383fd04af73a930f6f085c2a03fd33c965061ff815e
+  requires_dist:
+  - attrs>=23.1.0
+  - numpy>=2
+  - pillow>=8.0.0
+  - psutil>=7.0
+  - pyarrow>=18.0.0
+  - typing-extensions>=4.5
+  - datafusion==54.0.0 ; extra == 'all'
+  - pandas>=2 ; extra == 'all'
+  - rerun-notebook==0.41.0 ; extra == 'all'
+  - datafusion==54.0.0 ; extra == 'catalog'
+  - pandas>=2 ; extra == 'catalog'
+  - torch>=2.5 ; extra == 'dataloader'
+  - torchvision ; extra == 'dataloader'
+  - av ; extra == 'dataloader'
+  - pillow>=8.0.0 ; extra == 'dataloader'
+  - rerun-notebook==0.41.0 ; extra == 'notebook'
+  - av>=14.2.0 ; extra == 'tests'
+  - inline-snapshot==0.31.1 ; extra == 'tests'
+  - opencv-python>4.6 ; extra == 'tests'
+  - pandas>=2 ; extra == 'tests'
+  - polars==1.36.1 ; extra == 'tests'
+  - pytest==9.0.3 ; extra == 'tests'
+  - semver>=3.0,<3.1 ; extra == 'tests'
+  - syrupy==5.0.0 ; extra == 'tests'
+  - tomli==2.0.1 ; extra == 'tests'
+  - torch>=2.5 ; extra == 'tests'
+  - torchvision ; extra == 'tests'
+  - datafusion==54.0.0 ; extra == 'tests'
+  - opentelemetry-api ; extra == 'tracing'
+  - opentelemetry-sdk ; extra == 'tracing'
+  - opentelemetry-exporter-otlp-proto-grpc ; extra == 'tracing'
+  requires_python: '>=3.11'
 - pypi: https://files.pythonhosted.org/packages/f2/b5/469b69dadb2c413706f16e0c3e7a2749cc70abaab10d718873603bec29b2/grpcio-1.85.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl
   name: grpcio
   version: 1.85.1
