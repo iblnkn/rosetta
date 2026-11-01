@@ -69,7 +69,11 @@ def message_bytes(data: Any) -> Any:
         raise ValueError(f"Message data is in '{backend_type}' memory, which rosetta can't read")
     import torch
 
-    return torch.from_dlpack(CudaBufferView(data))
+    view = CudaBufferView(data)
+    # The legacy default stream the handle is ordered on is per device, so the
+    # import runs with the data's device current, whichever GPU it's on.
+    with torch.cuda.device(view.device_id):
+        return torch.from_dlpack(view)
 
 
 class CudaBufferView:
@@ -79,8 +83,10 @@ class CudaBufferView:
     The read handle opens on CUDA's legacy default stream, which waits for the
     publisher's write. Rosetta decodes on threads that use that stream, and an
     import onto any other stream is refused rather than left unordered. The
-    handle stays open until the last array viewing the memory is gone, which
-    keeps the publisher from reusing the block underneath it.
+    handle stays open until the view and the last array over its memory are
+    gone, which keeps the publisher from reusing the block underneath it. One
+    lease owns the handle: every export shares it, and a view that is never
+    exported, or whose import fails, closes the handle when it's freed.
 
     TODO: replace with cuda_buffer's own ``__dlpack__`` once
     ros2/rosidl_buffer_backends exposes one on its read handle.
@@ -91,7 +97,11 @@ class CudaBufferView:
 
         self._size = len(data)
         self._handle = CudaBuffer.from_input_buffer(data, _CUDA_LEGACY_STREAM)
-        self._data = data
+        self._lease = _ReadLease(self._handle, data)
+
+    @property
+    def device_id(self) -> int:
+        return self._handle.device_id
 
     def __dlpack_device__(self) -> tuple[int, int]:
         return (_KDL_CUDA, self._handle.device_id)
@@ -108,7 +118,7 @@ class CudaBufferView:
         return make_dlpack_capsule(
             self._handle.device_ptr, _KDL_CUDA, self._handle.device_id,
             1, 8, 1,  # uint8: DLPack type code, bits, lanes
-            [self._size], [1], 0, _ReadLease(self._handle, self._data),
+            [self._size], [1], 0, self._lease,
         )  # fmt: skip
 
 
