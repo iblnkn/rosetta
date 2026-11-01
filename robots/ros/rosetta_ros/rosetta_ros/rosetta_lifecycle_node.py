@@ -458,7 +458,9 @@ class RosettaLifecycleNode(Node):
 
         Acceptance opens only after ``super().on_activate()`` activates the
         lifecycle publishers, so no accepted goal can run before its output
-        publishers are live.
+        publishers are live. "Activated" is logged once work is accepted:
+        "Configured" alone is no sign of readiness, because ``ros2 launch``
+        activates later, after it sees the node reach inactive.
 
         :returns: the base transition result, unchanged.
         """
@@ -466,6 +468,7 @@ class RosettaLifecycleNode(Node):
         if result == TransitionCallbackReturn.SUCCESS:
             with self._work_gate:
                 self._accepting_work = True
+            self.get_logger().info("Activated")
         return result
 
     def on_deactivate(self, state: State) -> TransitionCallbackReturn:
