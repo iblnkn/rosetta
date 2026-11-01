@@ -689,11 +689,17 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         return discovered
 
     def _close_writer(self) -> None:
-        """Close the writer and destroy per-episode subscriptions. Idempotent."""
+        """Close the writer and destroy per-episode subscriptions. Idempotent.
+
+        The writer is swapped out under the lock and closed outside it.
+        Callbacks write only under the lock, so none can still be writing to
+        it, and the finalize (seconds for a bag with images) doesn't block the
+        callbacks on the node's one executor thread.
+        """
         with self._writer_lock:
-            if self._writer is not None:
-                self._writer.close()  # Explicitly close to finalize MCAP indices
-            self._writer = None
+            writer, self._writer = self._writer, None
+        if writer is not None:
+            writer.close()  # Explicitly close to finalize MCAP indices
         # Atomic swap so two callers (record thread + teardown) destroy disjoint sets.
         episode_subs, self._episode_subs = self._episode_subs, {}
         for sub in episode_subs.values():
