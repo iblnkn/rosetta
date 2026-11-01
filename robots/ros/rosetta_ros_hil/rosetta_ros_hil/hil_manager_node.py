@@ -59,7 +59,6 @@ from rosetta_ros.node_utils import (
     RESULT_QOS,
     STATUS_QOS,
     TERMINATION_ERROR,
-    TERMINATION_NODE_DEACTIVATED,
     TERMINATION_STOPPED,
     copy_fields,
     finish_goal,
@@ -847,10 +846,17 @@ class HilManagerNode(RosettaLifecycleNode):
         finalized) before the next episode, which usually follows at once.
         Except on deactivation: the transition holds the executor that would
         complete the wait, and no episode can start until the node is
-        active again. The cancel is still sent.
+        active again. So it doesn't wait once acceptance has closed, and a wait
+        already under way ends as soon as a deactivate starts. The cancel is
+        still sent.
         """
-        wait = self.stop_reason != TERMINATION_NODE_DEACTIVATED
-        return cancel_goal(goal_handle, name=name, logger=self.get_logger(), wait_result=wait)
+
+        def deactivating() -> bool:
+            return not self.accepting_work
+
+        return cancel_goal(
+            goal_handle, name=name, logger=self.get_logger(), wait_result=not deactivating(), abandon=deactivating
+        )
 
     def _on_recorder_feedback(self, fb) -> None:
         """Track the recorder's live message count for ManageEpisode feedback."""

@@ -24,6 +24,8 @@ lifecycle transition holds the executor.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rosetta_ros.node_utils import wait_until
 
 __all__ = [
@@ -71,27 +73,48 @@ def cancel_goal(
     logger,
     wait_result: bool = False,
     result_timeout: float = 10.0,
+    abandon: Callable[[], bool] | None = None,
 ):
     """Cancel a goal, best effort. ``handle`` may be None, which is a no-op.
 
-    The cancel request is sent at once. Without ``wait_result`` that is all.
-    With it, wait until the goal has finished and return its result message
-    (None on timeout), so the server's work slot is free before the next goal.
-    Failures are logged, never raised.
+    The cancel request is sent at once, and a server that refuses it is
+    reported (with a warning) when its response arrives. Without
+    ``wait_result`` that is all. With it, wait until the goal has finished and
+    return its result message (None on timeout), so the server's work slot is
+    free before the next goal. ``abandon`` ends that wait early, returning
+    None, as soon as it returns true: pass one that turns true when a
+    lifecycle transition starts, since the transition holds the executor that
+    completes the wait. Failures are logged, never raised.
     """
     if handle is None:
         return None
     try:
-        handle.cancel_goal_async()
+        handle.cancel_goal_async().add_done_callback(lambda future: _report_refusal(future, name, logger))
         if not wait_result:
             logger.info(f"{name} cancel requested")
             return None
         result_future = handle.get_result_async()
-        if not wait_until(result_future.done, result_timeout, poll=_POLL_SEC):
-            logger.warning(f"{name} result timed out after cancel")
+        stop = result_future.done if abandon is None else (lambda: result_future.done() or abandon())
+        wait_until(stop, result_timeout, poll=_POLL_SEC)
+        if not result_future.done():
+            if abandon is not None and abandon():
+                logger.warning(f"{name} result not awaited: the node is deactivating")
+            else:
+                logger.warning(f"{name} result timed out after cancel")
             return None
         logger.info(f"{name} cancelled")
         return result_future.result().result
     except Exception as e:
         logger.warning(f"Failed to cancel {name}: {e}")
         return None
+
+
+def _report_refusal(future, name: str, logger) -> None:
+    """Warn when a child's server answered a cancel request without cancelling anything."""
+    try:
+        response = future.result()
+    except Exception as e:
+        logger.warning(f"{name} cancel failed: {e}")
+        return
+    if response is not None and not response.goals_canceling:
+        logger.warning(f"{name} refused the cancel (return code {response.return_code}); it may still be running")

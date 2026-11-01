@@ -565,6 +565,18 @@ class RosettaLifecycleNode(Node):
             return self._busy
 
     @property
+    def accepting_work(self) -> bool:
+        """True while the node is active and takes new work.
+
+        It turns false the moment a deactivate starts, before the transition
+        waits for work to stop, so a work thread can see the transition coming
+        and stop waiting on futures the transition's executor would complete.
+        Same "caller must not hold the gate" rule as :attr:`busy`.
+        """
+        with self._work_gate:
+            return self._accepting_work
+
+    @property
     def stop_reason(self) -> str | None:
         """Why the current claim was asked to stop, or None if nobody asked.
 

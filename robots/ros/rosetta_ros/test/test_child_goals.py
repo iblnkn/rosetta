@@ -38,12 +38,22 @@ class Logger:
 class Future:
     def __init__(self, result=None, done=True):
         self._result, self._done = result, done
+        self.callbacks = []
 
     def done(self):
         return self._done
 
     def result(self):
         return self._result
+
+    def add_done_callback(self, callback):
+        self.callbacks.append(callback)
+
+    def complete(self, result):
+        """What the executor does when the response arrives."""
+        self._result, self._done = result, True
+        for callback in self.callbacks:
+            callback(self)
 
 
 class Client:
@@ -92,8 +102,9 @@ class Handle:
         self.calls.append("cancel")
         if self._raises:
             raise self._raises
-        # Never completes: nothing in cancel_goal may wait on the cancel response.
-        return Future(done=False)
+        # Never completes on its own: nothing in cancel_goal may wait on the cancel response.
+        self.cancel_future = Future(done=False)
+        return self.cancel_future
 
     def get_result_async(self):
         self.calls.append("result")
@@ -132,3 +143,32 @@ def test_cancel_failure_is_logged_not_raised():
     logger = Logger()
     assert _cancel(Handle(raises=RuntimeError("gone")), logger) is None
     assert logger.lines == [("warning", "Failed to cancel Child: gone")]
+
+
+def test_result_wait_gives_up_once_abandoned():
+    """A deactivate holds the executor that would complete the wait, so the wait stops at once."""
+    import time
+
+    logger, abandoned = Logger(), []
+    start = time.monotonic()
+    result = cancel_goal(
+        Handle(result_done=False), name="Child", logger=logger, wait_result=True, result_timeout=5.0,
+        abandon=lambda: bool(abandoned) or abandoned.append(True),
+    )  # fmt: skip
+    assert result is None
+    assert time.monotonic() - start < 1.0
+    assert ("warning", "Child result not awaited: the node is deactivating") in logger.lines
+
+
+def test_a_refused_cancel_is_reported_when_its_response_arrives():
+    handle, logger = Handle(), Logger()
+    _cancel(handle, logger)
+    handle.cancel_future.complete(SimpleNamespace(return_code=1, goals_canceling=[]))
+    assert ("warning", "Child refused the cancel (return code 1); it may still be running") in logger.lines
+
+
+def test_an_accepted_cancel_logs_nothing_more():
+    handle, logger = Handle(), Logger()
+    _cancel(handle, logger)
+    handle.cancel_future.complete(SimpleNamespace(return_code=0, goals_canceling=["g"]))
+    assert logger.lines == [("info", "Child cancel requested")]

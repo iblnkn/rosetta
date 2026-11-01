@@ -223,20 +223,26 @@ def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == reason
 
 
-@pytest.mark.parametrize(
-    ("reason", "waits"),
-    [(TERMINATION_STOPPED, True), (TERMINATION_CANCELLED, True), (TERMINATION_NODE_DEACTIVATED, False)],
-)
-def test_children_are_waited_for_except_on_deactivation(node, monkeypatch, reason, waits):
-    """Deactivation holds the executor that completes the wait, so the cancel is only sent."""
-    sent = []
-    monkeypatch.setattr(hmn, "cancel_goal", lambda handle, *, name, logger, wait_result: sent.append(wait_result))
+@pytest.mark.parametrize(("accepting", "waits"), [(True, True), (False, False)], ids=["active", "deactivating"])
+def test_children_are_waited_for_until_a_deactivate_starts(node, monkeypatch, accepting, waits):
+    """A deactivate holds the executor that completes the wait: no wait once it starts, and a wait under way ends."""
+    calls = []
+    monkeypatch.setattr(
+        hmn,
+        "cancel_goal",
+        lambda handle, *, name, logger, wait_result, abandon: calls.append((wait_result, abandon)),
+    )
     _claimed(node)
-    node.signal_stop(reason)
+    node.signal_stop(TERMINATION_STOPPED)  # the user ended the episode first, so this reason stays latched
+    node._accepting_work = accepting
 
     node._cancel_child(SimpleNamespace(), "Robot policy")
 
-    assert sent == [waits]
+    ((wait, abandon),) = calls
+    assert wait is waits
+    assert abandon() is not accepting
+    node._accepting_work = False  # a deactivate starts while the episode thread waits
+    assert abandon() is True
 
 
 # -------------------- Outcome: did the robot do the task? --------------------
