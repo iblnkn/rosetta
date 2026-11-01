@@ -522,6 +522,8 @@ class RosettaLifecycleNode(Node):
         except Exception:
             self.get_logger().error(f"Shutdown teardown failed:\n{traceback.format_exc()}")
             result = TransitionCallbackReturn.ERROR
+        ok = result == TransitionCallbackReturn.SUCCESS
+        self.get_logger().info(f"Shutdown transition finished{'' if ok else ' with errors (see above)'}")
         return result
 
     def on_error(self, state: State) -> TransitionCallbackReturn:

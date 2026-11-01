@@ -22,7 +22,10 @@ descriptors, and the node entry point (``spin_lifecycle_node``).
 
 from __future__ import annotations
 
+import signal
+import threading
 import time
+import traceback
 from typing import Callable
 
 import rclpy
@@ -218,15 +221,27 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 
 
 def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
-    """Run a lifecycle node until interrupted, driving the shutdown transition on exit.
+    """Run a lifecycle node until SIGINT or SIGTERM, then drive its shutdown transition.
 
     ``destroy_node()`` never runs ``on_shutdown``. Only the lifecycle state
     machine does. So ``trigger_shutdown()`` is called explicitly to let the
     node finalize resources (e.g. close an open bag writer, send a safety
-    action) on Ctrl+C. rclpy's default SIGINT handler would shut the context
-    down before user code can react, making that transition impossible exactly
-    when it matters. Signal handling is disabled and KeyboardInterrupt is the
-    shutdown trigger instead.
+    action) on the way out. rclpy's default SIGINT handler would shut the
+    context down before user code can react, making that transition
+    impossible exactly when it matters, so rclpy installs no handlers here.
+
+    SIGINT and SIGTERM instead only set a flag, and the spin loop stops when it
+    sees it. A handler that raised (KeyboardInterrupt) would not be enough:
+    ``ros2 launch`` delivers SIGINT twice about a millisecond apart (once to
+    the terminal's process group, once from launch itself), and the second
+    exception lands mid-teardown or inside an executor callback, killing the
+    node with a nonzero exit. A flag absorbs any number of signals, and
+    SIGTERM (which launch sends after a timeout) shuts down as cleanly as
+    SIGINT. Once the node is gone, a handler the caller had installed comes
+    back. Python's defaults do not: they would turn a signal that lands
+    between teardown and process exit (a fifth Ctrl+C, say) into a crash
+    after a clean shutdown, so those signals are ignored instead (SIG_IGN, the
+    one setting interpreter finalization keeps).
 
     The node spins on rclpy's single-threaded ``EventsExecutor``, whose wait
     and dispatch run in C++. A ``MultiThreadedExecutor`` rebuilds its wait set
@@ -235,24 +250,44 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     by tens of milliseconds. One thread means no callback may block. Long work runs
     on its own thread, through ``RosettaLifecycleNode.create_work_action_server``
     or ``handle_start_service``.
+
+    Returns:
+        0 after a signal or an external context shutdown, which ``ros2 launch``
+        reports as finished cleanly. 1 when a callback raised and stopped the
+        executor; the traceback is logged before the shutdown transition runs.
+
     """
+    stop = threading.Event()
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.signal(signum, lambda *_: stop.set())
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    node = node_factory()
-    executor = EventsExecutor()
-    executor.add_node(node)
+    exit_code = 0
     try:
-        # spin_once loop, not spin(): without rclpy's signal handlers a
-        # blocking rcl_wait never wakes on SIGINT, so return to Python
-        # regularly to let KeyboardInterrupt be delivered.
-        while True:
-            executor.spin_once(timeout_sec=0.1)
-    except (KeyboardInterrupt, ExternalShutdownException):
-        pass
-    finally:
+        node = node_factory()
+        executor = EventsExecutor()
+        executor.add_node(node)
+        try:
+            # spin_once loop, not spin(): without rclpy's signal handlers a
+            # blocking rcl_wait never wakes on a signal, so return to Python
+            # regularly to see the flag.
+            while not stop.is_set():
+                executor.spin_once(timeout_sec=0.1)
+        except ExternalShutdownException:
+            pass
+        except Exception:
+            node.get_logger().error(f"Executor stopped by an exception:\n{traceback.format_exc()}")
+            exit_code = 1
         try:
             node.trigger_shutdown()
         except Exception as e:
             node.get_logger().warning(f"Shutdown transition not driven: {e}")
         node.destroy_node()
+    finally:
         rclpy.try_shutdown()
-    return 0
+        for signum, handler in previous.items():
+            # None: a handler installed outside Python, which signal() cannot reinstall.
+            default = handler in (signal.default_int_handler, signal.SIG_DFL, None)
+            signal.signal(signum, signal.SIG_IGN if default else handler)
+    return exit_code
