@@ -39,6 +39,8 @@ import rosetta.frames.resample
 import rosetta.operators
 import rosetta.plugins
 import rosetta.data
+import rosetta.data.readers
+import rosetta.data.stats
 import rosetta.policies
 import rosetta.robots.protocols
 import rosetta.robots.registry
