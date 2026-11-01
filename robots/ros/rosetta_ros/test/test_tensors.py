@@ -294,3 +294,48 @@ def test_out_of_range_layouts_are_refused_before_touching_device_memory():
 
     with pytest.raises(ValueError, match="reads past its 24 bytes"):
         message_tensor(_DeviceData(24), "float32", (2, 3), (3, 1), 4)
+
+
+def test_tensor_on_an_image_key_decodes_full_resolution_then_resizes(tmp_path):
+    """An image key's shape and dtype are the resized 'video' frame; the decoder hands over the native RGB image."""
+    require_message(_TENSOR)
+    from rosetta.frames.codecs import decode_value
+
+    text = f"""
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.images.cam:
+    channel: {{topic: /cam, type: {_TENSOR}}}
+    align: {{strategy: hold, timeline: receive}}
+    apply: [{{resize: [4, 6]}}]
+"""
+    path = tmp_path / "c.yaml"
+    path.write_text(text)
+    (spec,) = iter_observation_specs(load_contract(path))
+    assert (spec.shape, spec.dtype) == ((4, 6, 3), "video")
+    image = (np.arange(8 * 10 * 3) % 251).astype(np.uint8).reshape(8, 10, 3)
+    out = to_host(decode_value(_message(image), spec))
+    assert out.shape == (4, 6, 3)
+    assert out.dtype == np.uint8
+
+
+def test_tensor_on_an_image_key_must_be_rgb(tmp_path):
+    require_message(_TENSOR)
+    from rosetta.frames.codecs import decode_value
+
+    path = tmp_path / "c.yaml"
+    path.write_text(f"""
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.images.cam:
+    channel: {{topic: /cam, type: {_TENSOR}}}
+    align: {{strategy: hold, timeline: receive}}
+    apply: [{{resize: [4, 6]}}]
+""")
+    (spec,) = iter_observation_specs(load_contract(path))
+    with pytest.raises(ValueError, match="RGB"):
+        decode_value(_message(np.zeros((8, 10), np.uint8)), spec)

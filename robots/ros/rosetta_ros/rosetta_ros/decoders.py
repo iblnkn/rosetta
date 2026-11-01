@@ -70,6 +70,7 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
 
+from rosetta.contract.specs import DECODED_IMAGE_CHANNELS
 from rosetta.frames.arrays import take
 from rosetta.frames.codecs import register_decoder
 from rosetta_ros.buffers import DLPACK_DTYPES, message_bytes, message_tensor
@@ -311,7 +312,21 @@ def decode_tensor(msg: Any, shape: tuple[int, ...], dtype: str) -> Any:
 
 @register_decoder("tensor_msgs/msg/ExperimentalTensor", dtype="float32", device_capable=True)
 def _dec_tensor(msg: Any, spec: StreamSpec) -> Any:
-    """Decode tensor_msgs/ExperimentalTensor to the stream's declared shape and dtype."""
+    """Decode tensor_msgs/ExperimentalTensor to the stream's declared shape and dtype.
+
+    On an image key the spec's shape and dtype describe the frame after its
+    operators (resized, ``'video'``), so the tensor decodes like any image:
+    full-resolution HWC uint8 RGB, at its declared ``shape`` or else its own,
+    and the resize runs after.
+    """
+    if spec.is_image:
+        shape = spec.source.shape or tuple(int(n) for n in msg.shape)
+        if len(shape) != 3 or shape[2] != DECODED_IMAGE_CHANNELS:
+            raise ValueError(
+                f"ExperimentalTensor on image key '{spec.key}' has shape {list(shape)}; "
+                f"an image tensor is (height, width, {DECODED_IMAGE_CHANNELS}) RGB"
+            )
+        return decode_tensor(msg, shape, "uint8")
     return decode_tensor(msg, spec.shape, spec.dtype)
 
 
