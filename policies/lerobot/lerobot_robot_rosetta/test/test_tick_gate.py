@@ -20,8 +20,6 @@ release point is deterministic. Pacing through the adapter (first call, one
 period, reset, stop) is covered in test_adapter.py.
 """
 
-import pytest
-
 import lerobot_robot_rosetta.rosetta as adapter
 from lerobot_robot_rosetta.rosetta import GATE_SLICE_SEC, _TickGate
 

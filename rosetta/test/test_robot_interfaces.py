@@ -117,4 +117,3 @@ def test_a_missing_stream_zero_fills_unless_asked_not_to(fake_interface, tmp_pat
     assert connection.sample_frame(fill_missing=False) == {}
     connection.push(0, np.array([1.0, 2.0]))
     assert connection.sample_frame(fill_missing=False)["observation.state"].tolist() == [1.0, 2.0]
-

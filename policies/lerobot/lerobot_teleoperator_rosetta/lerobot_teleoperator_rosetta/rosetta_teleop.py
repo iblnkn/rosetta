@@ -65,7 +65,7 @@ DEFAULT_EVENTS: dict[TeleopEvents, bool] = dict.fromkeys(TeleopEvents, False)
 
 
 def teleop_events(event_values: Mapping[str, bool]) -> dict[TeleopEvents, bool]:
-    """lerobot's TeleopEvents from the contract's event values.
+    """LeRobot's TeleopEvents from the contract's event values.
 
     Several contract events may assert the same lerobot event (``success`` and
     ``end_success`` both assert SUCCESS), so each lerobot event is the OR of
