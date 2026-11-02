@@ -15,7 +15,7 @@ be under the Apache 2 License, as dictated by that
 ## Development environment
 
 The repository's pixi environment is the development environment: ROS 2
-Jazzy, LeRobot and the build tools, pinned in `pixi.lock`. On Linux or macOS,
+Lyrical, LeRobot and the build tools, pinned in `pixi.lock`. On Linux or macOS,
 [install pixi](https://pixi.sh) and work from the repository root:
 
 ```bash
@@ -55,9 +55,9 @@ on pull requests that touch their paths, so a core change runs `core`, `ros`,
 
 | Workflow | Runs | On changes to |
 |---|---|---|
-| `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12 and 3.13 with no ROS | `rosetta/` |
-| `ros` | Builds and tests `rosetta` and `robots/ros` with industrial_ci on ROS 2 Jazzy | `rosetta/`, `robots/` |
-| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Jazzy, against LeRobot's newest release before 0.6.2 and against LeRobot's `main`, which is allowed to fail. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
+| `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12, 3.13 and 3.14 with no ROS | `rosetta/` |
+| `ros` | Builds and tests `rosetta` and `robots/ros` with industrial_ci on ROS 2 Lyrical | `rosetta/`, `robots/` |
+| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Lyrical, against LeRobot's newest release before 0.6.2. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
 | `lint` | The `pre-commit` hooks: ruff check and format, plus file checks for whitespace, line endings, YAML, XML, merge conflicts and large files | every pull request |
 | `pixi` | `pixi run test`, which builds and tests every package together in the locked pixi environment with LeRobot 0.6.1, then `pixi run docs-build` | `pixi.toml`, `pixi.lock`, `pixi/`, `rosetta/`, `robots/`, `policies/`, `docs/` |
 | `devcontainer` | Builds the default dev container and runs `pixi run build` inside it | `.devcontainer/` |
@@ -107,10 +107,10 @@ cover both.
 
 ## Supported ROS distros
 
-`main` is developed and tested on ROS 2 Jazzy (Python 3.12). It moves to
-Rolling, as ROS repositories usually track, once LeRobot supports Python 3.14,
-the Python of Rolling on Ubuntu 26.04. Branches for released distros come with
-the first ROS release.
+`main` is developed and tested on ROS 2 Lyrical (Python 3.14). LeRobot 0.6.1
+needs two overrides there, carried in `pixi.toml` and the `lerobot` workflow:
+numpy 2.3 or newer, and a draccus fork with the Python 3.14 fix. Branches for
+other released distros come with the first ROS release.
 
 ## Releasing
 
@@ -119,6 +119,6 @@ repository to have the same version. The packages under `policies/` depend on
 LeRobot, which has no rosdep key, so the ROS buildfarm can't build them. List
 them, one per line, in a `<track>.ignored` file on the release repository's
 `master` branch. The track is normally named after the distro, as in
-`jazzy.ignored`. bloom reads the file from `master` even when the release
+`lyrical.ignored`. bloom reads the file from `master` even when the release
 repository's default branch is named differently. Those packages install with
 pip alongside a ROS 2 workspace instead.

@@ -26,14 +26,26 @@ jobs:
     name: industrial_ci (lerobot)
     runs-on: ubuntu-latest
     env:
-      ROS_DISTRO: jazzy
+      ROS_DISTRO: lyrical
       ROS_REPO: main
       TARGET_WORKSPACE: "rosetta robots/ros policies/lerobot"
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
+      # Python 3.14 needs two overrides of LeRobot 0.6.1's pins, the same ones
+      # pixi.toml carries: numpy>=2.3 (numpy<2.3 has no 3.14 builds) and the
+      # draccus fork with the 3.14 fix (TODO: drop once dlwh/draccus#70 is
+      # released). pip can't override a dependency's bound, so uv installs.
       BEFORE_BUILD_TARGET_WORKSPACE: >-
-        pip install --break-system-packages --ignore-installed 'lerobot[dataset]<0.6.2' torch
+        pip install --break-system-packages uv
+        && printf '%s\n' 'numpy>=2.3,<3'
+        'draccus @ git+https://github.com/francocipollone/draccus.git@8976f1d5bd3c7f78521f43c9c302396076064af2'
+        > /tmp/overrides.txt
+        && uv pip install --system --break-system-packages --override /tmp/overrides.txt
+        'lerobot[dataset]<0.6.2' torch
+        --index-strategy unsafe-best-match
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
-        && pip install --break-system-packages --ignore-installed --upgrade protobuf grpcio
+        && uv pip install --system --break-system-packages --upgrade protobuf grpcio
+      # The ROS image has no git, which uv needs to fetch the draccus fork.
+      ADDITIONAL_DEBS: git
     steps:
       - uses: actions/checkout@v4
       - uses: ros-industrial/industrial_ci@master

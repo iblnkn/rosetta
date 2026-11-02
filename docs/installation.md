@@ -8,7 +8,7 @@ Install Rosetta one of three ways. Pick by what you already have.
 | Nothing, and you have your own robot | [From source with pixi](#from-source-with-pixi) |
 | A ROS 2 workspace already | [An existing workspace](#an-existing-workspace) |
 
-`main` is developed and tested on ROS 2 Jazzy (Python 3.12). CI runs no other
+`main` is developed and tested on ROS 2 Lyrical (Python 3.14). CI runs no other
 distro.
 
 ## The demos workspace
@@ -38,7 +38,7 @@ predate the `rosetta_ros` package these docs use, so commands such as
 
 ## From source with pixi
 
-The repository carries a [pixi](https://pixi.sh) environment: ROS 2 Jazzy
+The repository carries a [pixi](https://pixi.sh) environment: ROS 2 Lyrical
 through [RoboStack](https://robostack.github.io/), and LeRobot 0.6.1 with
 torch from PyPI. `pixi.lock` pins it for Linux x86_64, Linux aarch64 and
 macOS arm64. CI tests Linux x86_64.
@@ -92,20 +92,28 @@ export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 
 2. For LeRobot, install it into the same Python that ROS uses. `rosetta_port`
    with the LeRobot writer, `policy_runner_node` with the LeRobot runner, and
-   the LeRobot plugins all need it:
+   the LeRobot plugins all need it. LeRobot 0.6.1 needs two of its pins
+   overridden on Python 3.14: its `numpy<2.3` has no 3.14 builds, and draccus
+   needs a 3.14 fix that isn't released yet. pip can't override a
+   dependency's pin, so install with uv, as CI does:
 
    ```bash
-   pip install "lerobot[dataset,async]<0.6.2"
+   pip install --break-system-packages uv
+   printf '%s\n' 'numpy>=2.3,<3' \
+       'draccus @ git+https://github.com/francocipollone/draccus.git@8976f1d5bd3c7f78521f43c9c302396076064af2' \
+       > /tmp/lerobot-overrides.txt
+   uv pip install --system --break-system-packages --override /tmp/lerobot-overrides.txt \
+       "lerobot[dataset,async]<0.6.2"
    ```
 
    LeRobot 0.6.2 removes `lerobot.async_inference`, which the LeRobot policy
    runner is built on, so the LeRobot packages require `lerobot<0.6.2`. CI
-   tests the newest release under that cap, and LeRobot's `main` branch as an
-   early warning. Add the `training` extra if you'll run `lerobot-train`.
+   tests the newest release under that cap. Add the `training` extra if you'll
+   run `lerobot-train`.
 
-   Ubuntu 24.04 marks its system Python as externally managed, so pip there
-   stops with `error: externally-managed-environment`. Rosetta's CI passes
-   `--break-system-packages`, which installs into the system Python anyway.
+   Ubuntu 26.04 marks its system Python as externally managed, so plain pip
+   there stops with `error: externally-managed-environment`.
+   `--break-system-packages` installs into the system Python anyway.
 
 ## Check the install
 
