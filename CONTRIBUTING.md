@@ -87,6 +87,66 @@ LeRobot, has no `package.xml` key that pixi resolves, so it also goes in
 `pixi.toml`'s `pypi-dependencies`. A new package needs a line in the `[dev]`
 table.
 
+## Commits and pull requests
+
+A commit's subject states the behavior after the change, in the present
+tense, for example `Porter ticks are exact multiples of the frame period, so
+the grid never drifts`. The body says why. A commit with generated content
+ends with the `Assisted-by:` trailer from
+[Generative AI](#generative-ai), and no other tool trailers such as
+`Co-Authored-By`.
+
+A pull request description follows
+[the template](.github/pull_request_template.md):
+
+- An opening paragraph with the problem or goal. No heading.
+- `## Changes`: one bullet per change a reviewer needs to know about. Start a
+  breaking change with `Breaking:`.
+- `## Testing`: evidence, not a claim. Give the test that fails without the
+  change and passes with it, the log line or output that changed, or a
+  screenshot for anything visual. "Tests pass" on its own is not evidence.
+- `## Merge danger`: whether the change is a two-way door (a revert undoes it)
+  or a one-way door, and what could break. Removing or renaming a public API
+  name (`test_public_api.py` pins them), a contract field, a node's topic,
+  parameter, service or action, a bag metadata key, or the dataset layout
+  `rosetta_port` writes is a one-way door. Recorded bags and ported datasets
+  outlive a revert.
+- The `🤖 This pull request was assisted by ...` line from
+  [Generative AI](#generative-ai), when a generative tool helped.
+
+## Generative AI
+
+Rosetta follows the
+[OSRF policy on generative tools](https://github.com/openrobotics/osra-policies-and-procedures/blob/main/OSRF%20Policy%20on%20the%20Use%20of%20Generative%20Tools%20(%E2%80%9CGenerative%20AI%E2%80%9D)%20in%20Contributions.md):
+any use of a generative AI tool in a contribution is disclosed, in a form that
+lasts as long as the contribution.
+
+Each commit with generated code or documentation ends with a trailer in the
+policy's format, `Assisted-by: AGENT_NAME:MODEL_VERSION`, after the subject
+line:
+
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+
+The body says why.
+
+Assisted-by: Claude:claude-opus-5-5
+```
+
+A commit made with more than one model has one trailer per model. After the
+model, the policy lists any specialised analysis tools used, such as
+clang-tidy, but not git or the editor.
+
+The pull request description ends with the same statement:
+
+```text
+🤖 This pull request was assisted by Claude:claude-opus-5-5.
+```
+
+You are responsible for the whole contribution, generated parts included.
+The policy lists the checks it expects, from review and tests to checking for
+intellectual property problems.
+
 ## Where an adapter lives
 
 Robot interfaces and framework adapters register through entry points, so
