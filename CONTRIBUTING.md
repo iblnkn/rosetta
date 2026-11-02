@@ -87,6 +87,47 @@ LeRobot, has no `package.xml` key that pixi resolves, so it also goes in
 `pixi.toml`'s `pypi-dependencies`. A new package needs a line in the `[dev]`
 table.
 
+## Commits and pull requests
+
+Write the commit subject as what the code does after the change, in the
+present tense. The body explains why.
+
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+```
+
+Pull requests use [the template](.github/pull_request_template.md). Open
+with the problem or goal in a few sentences, then fill in each section:
+
+| Section | What goes in it |
+|---|---|
+| Changes | One bullet per change a reviewer should know about. Start a breaking change with `Breaking:`. |
+| Testing | What you ran and what it showed, such as a test that fails without the change, or the log line that changed. |
+| Merge danger | Whether a revert undoes it, and what could break. Renaming or removing a public API name, contract field, node topic, parameter, service or action, bag metadata key, or the dataset layout can't be fully reverted, because bags and datasets already written keep the old form. |
+
+## Generative AI
+
+Rosetta follows the [OSRF policy on generative tools](https://github.com/openrobotics/osra-policies-and-procedures/blob/main/OSRF%20Policy%20on%20the%20Use%20of%20Generative%20Tools%20(%E2%80%9CGenerative%20AI%E2%80%9D)%20in%20Contributions.md).
+When an AI tool wrote part of a commit, end the commit with an `Assisted-by`
+trailer that names the tool and the exact model:
+
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+
+The body explains why.
+
+Assisted-by: Claude:claude-opus-5-5
+```
+
+Use one trailer per model, and no other tool trailers such as
+`Co-Authored-By`. End the pull request description with the same thing:
+
+```text
+🤖 This pull request was assisted by Claude:claude-opus-5-5.
+```
+
+Generated code gets the same review and tests as any other code.
+
 ## Where an adapter lives
 
 Robot interfaces and framework adapters register through entry points, so
