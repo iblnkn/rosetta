@@ -44,6 +44,8 @@ jobs:
         --index-strategy unsafe-best-match
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
         && uv pip install --system --break-system-packages --upgrade protobuf grpcio
+      # The ROS image has no git, which uv needs to fetch the draccus fork.
+      ADDITIONAL_DEBS: git
     steps:
       - uses: actions/checkout@v4
       - uses: ros-industrial/industrial_ci@master
