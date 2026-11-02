@@ -21,7 +21,13 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.factory import make_policy
-from lerobot_dataset_rosetta.view import LeRobotStreamView, LeRobotView, policy_windows, split_episodes
+from lerobot_dataset_rosetta.view import (
+    LeRobotStreamView,
+    LeRobotView,
+    policy_windows,
+    split_episodes,
+    train_eval_views,
+)
 from memory_reader import MemoryReader, PortedFramesReader
 
 from rosetta.data import FrameReader, ReaderInfo
@@ -273,3 +279,27 @@ def test_a_view_gives_lerobot_what_a_ported_dataset_gives_it(tmp_path):
             np.testing.assert_allclose(
                 np.asarray(mine[name]), np.asarray(other[name]), rtol=1e-6, err_msg=f"{key} {name}"
             )
+
+
+def test_a_selected_view_counts_only_its_episodes(episodes):
+    """As LeRobotDataset(episodes=...) does: lerobot-train's epoch math and logs read these."""
+    view = LeRobotView(MemoryReader(episodes), _act())
+    selected = view.select([1])
+    assert (selected.num_frames, selected.num_episodes, len(selected)) == (LENGTHS[1], 1, LENGTHS[1])
+    assert (view.num_frames, view.num_episodes) == (sum(LENGTHS), len(LENGTHS))
+
+
+def test_the_eval_split_runs_within_the_episodes_asked_for():
+    info = ReaderInfo(10, "bot", (1,) * 4, ("a",) * 4, ("a",), True)
+    assert split_episodes(info, 0.5, episodes=[0, 1]) == ([0], [1])
+
+
+def test_the_train_view_holds_only_the_episodes_asked_for(episodes):
+    view = LeRobotView(MemoryReader(episodes), _act())
+    train_view, eval_view = train_eval_views(view, episodes=[1], eval_split=0)
+    assert (train_view.episodes, eval_view) == ([1], None)
+
+
+def test_without_episodes_or_a_split_the_view_is_served_whole(episodes):
+    view = LeRobotView(MemoryReader(episodes), _act())
+    assert train_eval_views(view, episodes=None, eval_split=0) == (view, None)

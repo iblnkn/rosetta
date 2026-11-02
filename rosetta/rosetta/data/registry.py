@@ -36,6 +36,7 @@ __all__ = [
     "FRAME_READER_GROUP",
     "available_dataset_writers",
     "available_frame_readers",
+    "frame_reader_class",
     "load_dataset_writer",
     "load_frame_reader",
 ]
@@ -73,12 +74,7 @@ def load_frame_reader(name: str, **options: Any) -> FrameReader:
     raises ``ValueError``; a non-class or non-conforming entry point raises
     ``TypeError``; import and constructor failures propagate raw.
     """
-    eps = list(_ilm.entry_points(group=FRAME_READER_GROUP))
-    ep = resolve_entry_point(eps, FRAME_READER_GROUP, name, "frame reader")
-    cls = ep.load()
-    if not isinstance(cls, type):
-        raise TypeError(f"Entry point '{name}' in group '{FRAME_READER_GROUP}' must be a class; got {cls!r}.")
-    reader = cls(**options)
+    reader = frame_reader_class(name)(**options)
     if not isinstance(reader, FrameReader):
         problems = ", ".join(protocol_problems(FrameReader, reader))
         raise TypeError(
@@ -86,6 +82,19 @@ def load_frame_reader(name: str, **options: Any) -> FrameReader:
             f"(missing or non-callable: {problems})."
         )
     return reader
+
+
+def frame_reader_class(name: str) -> type:
+    """The class registered as frame reader ``name``, unconstructed, to inspect what options it takes.
+
+    An unknown name raises ``ValueError``; a non-class entry point raises
+    ``TypeError``; import failures propagate raw.
+    """
+    eps = list(_ilm.entry_points(group=FRAME_READER_GROUP))
+    cls = resolve_entry_point(eps, FRAME_READER_GROUP, name, "frame reader").load()
+    if not isinstance(cls, type):
+        raise TypeError(f"Entry point '{name}' in group '{FRAME_READER_GROUP}' must be a class; got {cls!r}.")
+    return cls
 
 
 def available_frame_readers() -> list[str]:

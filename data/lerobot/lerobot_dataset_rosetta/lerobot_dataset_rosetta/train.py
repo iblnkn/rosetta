@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from rosetta.contract.sidecar import CONTRACT_SIDECAR_FILENAME
-from rosetta.data import load_frame_reader
+from rosetta.data import frame_reader_class, load_frame_reader
 
 from .sidecar import READER_DATASET_NAMESPACE
 
@@ -123,14 +123,19 @@ def main(argv: list[str] | None = None) -> None:
     def make_train_eval_datasets(cfg):
         from lerobot.transforms import ImageTransforms
 
-        from .view import LeRobotStreamView, LeRobotView, split_episodes
+        from .view import LeRobotStreamView, LeRobotView, train_eval_views
 
         if streams and cfg.dataset.eval_split > 0:
             raise ValueError(
                 "--rosetta.shuffle=block streams, and streaming has no eval split. Pass --dataset.eval_split=0, "
                 "or drop --rosetta.shuffle=block to read by index."
             )
-        reader_cls = _reader_class(reader_name)
+        if streams and cfg.dataset.episodes is not None:
+            raise ValueError(
+                "--rosetta.shuffle=block streams every episode; drop --dataset.episodes, or drop "
+                "--rosetta.shuffle=block to read by index."
+            )
+        reader_cls = frame_reader_class(reader_name)
         reader = load_frame_reader(reader_name, contract=contract, **_reader_options(reader_cls, options, cfg))
         transforms = ImageTransforms(cfg.dataset.image_transforms) if cfg.dataset.image_transforms.enable else None
         common = {"repo_id": cfg.dataset.repo_id, "use_imagenet_stats": cfg.dataset.use_imagenet_stats}
@@ -140,10 +145,9 @@ def main(argv: list[str] | None = None) -> None:
             )
             return stream, None
         view = LeRobotView(reader, cfg.trainable_config, image_transforms=transforms, **common)
-        if cfg.dataset.eval_split == 0:
-            return view, None
-        train, held_out = split_episodes(view.info, cfg.dataset.eval_split)
-        return view.select(train, image_transforms=transforms), view.select(held_out)
+        return train_eval_views(
+            view, episodes=cfg.dataset.episodes, eval_split=cfg.dataset.eval_split, image_transforms=transforms
+        )
 
     original_save = lerobot_train.save_checkpoint
 
@@ -161,14 +165,3 @@ def main(argv: list[str] | None = None) -> None:
     finally:
         for name, original in originals.items():
             setattr(lerobot_train, name, original)
-
-
-def _reader_class(name: str) -> type:
-    import importlib.metadata as ilm
-
-    from rosetta.data.registry import FRAME_READER_GROUP
-    from rosetta.plugins import resolve_entry_point
-
-    return resolve_entry_point(
-        list(ilm.entry_points(group=FRAME_READER_GROUP)), FRAME_READER_GROUP, name, "frame reader"
-    ).load()

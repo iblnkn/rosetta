@@ -179,8 +179,18 @@ class LeRobotView(_ViewProperties, torch.utils.data.Dataset):
         view.absolute_to_relative_idx = {int(a): r for r, a in enumerate(view._absolute)}
         return view
 
+    @property
+    def num_frames(self) -> int:
+        """Samples in this view: the selected episodes' only, as ``LeRobotDataset(episodes=...)`` counts them."""
+        return self._prepared.info.num_frames if self._absolute is None else len(self._absolute)
+
+    @property
+    def num_episodes(self) -> int:
+        """Episodes in this view: the selected ones only, as ``LeRobotDataset(episodes=...)`` counts them."""
+        return self._prepared.info.num_episodes if self.episodes is None else len(self.episodes)
+
     def __len__(self) -> int:
-        return self.num_frames if self._absolute is None else len(self._absolute)
+        return self.num_frames
 
     def __getitem__(self, position: int) -> dict[str, Any]:
         return self.__getitems__([position])[0]
@@ -237,28 +247,51 @@ class LeRobotStreamView(_ViewProperties, torch.utils.data.IterableDataset):
             yield _to_torch(sample, self._prepared.camera_keys, self._image_transforms)
 
 
-def split_episodes(info: ReaderInfo, eval_split: float) -> tuple[list[int], list[int]]:
+def split_episodes(
+    info: ReaderInfo, eval_split: float, *, episodes: Sequence[int] | None = None
+) -> tuple[list[int], list[int]]:
     """Train and eval episodes, split as ``lerobot-train --dataset.eval_split`` splits a dataset.
 
     For each task (an episode's first), the last ``ceil(n * eval_split)`` of
-    its ``n`` episodes are held out for eval.
+    its ``n`` episodes are held out for eval. With ``episodes`` (LeRobot's
+    ``--dataset.episodes``) only those are split.
 
     Raises:
         ValueError: If no episode is left to train on.
 
     """
+    base = range(info.num_episodes) if episodes is None else [int(e) for e in episodes]
     by_task: dict[str, list[int]] = {}
-    for episode, task in enumerate(info.episode_tasks):
-        by_task.setdefault(task, []).append(episode)
+    for episode in base:
+        by_task.setdefault(info.episode_tasks[episode], []).append(episode)
     train: list[int] = []
     held_out: list[int] = []
-    for episodes in by_task.values():
-        n_eval = math.ceil(len(episodes) * eval_split)
-        train.extend(episodes[: len(episodes) - n_eval])
-        held_out.extend(episodes[len(episodes) - n_eval :])
+    for task_episodes in by_task.values():
+        n_eval = math.ceil(len(task_episodes) * eval_split)
+        train.extend(task_episodes[: len(task_episodes) - n_eval])
+        held_out.extend(task_episodes[len(task_episodes) - n_eval :])
     if not train:
-        raise ValueError(f"eval_split={eval_split} leaves 0 training episodes from {info.num_episodes} total.")
+        raise ValueError(f"eval_split={eval_split} leaves 0 training episodes from {len(base)} total.")
     return sorted(train), sorted(held_out)
+
+
+def train_eval_views(
+    view: LeRobotView,
+    *,
+    episodes: Sequence[int] | None,
+    eval_split: float,
+    image_transforms: Callable[[torch.Tensor], torch.Tensor] | None = None,
+) -> tuple[LeRobotView, LeRobotView | None]:
+    """The train and eval views ``lerobot-train`` asks for, as it makes them from a ported dataset.
+
+    ``episodes`` (``--dataset.episodes``) restricts both to those episodes,
+    and ``eval_split`` holds out the last of each task's among them. The eval
+    view gets no image transforms, as LeRobot's doesn't.
+    """
+    if eval_split == 0:
+        return (view, None) if episodes is None else (view.select(episodes, image_transforms=image_transforms), None)
+    train, held_out = split_episodes(view.info, eval_split, episodes=episodes)
+    return view.select(train, image_transforms=image_transforms), view.select(held_out)
 
 
 def _to_torch(
