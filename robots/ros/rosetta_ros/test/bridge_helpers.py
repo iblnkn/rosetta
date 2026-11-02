@@ -152,8 +152,12 @@ def spin_until(executor, predicate, timeout_s=5.0):
 
 
 @contextmanager
-def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True, buffer_backends=()):
+def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True, buffer_backends=(), executor=None):
     """TopicBridge on a real LifecycleNode plus a fixture node, on one executor.
+
+    ``executor`` defaults to a SingleThreadedExecutor. Pass rclpy's
+    EventsExecutor, which every Rosetta lifecycle node spins on, to test what
+    the nodes run.
 
     Yields (bridge, node, fixture_node, executor). Subscriptions the test
     creates on the fixture node must be matched before publishing (see
@@ -167,7 +171,7 @@ def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True, buffer
 
     node = LifecycleNode(f"bridge_host_{name}")
     fixture_node = rclpy.create_node(f"fixture_{name}")
-    executor = SingleThreadedExecutor()
+    executor = executor if executor is not None else SingleThreadedExecutor()
     executor.add_node(node)
     executor.add_node(fixture_node)
     bridge = TopicBridge(obs_specs, act_specs, fps=fps, buffer_backends=buffer_backends)
