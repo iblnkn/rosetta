@@ -85,7 +85,7 @@ PUBLIC_API = {
     },
     "rosetta.frames.layout": {"FrameLayout", "KeyLayout", "SpecSlice", "build_feature"},
     "rosetta.frames.naming": {"IMAGE_KEY_PREFIX", "camera_name", "sanitize_field_name"},
-    "rosetta.frames.protocols": {"FrameIO"},
+    "rosetta.frames.protocols": {"Connection", "FrameIO", "RobotClock"},
     "rosetta.policies": {
         "DatasetWriter",
         "PolicyRunner",

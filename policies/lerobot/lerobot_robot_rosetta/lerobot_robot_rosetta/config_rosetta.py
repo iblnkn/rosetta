@@ -101,9 +101,9 @@ class RosettaConfig(RobotConfig):
     config_path: str = ""
     fps: int | None = None
     is_classifier: bool = False
-    # Standalone mode only: sets use_sim_time on the internal node so its
-    # clock (and the adapter's sim pacing) follows /clock. Injected mode
-    # inherits the external node's use_sim_time instead.
+    # Standalone mode only: the connection runs on the simulator's clock
+    # (ros2: /clock), and the adapter's sim pacing follows it. Injected mode
+    # inherits the host's clock instead.
     use_sim_time: bool = False
 
     _contract: Contract | None = field(default=None, init=False, repr=False)

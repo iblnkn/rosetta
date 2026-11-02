@@ -25,6 +25,7 @@ from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
 from rosetta.frames.codecs import decode_value, encode_value
+from rosetta.frames.protocols import Connection, RobotClock
 from rosetta.robots import registry
 
 CONTRACT = """\
@@ -90,3 +91,29 @@ def test_a_contract_for_a_broken_interface_gets_its_error(broken_interface_too, 
     for _ in range(2):  # latched: the retry raises the same error
         with pytest.raises(ContractValidationError, match="Failed to load robot interface 'broken'"):
             _load(tmp_path, CONTRACT.replace("robot_interface: fake", "robot_interface: broken"))
+
+
+def _connect(contract, use_sim_time=False):
+    return registry.load_robot_interface(contract.robot_interface).connect(
+        observations=list(iter_observation_specs(contract)),
+        actions=list(iter_action_specs(contract)),
+        fps=contract.fps,
+        name="test",
+        use_sim_time=use_sim_time,
+    )
+
+
+def test_connect_opens_a_connection_through_the_contracts_interface(fake_interface, tmp_path):
+    connection = _connect(_load(tmp_path, CONTRACT), use_sim_time=True)
+    assert isinstance(connection, Connection)
+    assert isinstance(connection.clock, RobotClock)
+    assert connection.clock.simulated
+    assert connection.events() == {}
+
+
+def test_a_missing_stream_zero_fills_unless_asked_not_to(fake_interface, tmp_path):
+    connection = _connect(_load(tmp_path, CONTRACT))
+    assert connection.sample_frame()["observation.state"].tolist() == [0.0, 0.0]
+    assert connection.sample_frame(fill_missing=False) == {}
+    connection.push(0, np.array([1.0, 2.0]))
+    assert connection.sample_frame(fill_missing=False)["observation.state"].tolist() == [1.0, 2.0]

@@ -50,14 +50,33 @@ from rosetta_ros.ingest import StreamIngest
 from rosetta_ros.rclpy_utils import lifecycle_state_label, qos_profile_from_dict
 
 __all__ = [
+    "RosClock",
     "TopicBridge",
 ]
 
 if TYPE_CHECKING:
+    from rclpy.clock import Clock
     from rclpy.lifecycle import LifecycleNode
 
 # Watchdog fires after this many frame periods without an action.
 WATCHDOG_PERIODS = 2
+
+
+class RosClock:
+    """:class:`~rosetta.frames.protocols.RobotClock` over a node's clock (sim-time aware)."""
+
+    __slots__ = ("_clock",)
+
+    def __init__(self, clock: Clock) -> None:
+        self._clock = clock
+
+    @property
+    def simulated(self) -> bool:
+        """True when the node runs on ``/clock`` (``use_sim_time``)."""
+        return bool(getattr(self._clock, "ros_time_is_active", False))
+
+    def now_ns(self) -> int:
+        return self._clock.now().nanoseconds
 
 
 def _is_latched(spec: ObservationStreamSpec) -> bool:
@@ -213,11 +232,11 @@ class TopicBridge:
         return self._node is not None and all(buffer.last_ts is not None for _, buffer in self._obs_buffers)
 
     @property
-    def clock(self):
+    def clock(self) -> RosClock:
         """Host node clock (sim-time aware). Valid only after setup()."""
         if self._node is None:
             raise RuntimeError("TopicBridge.clock accessed before setup()")
-        return self._node.get_clock()
+        return RosClock(self._node.get_clock())
 
     def send_safety_action(self) -> None:
         """Publish each active stream's declared safety command, then disarm.
@@ -288,17 +307,18 @@ class TopicBridge:
             values.append(data)
         return values
 
-    def sample_frame(self) -> dict[str, Any]:
+    def sample_frame(self, *, fill_missing: bool = True) -> dict[str, Any]:
         """Sample all observation buffers into a backend-neutral frame dict.
 
         Returns:
             ``{contract_key: np.ndarray | str}``, the same shape the bag porter
             emits offline. Missing streams are zero-filled so the frame keeps a
-            stable shape, and logged only on a missing/recovered transition.
-            Specs sharing a key are concatenated in declaration order.
+            stable shape (or, with ``fill_missing=False``, their keys are left
+            out), and logged only on a missing/recovered transition. Specs
+            sharing a key are concatenated in declaration order.
 
         """
-        return self._obs_layout.assemble(self.sample_values())
+        return self._obs_layout.assemble(self.sample_values(), fill_missing=fill_missing)
 
     def publish_frame(self, action_frame: dict[str, Any]) -> dict[str, Any]:
         """Encode and publish a backend-neutral action frame to ROS2 topics.

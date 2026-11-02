@@ -289,13 +289,14 @@ class FrameLayout:
 
     # -------------------- assemble / split --------------------
 
-    def assemble(self, values: Sequence[Any]) -> dict[str, Any]:
+    def assemble(self, values: Sequence[Any], *, fill_missing: bool = True) -> dict[str, Any]:
         """Assemble a frame dict from per-spec values.
 
         ``values[i]`` pairs with ``self.specs[i]`` (the resampled output for
         that stream at one tick: a numpy array, a string, or None when the
         stream had no data). Numeric specs sharing a key concatenate in
-        declaration order. Missing values zero-fill at the spec's static dim.
+        declaration order. Missing values zero-fill at the spec's static dim;
+        with ``fill_missing=False`` a key with any missing value is left out.
         Returns {contract_key: np.ndarray | str}.
         """
         if len(values) != len(self.specs):
@@ -308,6 +309,8 @@ class FrameLayout:
 
         frame: dict[str, Any] = {}
         for key, key_values in by_key.items():
+            if not fill_missing and any(val is None for val in key_values):
+                continue
             layout = self._layouts[key]
 
             if layout.category == "image":

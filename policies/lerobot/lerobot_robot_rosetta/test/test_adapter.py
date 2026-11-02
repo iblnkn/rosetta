@@ -27,7 +27,7 @@ from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta
 from rosetta.contract.schema import load_contract
 from rosetta.frames.codecs import discover_codecs
-from rosetta_ros.topic_bridge import TopicBridge
+from rosetta.frames.protocols import FrameIO
 
 discover_codecs()  # register the built-in codecs
 
@@ -36,15 +36,15 @@ CONTRACTS = Path(get_package_share_directory("rosetta_ros")) / "contracts"
 
 class _FakeClock:
     def __init__(self, active=True, t=0):
-        self.ros_time_is_active = active
+        self.simulated = active
         self.t = t
 
-    def now(self):
-        return SimpleNamespace(nanoseconds=self.t)
+    def now_ns(self):
+        return self.t
 
 
 class _FakeBridge:
-    """Stands in for the TopicBridge a policy runner injects; frame and published are test-side only."""
+    """Stands in for the FrameIO a policy runner injects; frame and published are test-side only."""
 
     warmed_up = True
 
@@ -57,7 +57,7 @@ class _FakeBridge:
     def clock(self):
         return self._clock
 
-    def sample_frame(self):
+    def sample_frame(self, *, fill_missing=True):
         return self.frame
 
     def publish_frame(self, action_frame):
@@ -99,9 +99,10 @@ def _zero_action(robot):
     return {name: 0.0 for name in robot.action_features}
 
 
-def test_fake_bridge_only_stands_in_for_what_topic_bridge_has():
+def test_fake_bridge_is_a_frame_io_and_nothing_more():
+    assert isinstance(_FakeBridge(_FakeClock()), FrameIO)
     stand_ins = [name for name in vars(_FakeBridge) if not name.startswith("_")]
-    assert [name for name in stand_ins if not hasattr(TopicBridge, name)] == []
+    assert [name for name in stand_ins if not hasattr(FrameIO, name)] == []
 
 
 @pytest.mark.parametrize("contract", ["so_101.yaml", "turtlebot3.yaml"])
@@ -192,24 +193,88 @@ def test_reset_makes_the_next_tick_immediate(monkeypatch):
     assert sleeps == []
 
 
+class _FakeConnection(_FakeBridge):
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.closed = False
+
+    def events(self):
+        return {}
+
+    def close(self):
+        self.closed = True
+
+
 @pytest.mark.parametrize("use_sim_time", [False, True])
-def test_standalone_node_gets_use_sim_time_override(monkeypatch, use_sim_time):
+def test_standalone_opens_the_contracts_robot_and_closes_it(monkeypatch, use_sim_time):
     cfg = RosettaConfig(config_path=str(CONTRACTS / "so_101.yaml"), use_sim_time=use_sim_time)
+    connection = _FakeConnection(_FakeClock(active=use_sim_time))
+    calls = []
+
+    def _load(name):
+        calls.append(name)
+        return SimpleNamespace(connect=lambda **kwargs: calls.append(kwargs) or connection)
+
+    monkeypatch.setattr(adapter, "load_robot_interface", _load)
     robot = Rosetta(cfg)
-    captured = {}
+    robot.connect()
+    name, kwargs = calls
+    assert name == "ros2"
+    assert kwargs["name"] == f"rosetta_{cfg.id}"
+    assert kwargs["fps"] == cfg.fps
+    assert kwargs["use_sim_time"] is use_sim_time
+    assert robot.is_connected
 
-    class _CaptureNode:
-        def __init__(self, name, obs_specs, act_specs, fps, **kwargs):
-            captured.update(kwargs)
+    robot.disconnect()
+    assert connection.closed
+    assert not robot.is_connected
 
-    monkeypatch.setattr(adapter, "BridgeLifecycleNode", _CaptureNode)
-    robot._host = SimpleNamespace(start=lambda make_node: make_node(None))
-    robot._create_node()
 
-    overrides = captured["parameter_overrides"]
-    if use_sim_time:
-        assert len(overrides) == 1
-        assert overrides[0].name == "use_sim_time"
-        assert overrides[0].value is True
-    else:
-        assert overrides is None
+class _DyingClock(_FakeClock):
+    """A frozen sim clock whose robot goes away after ``reads`` reads, as a dead connection's clock does."""
+
+    def __init__(self, reads):
+        super().__init__(active=True, t=0)
+        self.reads = reads
+
+    def now_ns(self):
+        self.reads -= 1
+        if self.reads < 0:
+            raise RuntimeError("NodeHost spin thread died")
+        return self.t
+
+
+def test_a_gated_call_raises_when_its_clock_dies():
+    robot, _bridge = _injected_robot(_DyingClock(reads=3))
+
+    errors = []
+
+    def _gated_calls():
+        robot.get_observation()  # anchors
+        try:
+            robot.get_observation()  # waits on the frozen clock until it raises
+        except RuntimeError as e:
+            errors.append(e)
+
+    worker = threading.Thread(target=_gated_calls, daemon=True)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert not worker.is_alive(), "a gated call kept waiting on a dead clock"
+    assert "spin thread died" in str(errors[0])
+
+
+class _FailingConnection(_FakeConnection):
+    def close(self):
+        super().close()
+        raise RuntimeError("deactivate failed")
+
+
+def test_a_failed_close_still_disconnects(monkeypatch):
+    connection = _FailingConnection(_FakeClock(active=False))
+    monkeypatch.setattr(adapter, "load_robot_interface", lambda name: SimpleNamespace(connect=lambda **kw: connection))
+    robot = Rosetta(RosettaConfig(config_path=str(CONTRACTS / "so_101.yaml")))
+    robot.connect()
+    with pytest.raises(RuntimeError, match="deactivate failed"):
+        robot.disconnect()
+    assert connection.closed
+    assert not robot.is_connected

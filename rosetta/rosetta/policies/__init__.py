@@ -39,8 +39,10 @@ time and fail fast otherwise. An adapter registers itself like so::
         ],
     }
 
-This side imports only Rosetta's waist (:mod:`rosetta.contract`,
-:mod:`rosetta.frames`) — never :mod:`rosetta.robots`.
+This side imports Rosetta's waist (:mod:`rosetta.contract`,
+:mod:`rosetta.frames`). A framework that hosts a live run itself also opens
+its robot through :func:`rosetta.robots.registry.load_robot_interface` and
+``connect``. It never imports a robot interface package.
 
 Modules: :mod:`.protocols` is what an adapter *implements* (the two
 Protocols and the value types they exchange); :mod:`.registry` is how the

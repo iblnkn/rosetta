@@ -42,7 +42,7 @@ def teleop():
     yield t
     # Best-effort teardown if a test failed mid-way.
     try:
-        if t._node is not None:
+        if t.is_connected:
             t.disconnect()
     except Exception:
         pass

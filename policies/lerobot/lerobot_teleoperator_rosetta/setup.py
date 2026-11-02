@@ -39,9 +39,7 @@ setup(
         "setuptools",
         "numpy",
         "lerobot<0.6.2",  # the version lerobot_rosetta supports (0.6.2 removes async_inference)
-        "rclpy",
-        "rosetta",  # rosetta.contract/frames
-        "rosetta_ros",  # node host and lifecycle base
+        "rosetta",  # contract, frames, and the robot interface registry
     ],
     extras_require={"test": ["pytest"]},
     zip_safe=True,
@@ -56,6 +54,6 @@ setup(
         "Topic :: Software Development",
         "Topic :: Scientific/Engineering",
     ],
-    description="LeRobot Teleoperator plugin for Rosetta - bridges ROS2 topics to LeRobot Teleoperator interface.",
+    description="LeRobot Teleoperator plugin for Rosetta - presents a Rosetta teleop device as a LeRobot Teleoperator.",
     license="Apache-2.0",
 )

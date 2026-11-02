@@ -25,6 +25,11 @@ frames alone, with no dependency on any pub/sub ecosystem.
 ``rosetta_ros.topic_bridge.TopicBridge`` is the ROS2 implementation.
 A future robot interface (ROS1, zenoh, MQTT, ...) implements the same methods,
 and every policy framework works with it unchanged.
+
+Where the robot side hosts a run (a policy runner node), it builds the
+``FrameIO`` and injects it. Where a framework hosts the run itself (LeRobot's
+CLIs driving a ``Robot``), it opens a :class:`Connection` through the
+contract's robot interface (:meth:`~rosetta.robots.protocols.RobotInterface.connect`).
 """
 
 from __future__ import annotations
@@ -32,8 +37,29 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 __all__ = [
+    "Connection",
     "FrameIO",
+    "RobotClock",
 ]
+
+
+@runtime_checkable
+class RobotClock(Protocol):
+    """The clock a live robot runs on: wall time, or a simulator's.
+
+    A framework that paces its own loop waits on this clock, so a simulation
+    running slower or faster than real time is still sampled at the
+    contract's ``fps`` in simulated time.
+    """
+
+    @property
+    def simulated(self) -> bool:
+        """True when the robot runs on a simulator's clock rather than wall time."""
+        ...
+
+    def now_ns(self) -> int:
+        """Current time on this clock, in nanoseconds."""
+        ...
 
 
 @runtime_checkable
@@ -47,10 +73,25 @@ class FrameIO(Protocol):
     expose richer robot-side methods beyond the protocol (e.g. TopicBridge's
     ``sample_values()``, the pre-assembly per-spec view); those never cross
     the robot/policy boundary.
+
+    Once the robot is gone (its transport stopped, or the I/O was closed),
+    every method and the clock raise. They never serve the last data as if
+    it were current.
     """
 
-    def sample_frame(self) -> dict[str, Any]:
-        """Current observation frame: ``{contract_key: np.ndarray | str}``."""
+    def sample_frame(self, *, fill_missing: bool = True) -> dict[str, Any]:
+        """Current observation frame: ``{contract_key: np.ndarray | str}``.
+
+        A stream with no data yet zero-fills, so every key is present. With
+        ``fill_missing=False`` a key with any such stream is left out instead,
+        for consumers that would act on a made-up zero (a teleop input drives
+        motion).
+        """
+        ...
+
+    @property
+    def clock(self) -> RobotClock:
+        """The clock the robot runs on."""
         ...
 
     @property
@@ -68,4 +109,29 @@ class FrameIO(Protocol):
 
     def reset_state(self) -> None:
         """Clear per-episode state (buffers, warmup) between runs."""
+        ...
+
+
+@runtime_checkable
+class Connection(FrameIO, Protocol):
+    """A live robot a framework opened itself, through its robot interface.
+
+    See :meth:`~rosetta.robots.protocols.RobotInterface.connect`. The caller
+    owns it and closes it.
+    """
+
+    def events(self) -> dict[str, bool]:
+        """Latest value of each event in the event map the connection was opened with.
+
+        Keyed by the contract's event names; empty without an event map or
+        before the first event message.
+        """
+        ...
+
+    def close(self) -> None:
+        """Stop sampling and publishing and release the middleware. Idempotent.
+
+        A close that raises has still released what it could, so the caller
+        drops the connection either way.
+        """
         ...

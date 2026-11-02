@@ -3,18 +3,20 @@
 <package format="3">
   <name>lerobot_teleoperator_rosetta</name>
   <version>0.2.0</version>
-  <description>LeRobot Teleoperator plugin for Rosetta - bridges ROS2 topics to LeRobot Teleoperator interface.</description>
+  <description>LeRobot Teleoperator plugin for Rosetta - presents a Rosetta teleop device as a LeRobot Teleoperator.</description>
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
   <license>Apache-2.0</license>
 
-  <depend>rclpy</depend>
   <depend>rosetta</depend>
-  <depend>rosetta_ros</depend>
   <depend>python3-numpy</depend>
   <!-- lerobot has no rosdep key, so rosdep can neither install it nor report it
        missing: install it with pip (it is in setup.py install_requires). This
        package is not released to the ROS buildfarm (see CONTRIBUTING.md). -->
 
+  <!-- The lifecycle tests drive a real ros2 connection from rclpy publishers. -->
+  <test_depend>rosetta_ros</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>sensor_msgs</test_depend>
   <test_depend>ament_index_python</test_depend>
 
   <export>

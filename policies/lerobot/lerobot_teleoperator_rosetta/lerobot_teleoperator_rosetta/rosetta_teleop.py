@@ -13,39 +13,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""LeRobot Teleoperator backed by the same TopicBridge the robot adapter uses.
+"""LeRobot Teleoperator over a live robot connection.
 
-Teleop inputs are observation streams. Feedback are action streams. Message
-ingest, lifecycle publishers, and teardown all come from the bridge. Only two
-things are teleop-specific and live here: the events subscription and the
-flattening of per-key vectors to the {name: float} shape lerobot expects.
+connect() opens the human device through the contract's robot interface
+(``RobotInterface.connect``): teleop inputs are its observation streams,
+feedback its action streams, and the contract's teleop events its event map.
+Only the LeRobot side lives here: flattening per-key vectors to the
+{name: float} shape lerobot expects, and mapping contract event names onto
+lerobot's TeleopEvents. It imports no robot middleware.
 
 Feedback channels cannot declare a safety behavior (rejected at contract load),
-so the bridge watchdog never arms.
-
-Lifecycle states:
-    Unconfigured  node exists, no subscriptions or publishers
-    Inactive      subscriptions buffering, publishers disabled
-    Active        inputs sampled, feedback published
+so closing the connection publishes nothing.
 """
 
 from __future__ import annotations
 
-import threading
-from functools import partial
+import logging
+from collections.abc import Mapping
+from functools import cached_property
 from typing import Any, Optional
 
 import numpy as np
 from lerobot.teleoperators.teleoperator import Teleoperator
 from lerobot.teleoperators.utils import TeleopEvents
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
-from rosidl_runtime_py.utilities import get_message
 
 from rosetta.frames.layout import FrameLayout
-from rosetta_ros.field_access import resolve_indexed
-from rosetta_ros.node_host import NodeHost
-from rosetta_ros.rclpy_utils import qos_profile_from_dict, require_transition_success
-from rosetta_ros.rosetta_lifecycle_node import BridgeLifecycleNode
+from rosetta.frames.protocols import Connection
+from rosetta.robots.registry import load_robot_interface
 
 from .config_rosetta_teleop import RosettaTeleopConfig
 
@@ -69,132 +64,22 @@ EVENT_NAME_TO_ENUMS: dict[str, tuple[TeleopEvents, ...]] = {
 DEFAULT_EVENTS: dict[TeleopEvents, bool] = dict.fromkeys(TeleopEvents, False)
 
 
-def merge_teleop_events(state: dict[TeleopEvents, bool], msg, select: dict[str, str]) -> dict[TeleopEvents, bool]:
-    """Return ``state`` updated by one events message.
+def teleop_events(event_values: Mapping[str, bool]) -> dict[TeleopEvents, bool]:
+    """LeRobot's TeleopEvents from the contract's event values.
 
-    Selectors resolve through :func:`resolve_indexed`, so Joy button/axis
-    indices (``buttons.0``) work, not only plain fields. An unmapped event
-    name is skipped. A missing or malformed field leaves that event at its
-    last value instead of killing the subscription.
-
-    Several contract events may assert the same lerobot event (``success``
-    and ``end_success`` both assert SUCCESS), so each touched lerobot event
-    gets the OR of its sources in this message.
+    Several contract events may assert the same lerobot event (``success`` and
+    ``end_success`` both assert SUCCESS), so each lerobot event is the OR of
+    its sources. Contract events with no lerobot mapping are ignored.
     """
-    touched: dict[TeleopEvents, bool] = {}
-    for event_name, selector in select.items():
-        enums = EVENT_NAME_TO_ENUMS.get(event_name)
-        if not enums:
-            continue
-        try:
-            value = bool(resolve_indexed(msg, selector))
-        except (AttributeError, IndexError, ValueError):
-            continue
-        for enum in enums:
-            touched[enum] = touched.get(enum, False) or value
-    return state | touched
-
-
-class _RosettaTeleopLifecycleNode(BridgeLifecycleNode):
-    """BridgeLifecycleNode plus the teleop events subscription.
-
-    The base owns the bridge, the lifecycle callbacks, and the safety send on
-    deactivate. That send is a no-op here because feedback carries no safety
-    behavior. This class extends ``setup``/``teardown`` with the events
-    subscription and adds the sample/publish surface lerobot drives.
-    """
-
-    def __init__(self, node_name: str, config: RosettaTeleopConfig, **kwargs):
-        super().__init__(node_name, config.input_specs, config.feedback_specs, config.fps, **kwargs)
-        self._config = config
-        self._feedback_layout = FrameLayout(config.feedback_specs)
-        self._events_sub = None
-        self._events_lock = threading.Lock()
-        self._events_state: dict[TeleopEvents, bool] = dict(DEFAULT_EVENTS)
-
-    # -------------------- lifecycle hooks --------------------
-
-    def setup(self) -> None:
-        """Create the bridge entities, then the optional events subscription.
-
-        ``events_spec`` is None when the contract declares no teleop events.
-        """
-        super().setup()
-        events_spec = self._config.events_spec
-        if events_spec:
-            self._events_sub = self.create_subscription(
-                get_message(events_spec.channel.type),
-                events_spec.channel.topic,
-                partial(self._on_events, spec=events_spec),
-                qos_profile_from_dict(events_spec.channel.qos),
-            )
-            unmapped = [name for name in events_spec.select if name not in EVENT_NAME_TO_ENUMS]
-            if unmapped:
-                self.get_logger().info(
-                    f"Teleop events with no lerobot mapping, ignored on this path "
-                    f"(a HIL app such as rosetta_ros_hil handles them): {unmapped}"
-                )
-        self.get_logger().info(
-            f"Configured: {len(self._config.input_specs)} inputs, {len(self._config.feedback_specs)} feedback"
-        )
-
-    def teardown(self) -> None:
-        """Destroy the events subscription and reset state so a reconnect starts clean."""
-        super().teardown()
-        if self._events_sub is not None:
-            self.destroy_subscription(self._events_sub)
-            self._events_sub = None
-        with self._events_lock:
-            self._events_state = dict(DEFAULT_EVENTS)
-
-    # -------------------- teleop surface --------------------
-
-    def _on_events(self, msg, spec) -> None:
-        """Update event state from one events message. Runs on the spin thread."""
-        with self._events_lock:
-            self._events_state = merge_teleop_events(self._events_state, msg, spec.select)
-
-    def sample_action(self) -> dict[str, Any]:
-        """Flatten per-spec input samples to {namespaced_name: float}.
-
-        A stream with no data yet is omitted, not zero-filled: a fake zero
-        teleop value would command motion. ``sample_values`` returns one entry
-        per input spec in declaration order, so it lines up with ``input_specs``
-        position by position (the bridge is constructed from this same list;
-        ``strict=True`` asserts that invariant).
-        """
-        action: dict[str, Any] = {}
-        for spec, value in zip(self._config.input_specs, self.bridge.sample_values(), strict=True):
-            if value is None:
-                continue
-            for i, name in enumerate(spec.namespaced_names):
-                action[name] = float(value[i])
-        return action
-
-    def get_events(self) -> dict[TeleopEvents, bool]:
-        """Snapshot event state under the lock. The copy keeps callers off the shared dict."""
-        with self._events_lock:
-            return self._events_state.copy()
-
-    def publish_feedback(self, feedback: dict[str, Any]) -> None:
-        """Regroup {namespaced_name: value} into per-key vectors and publish.
-
-        All or nothing: a key is published only when every one of its names is
-        present, because ``publish_frame`` needs the full per-key vector. A
-        partial frame would be a malformed action.
-        """
-        frame: dict[str, Any] = {}
-        for key in self._feedback_layout.keys:
-            names = [name for sl in self._feedback_layout[key].slices for name in sl.spec.namespaced_names]
-            if not all(name in feedback for name in names):
-                return
-            frame[key] = np.array([feedback[name] for name in names], dtype=np.float64)
-        if frame:
-            self.bridge.publish_frame(frame)
+    events = dict(DEFAULT_EVENTS)
+    for name, value in event_values.items():
+        for enum in EVENT_NAME_TO_ENUMS.get(name, ()):
+            events[enum] = events[enum] or bool(value)
+    return events
 
 
 class RosettaTeleop(Teleoperator):
-    """LeRobot Teleoperator that bridges to ROS2 topics with lifecycle support."""
+    """LeRobot Teleoperator over a Rosetta robot connection."""
 
     config_class = RosettaTeleopConfig
     name = "rosetta_teleop"
@@ -203,11 +88,15 @@ class RosettaTeleop(Teleoperator):
         super().__init__(config)
         self.config = config
         self._calibrated = True
-        self._host = NodeHost()
+        self._connection: Optional[Connection] = None
 
-    @property
-    def _node(self) -> Optional[_RosettaTeleopLifecycleNode]:
-        return self._host.node
+    @cached_property
+    def _input_layout(self) -> FrameLayout:
+        return FrameLayout(self.config.input_specs)
+
+    @cached_property
+    def _feedback_layout(self) -> FrameLayout:
+        return FrameLayout(self.config.feedback_specs)
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -227,8 +116,7 @@ class RosettaTeleop(Teleoperator):
 
     @property
     def is_connected(self) -> bool:
-        """True only in ACTIVE, so get_action/send_feedback gate on a live bridge."""
-        return self._node is not None and self._node.is_active
+        return self._connection is not None
 
     @property
     def is_calibrated(self) -> bool:
@@ -238,65 +126,82 @@ class RosettaTeleop(Teleoperator):
         pass
 
     def configure(self) -> None:
-        """Configure only: subscriptions buffer while publishers stay disabled."""
-        require_transition_success(self._start_node().trigger_configure(), "configure")
+        """Nothing to configure: connect() opens the device ready to run."""
 
     def connect(self, calibrate: bool = True) -> None:
-        """Configure if needed, then activate.
+        """Open the device through the contract's robot interface.
 
         Raises DeviceAlreadyConnectedError when already connected, matching the
         robot adapter and lerobot's own devices.
         """
-        del calibrate  # Unused - ROS2 teleop doesn't require calibration
+        del calibrate  # Unused - the teleop device needs no calibration
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
 
-        node = self._start_node()
-        if not node.is_configured:
-            require_transition_success(node.trigger_configure(), "configure")
-        require_transition_success(node.trigger_activate(), "activate")
-
-    def _start_node(self) -> _RosettaTeleopLifecycleNode:
-        return self._host.start(
-            lambda ctx: _RosettaTeleopLifecycleNode(f"rosetta_teleop_{self.id}", self.config, context=ctx)
+        events = self.config.events_spec
+        if events is not None:
+            unmapped = [name for name in events.select if name not in EVENT_NAME_TO_ENUMS]
+            if unmapped:
+                logging.info(
+                    "Teleop events with no lerobot mapping, ignored on this path "
+                    "(a HIL app such as rosetta_ros_hil handles them): %s",
+                    unmapped,
+                )
+        interface = load_robot_interface(self.config.contract.robot_interface)
+        self._connection = interface.connect(
+            observations=self.config.input_specs,
+            actions=self.config.feedback_specs,
+            fps=self.config.fps,
+            name=f"rosetta_teleop_{self.id}",
+            events=events,
         )
 
     def get_action(self) -> dict[str, Any]:
-        """Get current action from input buffers."""
+        """Flatten the current inputs to {namespaced_name: float}.
+
+        A key whose streams have no data yet is omitted, not zero-filled: a
+        fake zero teleop value would command motion.
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        return self._node.sample_action()
+        frame = self._connection.sample_frame(fill_missing=False)
+        action: dict[str, Any] = {}
+        for key, vec in frame.items():
+            names = [name for sl in self._input_layout[key].slices for name in sl.spec.namespaced_names]
+            for name, value in zip(names, np.asarray(vec).flatten(), strict=True):
+                action[name] = float(value)
+        return action
 
     def get_teleop_events(self) -> dict[TeleopEvents, bool]:
         """Current event state, or all-False defaults before connect.
 
         lerobot polls events outside the connected window, so this tolerates a
-        missing node instead of raising like get_action and send_feedback.
+        missing connection instead of raising like get_action and send_feedback.
         """
-        if self._node is None:
+        if self._connection is None:
             return dict(DEFAULT_EVENTS)
-        return self._node.get_events()
+        return teleop_events(self._connection.events())
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:
-        """Send feedback to ROS2 topics."""
+        """Regroup {namespaced_name: value} into per-key vectors and publish.
+
+        All or nothing: a key is published only when every one of its names is
+        present, because ``publish_frame`` needs the full per-key vector. A
+        partial frame would be a malformed action.
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-        self._node.publish_feedback(feedback)
+        frame: dict[str, Any] = {}
+        for key in self._feedback_layout.keys:
+            names = [name for sl in self._feedback_layout[key].slices for name in sl.spec.namespaced_names]
+            if not all(name in feedback for name in names):
+                return
+            frame[key] = np.array([feedback[name] for name in names], dtype=np.float64)
+        if frame:
+            self._connection.publish_frame(frame)
 
     def disconnect(self) -> None:
-        """Deactivate then clean up the lifecycle node.
-
-        The node property raises if the spin thread died. The finally still runs
-        host.stop(), so a poisoned host is torn down even as the error
-        propagates to the caller.
-        """
-        try:
-            node = self._node
-            if node is None:
-                return
-            if node.is_active:
-                node.trigger_deactivate()
-            if node.is_configured:
-                node.trigger_cleanup()
-        finally:
-            self._host.stop()
+        """Close the connection; a no-op when not connected."""
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            connection.close()

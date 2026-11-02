@@ -90,11 +90,13 @@ interface that isn't installed fails to load. A framework adapter such as
 `rosetta_port` joins the two sides offline and `policy_runner_node` joins
 them live, each looking the framework up by name.
 
-The two sides mostly stay apart. `rosetta_ros` never imports a framework.
-The exception is `lerobot_rosetta`: its policy runner drives LeRobot's
-`RobotClient` with the LeRobot `Robot` plugin as the robot, and that plugin is
-built on `rosetta_ros`. So importing `lerobot_rosetta`, even for its dataset
-writer, imports ROS.
+The two sides stay apart. `rosetta_ros` never imports a framework, and no
+framework adapter imports ROS. When a framework hosts the run itself, as
+LeRobot's own command-line tools do with the LeRobot `Robot` plugin, the
+plugin opens the robot through the contract's robot interface
+(`RobotInterface.connect`) and gets the same `FrameIO` a ROS host would hand
+a policy runner. Running a `ros2` contract still needs
+`rosetta_ros` installed, because loading the contract asks it.
 
 Entry points extend this. `rosetta.robot_interfaces` adds a middleware,
 `rosetta.codecs` adds message types, `rosetta.operators` adds value
