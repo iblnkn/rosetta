@@ -38,6 +38,7 @@ Frames are each episode's porter frames: unwindowed, every tick after warmup.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -50,7 +51,7 @@ from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_policy_specs
 from rosetta.frames.layout import FrameLayout
 
-from .dataset import ContractFrames
+from .dataset import ContractFrames, NoSamplesError
 
 if TYPE_CHECKING:
     from rerun.catalog import DatasetEntry
@@ -92,25 +93,38 @@ def write_stats_layer(
     layer_dir.mkdir(parents=True, exist_ok=True)
     uris = []
     for segment in todo:
-        frames = ContractFrames(
-            dataset_entry.catalog.url,
-            dataset_entry.name,
-            contract,
-            token=token,
-            segments=[segment],
-            shuffle_strategy=NoShuffle(),
-            layout=layout,
-        )
-        count, payload = _sufficient_statistics(frames, frame_layout)
+        try:
+            frames = ContractFrames(
+                dataset_entry.catalog.url,
+                dataset_entry.name,
+                contract,
+                token=token,
+                segments=[segment],
+                shuffle_strategy=NoShuffle(),
+                layout=layout,
+            )
+        except NoSamplesError:
+            # Training skips a segment it can't sample, so its stats count 0
+            # frames rather than stopping every other segment's layer.
+            logging.warning("%s: no tick has data for every observation stream; its stats count 0 frames", segment)
+            count, payload = 0, {}
+        else:
+            count, payload = _sufficient_statistics(frames, frame_layout)
         path = layer_dir / f"{segment}.rrd"
-        with rr.RecordingStream("rosetta_stats", recording_id=segment, send_properties=False) as rec:
-            rec.save(path)
-            rec.send_property(name, rr.AnyValues(**{key: value.ravel() for key, value in payload.items()}))
-            rec.send_property(f"{name}_meta", rr.AnyValues(frames=count, contract=text))
+        _write_layer(path, segment, name, count, payload, text)
         uris.append(path.resolve().as_uri())
     if uris:
         dataset_entry.register(uris, layer_name=name).wait()
     return todo
+
+
+def _write_layer(path: Path, segment: str, name: str, count: int, payload: dict[str, np.ndarray], text: str) -> None:
+    """Write one segment's stats layer: the sufficient statistics, and the frame count and contract."""
+    with rr.RecordingStream("rosetta_stats", recording_id=segment, send_properties=False) as rec:
+        rec.save(path)
+        if payload:
+            rec.send_property(name, rr.AnyValues(**{key: value.ravel() for key, value in payload.items()}))
+        rec.send_property(f"{name}_meta", rr.AnyValues(frames=count, contract=text))
 
 
 def load_stats(dataset_entry: DatasetEntry, contract_path: str | Path) -> dict[str, dict[str, np.ndarray]]:
@@ -140,17 +154,26 @@ def load_stats(dataset_entry: DatasetEntry, contract_path: str | Path) -> dict[s
     )
     column = lambda prop, field: table.column(f"property:{prop}:{field}").to_pylist()  # noqa: E731
 
-    frames = sum(int(row[0]) for row in column(f"{name}_meta", "frames"))
+    frames = [int(row[0]) for row in column(f"{name}_meta", "frames")]
+    rows = {key: column(name, key) for key in frame_layout.keys if frame_layout[key].category != "string"}
+    return _stats_from_layers(frames, rows, frame_layout)
+
+
+def _stats_from_layers(
+    frames: list[int], rows: dict[str, list[Any]], frame_layout: FrameLayout
+) -> dict[str, dict[str, np.ndarray]]:
+    """Merge per-segment stats layers into stats over every frame.
+
+    A segment with no samplable tick has a layer with 0 frames and no values
+    (its rows are None), and adds nothing.
+    """
     stats: dict[str, dict[str, np.ndarray]] = {}
-    for key in frame_layout.keys:
-        category = frame_layout[key].category
-        if category == "string":
-            continue
-        rows = [np.asarray(row) for row in column(name, key)]
-        if category == "image":
-            stats[key] = histogram_stats(sum(row.reshape(-1, LEVELS) for row in rows), frames)
+    for key, key_rows in rows.items():
+        present = [np.asarray(row) for row in key_rows if row is not None]
+        if frame_layout[key].category == "image":
+            stats[key] = histogram_stats(sum(row.reshape(-1, LEVELS) for row in present), sum(frames))
         else:
-            stats[key] = value_stats(np.concatenate([row.reshape(-1, frame_layout[key].dim) for row in rows]))
+            stats[key] = value_stats(np.concatenate([row.reshape(-1, frame_layout[key].dim) for row in present]))
     return stats
 
 
