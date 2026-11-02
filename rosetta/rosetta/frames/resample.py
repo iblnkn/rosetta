@@ -40,13 +40,28 @@ DEFAULT_RESET_TOL_NS = 1_000_000_000
 
 
 def step_ns(fps: int) -> int:
-    """Frame period in nanoseconds for a contract rate.
+    """Frame period in nanoseconds for a contract rate, truncated to whole ns.
 
-    The single definition of the tick step, shared by the live bridge (via
-    :meth:`StreamBuffer.from_spec`) and the bag porter. The two must agree for
-    bag/live sample parity.
+    The duration a ``drop`` buffer treats as fresh. Tick times come from
+    :func:`tick_ns` instead: a grid built by adding this rounded period drifts
+    whenever ``1e9 / fps`` isn't whole (15, 60 fps, ...).
     """
     return int(1e9 / fps)
+
+
+def tick_ns(start_ns: int, index: int, fps: int) -> int:
+    """Time of tick ``index`` on the grid starting at ``start_ns``: ``start + floor(index * 1e9 / fps)``.
+
+    Integer math, so every tick is within 1 ns of exact however long the
+    recording, and ticks never drift.
+    """
+    return start_ns + index * 1_000_000_000 // fps
+
+
+def num_ticks(duration_ns: int, fps: int) -> int:
+    """Number of ticks at or before ``start + duration_ns`` on a grid starting at ``start``."""
+    # tick_ns(0, k, fps) <= duration  <=>  k * 1e9 < (duration + 1) * fps
+    return -(-(duration_ns + 1) * fps // 1_000_000_000)
 
 
 class StreamBuffer:
