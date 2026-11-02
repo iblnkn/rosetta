@@ -89,63 +89,44 @@ table.
 
 ## Commits and pull requests
 
-A commit's subject states the behavior after the change, in the present
-tense, for example `Porter ticks are exact multiples of the frame period, so
-the grid never drifts`. The body says why. A commit with generated content
-ends with the `Assisted-by:` trailer from
-[Generative AI](#generative-ai), and no other tool trailers such as
-`Co-Authored-By`.
+Write the commit subject as what the code does after the change, in the
+present tense. The body explains why.
 
-A pull request description follows
-[the template](.github/pull_request_template.md):
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+```
 
-- An opening paragraph with the problem or goal. No heading.
-- `## Changes`: one bullet per change a reviewer needs to know about. Start a
-  breaking change with `Breaking:`.
-- `## Testing`: evidence, not a claim. Give the test that fails without the
-  change and passes with it, the log line or output that changed, or a
-  screenshot for anything visual. "Tests pass" on its own is not evidence.
-- `## Merge danger`: whether the change is a two-way door (a revert undoes it)
-  or a one-way door, and what could break. Removing or renaming a public API
-  name (`test_public_api.py` pins them), a contract field, a node's topic,
-  parameter, service or action, a bag metadata key, or the dataset layout
-  `rosetta_port` writes is a one-way door. Recorded bags and ported datasets
-  outlive a revert.
-- The `🤖 This pull request was assisted by ...` line from
-  [Generative AI](#generative-ai), when a generative tool helped.
+Pull requests use [the template](.github/pull_request_template.md). Open
+with the problem or goal in a few sentences, then fill in each section:
+
+| Section | What goes in it |
+|---|---|
+| Changes | One bullet per change a reviewer should know about. Start a breaking change with `Breaking:`. |
+| Testing | What you ran and what it showed, such as a test that fails without the change, or the log line that changed. |
+| Merge danger | Whether a revert undoes it, and what could break. Renaming or removing a public API name, contract field, node topic, parameter, service or action, bag metadata key, or the dataset layout can't be fully reverted, because bags and datasets already written keep the old form. |
 
 ## Generative AI
 
-Rosetta follows the
-[OSRF policy on generative tools](https://github.com/openrobotics/osra-policies-and-procedures/blob/main/OSRF%20Policy%20on%20the%20Use%20of%20Generative%20Tools%20(%E2%80%9CGenerative%20AI%E2%80%9D)%20in%20Contributions.md):
-any use of a generative AI tool in a contribution is disclosed, in a form that
-lasts as long as the contribution.
-
-Each commit with generated code or documentation ends with a trailer in the
-policy's format, `Assisted-by: AGENT_NAME:MODEL_VERSION`, after the subject
-line:
+Rosetta follows the [OSRF policy on generative tools](https://github.com/openrobotics/osra-policies-and-procedures/blob/main/OSRF%20Policy%20on%20the%20Use%20of%20Generative%20Tools%20(%E2%80%9CGenerative%20AI%E2%80%9D)%20in%20Contributions.md).
+When an AI tool wrote part of a commit, end the commit with an `Assisted-by`
+trailer that names the tool and the exact model:
 
 ```text
 Porter ticks are exact multiples of the frame period, so the grid never drifts
 
-The body says why.
+The body explains why.
 
 Assisted-by: Claude:claude-opus-5-5
 ```
 
-A commit made with more than one model has one trailer per model. After the
-model, the policy lists any specialised analysis tools used, such as
-clang-tidy, but not git or the editor.
-
-The pull request description ends with the same statement:
+Use one trailer per model, and no other tool trailers such as
+`Co-Authored-By`. End the pull request description with the same thing:
 
 ```text
 🤖 This pull request was assisted by Claude:claude-opus-5-5.
 ```
 
-You are responsible for the whole contribution, generated parts included.
-The policy lists the checks it expects, from review and tests to checking for
-intellectual property problems.
+Generated code gets the same review and tests as any other code.
 
 ## Where an adapter lives
 
