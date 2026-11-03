@@ -328,6 +328,13 @@ def _dec_tensor(msg: Any, spec: StreamSpec) -> Any:
                 f"ExperimentalTensor on image key '{spec.key}' has shape {list(shape)}; "
                 f"an image tensor is (height, width, {DECODED_IMAGE_CHANNELS}) RGB"
             )
+        msg_dtype = DLPACK_DTYPES.get((int(msg.dtype_code), int(msg.dtype_bits)))
+        if msg_dtype != "uint8" or int(msg.dtype_lanes) != 1:
+            # Casting a float image to uint8 would truncate [0, 1] pixels to black.
+            raise ValueError(
+                f"ExperimentalTensor on image key '{spec.key}' is {msg_dtype or 'an unsupported dtype'}; "
+                f"an image tensor is uint8"
+            )
         return decode_tensor(msg, shape, "uint8")
     return decode_tensor(msg, spec.shape, spec.dtype)
 

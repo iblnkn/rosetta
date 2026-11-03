@@ -110,6 +110,12 @@ def message_tensor(data: Any, dtype: str, shape: tuple[int, ...], strides: tuple
     reach past ``data``. Host data becomes a read-only numpy view. Device
     data becomes a torch tensor on its device.
     """
+    if byte_offset % _ITEMSIZE[dtype]:
+        # A misaligned device pointer fails in the first kernel that reads it,
+        # with a CUDA error that poisons the whole process.
+        raise ValueError(
+            f"A {dtype} tensor's byte offset {byte_offset} is not a multiple of its {_ITEMSIZE[dtype]}-byte items"
+        )
     # Elements from the first to the last one the view reaches.
     span = 1 + sum((n - 1) * s for n, s in zip(shape, strides, strict=True)) if all(shape) else 0
     if byte_offset + span * _ITEMSIZE[dtype] > len(data):
