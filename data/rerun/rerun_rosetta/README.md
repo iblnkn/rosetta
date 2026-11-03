@@ -49,6 +49,15 @@ at 30 fps, and a message stamped inside that gap lands one frame apart from
 where the porter puts it. Rerun 0.41's `FixedRateSampling` takes only a rate,
 so the exact grid can't be requested.
 
+A segment with no data for an observation stream (a camera that wasn't
+recorded, say) is skipped with a warning, as the porter skips such an
+episode: `RerunReader`, `write_stats_layer` and `load_stats` check each
+observation stream's segments before Rerun builds its manifest, which would
+otherwise fail on it. A missing action stream zero-fills, as in the porter.
+A segment too short for the windows after warmup has no sample start, so
+`RerunReader` doesn't count it as an episode. Its frames still count in the
+stats, as they would in a ported dataset.
+
 Warmup is a manifest rule. The manifest is built with every observation field
 required, so ticks before all observation streams have a sample are dropped,
 as the porter skips them.
@@ -93,7 +102,25 @@ that. A saved manifest built for another dataset, contract, `windows` or
 `num_workers` raises. It lists the samples that existed when it was built, so
 delete it after registering new recordings.
 
-[`examples/train_act.py`](examples/train_act.py) trains LeRobot's ACT end to end.
+## Train a LeRobot policy
+
+`RerunReader` is this package's frame reader, registered as `rerun`. It
+serves `ContractFrames`' frames with the windows a policy asks for, plus `task`,
+`episode_index`, `frame_index`, `index` and `timestamp`, so
+`rosetta-lerobot-train` (from `lerobot_dataset_rosetta`) trains any LeRobot
+policy on the catalog:
+
+```bash
+rosetta-lerobot-train --rosetta.reader=rerun --rosetta.contract=contract.yaml \
+    --rosetta.catalog_url=rerun+http://127.0.0.1:51234 --rosetta.dataset=my_task \
+    --policy.type=act --policy.push_to_hub=false --output_dir=outputs/act
+```
+
+Each episode's task is the operator prompt the recorder stores in the bag's
+`custom_data`, which the `.rrd` keeps in its `rosbag2` property. Run
+`write_stats_layer` first: the reader takes its stats from that layer.
+[Train without porting](https://iblnkn.github.io/rosetta/how-to/train-without-porting.html)
+covers the whole workflow.
 
 ## Normalization stats
 
@@ -123,7 +150,8 @@ layer.
   sample different ticks.
 - A windowed key never runs past the episode: the dataloader trims the last
   `window - 1` ticks of each episode as sample starts, where LeRobot pads them
-  and masks them with `<key>_is_pad`.
+  and masks them with `<key>_is_pad`. `RerunReader`'s `<key>_is_pad` is
+  always false.
 - With `ros2` recordings, topics must be recorded `reflected` (the plugin's
   default). A topic recorded only `raw` raises when the contract compiles. Add
   the reflected form with `ros2 bag convert` (see the plugin's README). A
@@ -131,7 +159,9 @@ layer.
   raises, and an action zero-fills with a warning.
 - With `ros2` recordings, record without `--max-bag-size`: each file of a
   split bag gets its own recording id and registers as its own episode.
-- No episode markers or `task` strings in samples.
+- `ContractFrames` samples carry no episode markers or `task` strings.
+  `RerunReader` adds the task from each episode's recorded prompt, and refuses
+  a contract with a `tasks` section: per-frame task topics aren't read yet.
 - The sample grid adds a fixed whole-nanosecond step, so at a frame rate whose
   period isn't a whole number of nanoseconds it drifts from the porter's exact
   grid by up to 0.5 ns per tick: 18 µs per hour at 15 fps, 72 µs at 60 fps.

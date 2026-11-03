@@ -35,7 +35,7 @@ BASE = textwrap.dedent(
     """
     robot_type: compile_test
     robot_interface: ros2
-    fps: 15
+    fps: {fps}
 
     observations:
       observation.state:
@@ -75,9 +75,9 @@ class FakeLayout:
 JS, CMD = "rec/js", "rec/cmd"
 
 
-def _contract(tmp_path, obs_align: str = HOLD, act_align: str = HOLD):
+def _contract(tmp_path, obs_align: str = HOLD, act_align: str = HOLD, fps: int = 15):
     path = tmp_path / "contract.yaml"
-    path.write_text(BASE.format(obs_align=obs_align, act_align=act_align))
+    path.write_text(BASE.format(obs_align=obs_align, act_align=act_align, fps=fps))
     return load_contract(path)
 
 
@@ -104,9 +104,22 @@ def test_a_form_the_layout_cannot_read_raises_its_error(tmp_path):
         compile_contract(_contract(tmp_path), [JS, "unreadable/cmd"], FakeLayout())
 
 
-def test_window_offsets_are_grid_steps_in_seconds(tmp_path):
+@pytest.mark.parametrize("fps", [10, 15, 30, 60])
+def test_windows_land_on_whole_rerun_steps(tmp_path, fps):
+    """Rerun's dataloader rounds each window offset in seconds to nanoseconds, for its trims and its lookups.
+
+    Every offset must come out a whole number of its steps, ``round(1e9 / fps)``,
+    or at 15 fps an observation history puts each sample a nanosecond before its tick.
+    """
+    step = round(1e9 / fps)
+    windows = {"observation.state": (-2, 0), "action": (-3, 5)}
+    q = compile_contract(_contract(tmp_path, fps=fps), [JS, CMD], FakeLayout(), windows=windows)
+    for key, (start, end) in zip(("f0", "f1"), windows.values(), strict=True):
+        assert [round(o * 1e9) for o in q.fields[key].window] == [k * step for k in range(start, end + 1)]
+
+
+def test_an_unwindowed_field_has_no_window(tmp_path):
     q = compile_contract(_contract(tmp_path), [JS, CMD], FakeLayout(), windows={"action": (0, 2)})
-    assert q.fields["f1"].window == (0.0, 1 / 15, 2 / 15)
     assert q.fields["f0"].window is None
 
 

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from multiprocessing.sharedctypes import RawValue
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,6 +42,7 @@ from rerun.experimental.dataloader import (
     DataSource,
     Manifest,
     RerunIterableDataset,
+    RerunMapDataset,
     SampleShuffle,
     ShuffleStrategy,
 )
@@ -49,7 +50,7 @@ from rerun.experimental.dataloader import (
 from rosetta.frames.layout import FrameLayout
 
 from .layout import load_layout
-from .query import CompiledQuery, compile_contract, field_key
+from .query import POSITION_FIELD, CompiledQuery, compile_contract, field_key
 
 if TYPE_CHECKING:
     from rerun.catalog import DatasetEntry
@@ -98,6 +99,10 @@ class ContractFrames(torch.utils.data.IterableDataset):
     ``multiprocessing_context="spawn"`` when there are any. ``layout`` defaults
     to the one registered for the contract's robot interface.
 
+    With ``positions``, each sample also carries ``"position"``:
+    ``(segment_id, index_ns)``, the sample's segment and its tick on the index
+    timeline.
+
     Building the manifest scans the whole dataset. With ``manifest`` set to a
     path, the first run writes the manifest there and later runs load it
     instead. A saved manifest that doesn't match this dataset, its segments,
@@ -119,6 +124,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
         num_workers: int = 0,
         layout: RecordingLayout | None = None,
         manifest: str | Path | None = None,
+        positions: bool = False,
     ) -> None:
         super().__init__()
         if isinstance(contract, (str, Path)):
@@ -129,7 +135,9 @@ class ContractFrames(torch.utils.data.IterableDataset):
         layout = layout or load_layout(contract.robot_interface)
         dataset_entry = CatalogClient(catalog_url, token=token).get_dataset(dataset_name)
         self._connection = (catalog_url, dataset_name, token, segments)
-        self._query = compile_contract(contract, dataset_entry.schema().column_names(), layout, windows=windows)
+        self._query = compile_contract(
+            contract, dataset_entry.schema().column_names(), layout, windows=windows, positions=positions
+        )
         self._layout = FrameLayout(self._query.specs)
         self._source = DataSource(dataset_entry, segments)
         segment_ids = _segment_ids(dataset_entry, segments)
@@ -159,6 +167,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
         if not self._manifest.num_rows:
             raise NoSamplesError("No sample has data for every observation stream; nothing to train on.")
         self._seed = seed
+        self._map: RerunMapDataset | None = None
         # Shared memory, inherited by DataLoader workers when they spawn, so
         # persistent workers see every set_epoch.
         self._epoch = RawValue("q", 0)
@@ -183,6 +192,15 @@ class ContractFrames(torch.utils.data.IterableDataset):
         """LeRobot feature schema for the assembled frame keys (unwindowed shapes)."""
         return self._layout.features()
 
+    @property
+    def index_name(self) -> str:
+        """The Rerun timeline samples are taken on."""
+        return self._query.index
+
+    def reseed(self, seed: int) -> None:
+        """Shuffle with ``seed`` from the next iteration on."""
+        self._seed = seed
+
     def set_epoch(self, epoch: int) -> None:
         """Replay the manifest in epoch ``epoch``'s order from the next iteration on."""
         self._epoch.value = epoch
@@ -190,19 +208,39 @@ class ContractFrames(torch.utils.data.IterableDataset):
     def __len__(self) -> int:
         return self._manifest.num_rows
 
+    def positions(self) -> list[tuple[str, int]]:
+        """Each manifest row's ``(segment_id, anchor)``: its segment and its tick on the index timeline."""
+        table = self._manifest.to_arrow()
+        return list(zip(table.column("segment_id").to_pylist(), table.column("anchor").to_pylist(), strict=True))
+
+    def read(self, rows: Sequence[int]) -> list[dict[str, Any]]:
+        """The samples at manifest ``rows``, in that order, fetched in one catalog query.
+
+        Rerun's map-style dataset over this manifest's samples, so a sampler
+        that isn't Rerun's picks them. The shuffle strategy and epoch don't
+        apply.
+        """
+        if self._map is None:
+            self._map = RerunMapDataset.from_manifest(self._manifest, self._live_source(), self._query.fields)
+        return [self._assemble(sample) for sample in self._map.__getitems__([int(r) for r in rows])]
+
     def __iter__(self) -> Iterator[dict[str, Any]]:
-        if self._source is None:  # a DataLoader worker: the live entry doesn't pickle
-            catalog_url, dataset_name, token, segments = self._connection
-            self._source = DataSource(CatalogClient(catalog_url, token=token).get_dataset(dataset_name), segments)
         manifest = self._manifest.shuffle(self._shuffle_strategy, seed=self._seed + self._epoch.value)
-        for sample in RerunIterableDataset.from_manifest(manifest, self._source, self._query.fields):
+        for sample in RerunIterableDataset.from_manifest(manifest, self._live_source(), self._query.fields):
             yield self._assemble(sample)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_source"] = None
+        state["_map"] = None
         state["_manifest_dir"] = None  # only the parent removes the temporary manifest
         return state
+
+    def _live_source(self) -> DataSource:
+        if self._source is None:  # a DataLoader worker: the live entry doesn't pickle
+            catalog_url, dataset_name, token, segments = self._connection
+            self._source = DataSource(CatalogClient(catalog_url, token=token).get_dataset(dataset_name), segments)
+        return self._source
 
     def _assemble(self, sample: dict[str, Any]) -> dict[str, Any]:
         frame: dict[str, Any] = {}
@@ -216,7 +254,10 @@ class ContractFrames(torch.utils.data.IterableDataset):
                 values = [None if sample.get(k) is None else sample[k][offset] for k in keys]
                 per_offset.append(layout.assemble(values)[key])
             frame[key] = np.stack(per_offset)
-        return {key: frame[key] for key in self._layout.keys}
+        frame = {key: frame[key] for key in self._layout.keys}
+        if POSITION_FIELD in sample:
+            frame[POSITION_FIELD] = sample[POSITION_FIELD]
+        return frame
 
 
 # Rerun's manifest header doesn't name the segments it was built from (a

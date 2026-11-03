@@ -18,9 +18,8 @@ Setup for rerun_rosetta - Rerun dataset backend for Rosetta.
 
 Compiles a rosetta contract into a Rerun catalog dataloader query so
 policies train directly from reflected .rrd recordings registered to a
-Rerun server, with no export step. Plain library API (no rosetta
-entry points): a lazy frame producer is neither a DatasetWriter nor a
-PolicyRunner.
+Rerun server, with no export step. Registers RerunReader as the "rerun"
+rosetta.frame_readers entry point.
 """
 
 import os
@@ -44,6 +43,11 @@ setup(
         "rerun-sdk[dataloader,catalog]>=0.41",
         "torch",  # ContractFrames is a torch IterableDataset
     ],
+    entry_points={
+        "rosetta.frame_readers": [
+            "rerun = rerun_rosetta.reader:RerunReader",
+        ],
+    },
     extras_require={"test": ["pytest"]},
     zip_safe=True,
     author="Isaac Blankenau",
