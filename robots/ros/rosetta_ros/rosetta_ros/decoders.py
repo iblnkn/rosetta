@@ -175,10 +175,12 @@ def decode_ros_image(msg) -> Any:
         raise ValueError(f"Unsupported image encoding: '{enc}'. Supported: {sorted(IMAGE_ENCODINGS)}")
 
     if len(msg.data) == 0:
-        raise ImageDataMissing(
-            "Image message has no data. From a CUDA-backed publisher, the message was taken after "
-            "its memory was recycled: keep the subscription's QoS history shallow and its callbacks fast."
-        )
+        if getattr(msg.data, "backend_type", "cpu") == "cuda":
+            raise ImageDataMissing(
+                "Image message has no data: it was taken after the CUDA backend recycled its memory. "
+                "Keep the subscription's QoS history shallow and its callbacks fast."
+            )
+        raise ImageDataMissing(f"Image message has no data for its {h}x{w} {enc} image")
 
     ch, is_bgr = IMAGE_ENCODINGS[enc]
     step = int(msg.step) or w * ch  # 0 = tightly packed rows

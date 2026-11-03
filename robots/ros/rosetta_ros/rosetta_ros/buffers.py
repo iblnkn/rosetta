@@ -50,6 +50,10 @@ def device_memory_unavailable(buffer_backend: str) -> str | None:
         return f"buffer backend '{buffer_backend}' is not supported (supported: {list(SUPPORTED_BUFFER_BACKENDS)})"
     if importlib.util.find_spec("torch") is None:
         return "'torch' is not installed"
+    import torch
+
+    if not torch.cuda.is_available():
+        return f"torch {torch.__version__} has no CUDA device available"
     for module in ("cuda_buffer", "torch_conversions"):
         if importlib.util.find_spec(module) is None:
             return f"'{module}' is not installed (build it from ros2/rosidl_buffer_backends)"
