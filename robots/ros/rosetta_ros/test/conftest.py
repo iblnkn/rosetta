@@ -30,7 +30,9 @@ import rclpy
 # This package's tests run on their own domain, so a robot or sim on this
 # machine, or another package's tests run in parallel by colcon, never shares
 # their topics. Set at import, before any test creates a context.
-os.environ["ROS_DOMAIN_ID"] = "81"
+# ROSETTA_TEST_DOMAIN_ID moves it, so two runs of this suite at once (two
+# worktrees, say) don't share one either.
+os.environ["ROS_DOMAIN_ID"] = os.environ.get("ROSETTA_TEST_DOMAIN_ID", "81")
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -22,7 +22,11 @@ descriptors, and the node entry point (``spin_lifecycle_node``).
 
 from __future__ import annotations
 
+import os
+import signal
+import threading
 import time
+import traceback
 from typing import Callable
 
 import rclpy
@@ -30,7 +34,7 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.experimental import EventsExecutor
-from rclpy.lifecycle import LifecycleNode
+from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
 
@@ -217,16 +221,35 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 # =============================================================================
 
 
+FORCE_QUIT_AFTER_SEC = 2.0
+"""A SIGINT this long after shutdown began quits at once, so a hung shutdown can be ended."""
+
+WORK_EXIT_TIMEOUT_SEC = 30.0
+"""How long the exit waits after the shutdown transition for work still finishing (a bag's metadata)."""
+
+
 def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
-    """Run a lifecycle node until interrupted, driving the shutdown transition on exit.
+    """Run a lifecycle node until SIGINT or SIGTERM, then drive its shutdown transition.
 
     ``destroy_node()`` never runs ``on_shutdown``. Only the lifecycle state
     machine does. So ``trigger_shutdown()`` is called explicitly to let the
     node finalize resources (e.g. close an open bag writer, send a safety
-    action) on Ctrl+C. rclpy's default SIGINT handler would shut the context
-    down before user code can react, making that transition impossible exactly
-    when it matters. Signal handling is disabled and KeyboardInterrupt is the
-    shutdown trigger instead.
+    action) on the way out. rclpy's default SIGINT handler would shut the
+    context down before user code can react, making that transition
+    impossible exactly when it matters, so rclpy installs no handlers here.
+
+    SIGINT and SIGTERM instead only set a flag, and the spin loop stops when it
+    sees it. A handler that raised (KeyboardInterrupt) would not be enough:
+    ``ros2 launch`` delivers SIGINT twice about a millisecond apart (once to
+    the terminal's process group, once from launch itself), and the second
+    exception lands mid-teardown or inside an executor callback, killing the
+    node with a nonzero exit. A flag absorbs any number of signals, and
+    SIGTERM (which launch sends after a timeout) shuts down as cleanly as
+    SIGINT. Once the node is gone, a handler the caller had installed comes
+    back. Python's defaults do not: they would turn a signal that lands
+    between teardown and process exit (a fifth Ctrl+C, say) into a crash
+    after a clean shutdown, so those signals are ignored instead (SIG_IGN, the
+    one setting interpreter finalization keeps).
 
     The node spins on rclpy's single-threaded ``EventsExecutor``, whose wait
     and dispatch run in C++. A ``MultiThreadedExecutor`` rebuilds its wait set
@@ -235,24 +258,81 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     by tens of milliseconds. One thread means no callback may block. Long work runs
     on its own thread, through ``RosettaLifecycleNode.create_work_action_server``
     or ``handle_start_service``.
+
+    A SIGINT at least ``FORCE_QUIT_AFTER_SEC`` after shutdown began quits at
+    once with exit code 130, so someone at the terminal can end a hung
+    shutdown with another Ctrl+C. Launch's SIGINT burst and its SIGTERM stay
+    absorbed. After the transition, work still finishing on its own thread
+    (the recorder writing a bag's metadata) gets up to
+    ``WORK_EXIT_TIMEOUT_SEC`` before the node is destroyed.
+
+    Returns:
+        0 after a signal or an external context shutdown, which ``ros2 launch``
+        reports as finished cleanly. 1 when a callback raised and stopped the
+        executor (the traceback is logged before the shutdown transition
+        runs), or when the shutdown transition failed.
+
     """
+    # A plain list, not a threading.Event: Python runs handlers on the main
+    # thread between bytecodes, including inside a handler already running,
+    # so a burst of signals nests Event.set() (a lock and a notify) inside
+    # itself until the nesting raises. A list.append cannot be interrupted.
+    stop = []
+    shutdown_began = []  # monotonic time, once the shutdown transition starts
+
+    def on_signal(signum, _frame):
+        stop.append(signum)
+        if signum == signal.SIGINT and shutdown_began and time.monotonic() - shutdown_began[0] >= FORCE_QUIT_AFTER_SEC:
+            os.write(2, b"Shutdown forced by a repeated Ctrl+C\n")
+            os._exit(130)
+
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.signal(signum, on_signal)
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    node = node_factory()
-    executor = EventsExecutor()
-    executor.add_node(node)
+    exit_code = 0
     try:
-        # spin_once loop, not spin(): without rclpy's signal handlers a
-        # blocking rcl_wait never wakes on SIGINT, so return to Python
-        # regularly to let KeyboardInterrupt be delivered.
-        while True:
-            executor.spin_once(timeout_sec=0.1)
-    except (KeyboardInterrupt, ExternalShutdownException):
-        pass
-    finally:
+        node = node_factory()
+        executor = EventsExecutor()
+        executor.add_node(node)
         try:
-            node.trigger_shutdown()
+            # spin_once loop, not spin(): without rclpy's signal handlers a
+            # blocking rcl_wait never wakes on a signal, so return to Python
+            # regularly to see the flag.
+            while not stop:
+                executor.spin_once(timeout_sec=0.1)
+        except ExternalShutdownException:
+            pass
+        except BaseException:
+            # BaseException too: a callback calling sys.exit() must not skip
+            # the shutdown transition and its safety action.
+            node.get_logger().error(f"Executor stopped by an exception:\n{traceback.format_exc()}")
+            exit_code = 1
+        shutdown_began.append(time.monotonic())
+        try:
+            if node.trigger_shutdown() != TransitionCallbackReturn.SUCCESS:
+                node.get_logger().error("Shutdown transition failed")
+                exit_code = 1
         except Exception as e:
-            node.get_logger().warning(f"Shutdown transition not driven: {e}")
+            node.get_logger().error(f"Shutdown transition not driven: {e}")
+            exit_code = 1
+        if getattr(node, "busy", False):
+            node.get_logger().info(
+                f"Waiting up to {WORK_EXIT_TIMEOUT_SEC:.0f}s for work to finish "
+                f"(Ctrl+C again after {FORCE_QUIT_AFTER_SEC:.0f}s quits now)"
+            )
+            if not wait_until(lambda: not node.busy, timeout=WORK_EXIT_TIMEOUT_SEC):
+                node.get_logger().error("Work did not finish before exit")
+                exit_code = 1
         node.destroy_node()
-        rclpy.try_shutdown()
-    return 0
+    finally:
+        # uninstall_handlers=False: rclpy installed none, and its uninstall
+        # reads each old handler by setting SIG_DFL and putting it back, so a
+        # signal landing in between would kill the process (exit -2).
+        rclpy.try_shutdown(uninstall_handlers=False)
+        for signum, handler in previous.items():
+            # None: a handler installed outside Python, which signal() cannot reinstall.
+            default = handler in (signal.default_int_handler, signal.SIG_DFL, None)
+            signal.signal(signum, signal.SIG_IGN if default else handler)
+    return exit_code
