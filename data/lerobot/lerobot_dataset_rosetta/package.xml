@@ -13,6 +13,7 @@
        it missing: install it with pip (it is in setup.py install_requires).
        This package is not released to the ROS buildfarm (see CONTRIBUTING.md). -->
 
+  <test_depend>python3-pytest</test_depend>
   <test_depend>rosetta_ros</test_depend>
 
   <export>
