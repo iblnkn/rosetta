@@ -110,9 +110,7 @@ def _nearest_resize(img: Any, rh: int, rw: int) -> Any:
     (2x2 -> 4x4 takes rows [0, 0, 1, 1]). Recording and serving share this
     code, so train and inference pixels match; cv2/PIL may differ by a pixel.
     The indices are computed with numpy and only the gather runs where the
-    image lives, so a device resize picks the same pixels as the host one. On
-    numpy the gather is ``np.take``, which picks the same indices as
-    ``img[y][:, x]`` and is about 2.5x faster on camera-sized HxWxC images.
+    image lives, so a device resize picks the same pixels as the host one.
     """
     h, w = img.shape[:2]
     if h == rh and w == rw:

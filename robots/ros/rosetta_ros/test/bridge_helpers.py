@@ -187,6 +187,9 @@ def bridge_on_graph(name, obs_specs, act_specs, *, fps=30, activate=True, buffer
         executor.remove_node(fixture_node)
         node.destroy_node()
         fixture_node.destroy_node()
+        # An EventsExecutor left running stays registered with the shared
+        # session context until garbage collection.
+        executor.shutdown()
 
 
 def subscribe(bridge, fixture_node, executor, topics):

@@ -350,6 +350,15 @@ def tensor_spec(key, shape, *, topic="/features", dtype="float32"):
     return obs_spec(key, [], topic=topic, dtype=dtype, source=source)
 
 
+def test_numeric_values_are_copies_of_the_held_sample():
+    # A hold strategy serves the same array every tick until the next message,
+    # so a consumer that normalizes in place must not change it.
+    layout = FrameLayout([obs_spec("observation.state", ["a", "b"])])
+    held = np.array([1.0, 2.0], dtype=np.float32)
+    layout.assemble([held])["observation.state"] -= 10
+    np.testing.assert_array_equal(layout.assemble([held])["observation.state"], [1.0, 2.0])
+
+
 def test_tensor_key_keeps_its_declared_shape():
     layout = FrameLayout([tensor_spec("observation.features", (2, 3))])
     frame = layout.assemble([np.arange(6, dtype=np.float64)])

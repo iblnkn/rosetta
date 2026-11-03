@@ -28,7 +28,10 @@ jobs:
     env:
       ROS_DISTRO: lyrical
       ROS_REPO: main
-      TARGET_WORKSPACE: "rosetta robots/ros data/lerobot policies/lerobot"
+      # industrial_ci copies each entry into src/ under its last path
+      # component, so data/lerobot and policies/lerobot would both become
+      # src/lerobot and one would replace the other.
+      TARGET_WORKSPACE: "rosetta robots/ros data/lerobot/lerobot_dataset_rosetta policies/lerobot"
       # lerobot and torch have no rosdep keys. CPU torch keeps the image small.
       # Python 3.14 needs two overrides of LeRobot 0.6.1's pins, the same ones
       # pixi.toml carries: numpy>=2.3 (numpy<2.3 has no 3.14 builds) and the
@@ -44,6 +47,8 @@ jobs:
         --index-strategy unsafe-best-match
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
         && uv pip install --system --break-system-packages --upgrade protobuf grpcio
+      # The ROS image has no git, which uv needs to fetch the draccus fork.
+      ADDITIONAL_DEBS: git
     steps:
       - uses: actions/checkout@v4
       - uses: ros-industrial/industrial_ci@master

@@ -1,7 +1,7 @@
 name: pixi
 
 # The from-source path users take: the locked pixi environment (RoboStack ROS 2
-# Jazzy + LeRobot from PyPI), then `pixi run test` builds and tests every
+# Lyrical + LeRobot from PyPI), then `pixi run test` builds and tests every
 # package together. The docs build checks the locked docs environment, which
 # docs.yml otherwise only builds on main.
 on:

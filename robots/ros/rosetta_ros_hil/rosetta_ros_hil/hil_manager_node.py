@@ -723,6 +723,8 @@ class HilManagerNode(RosettaLifecycleNode):
             else:
                 self.get_logger().info("Recording disabled (enable_recording=false) -- nothing will be saved")
 
+            if stop_event.is_set():
+                return self._stopped_while_starting(fields)
             if manage_policy:
                 policy_gh = self._send_child_goal(self._policy_client, RunPolicy.Goal(prompt=prompt), "Robot policy")
                 if policy_gh is None:
@@ -738,6 +740,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
             reward_gh = None
             # The client exists iff enable_reward (read-only param, set in setup).
+            if stop_event.is_set():
+                return self._stopped_while_starting(fields)
             if enable_reward:
                 reward_gh = self._send_child_goal(
                     self._reward_client, RunPolicy.Goal(prompt=prompt), "Reward classifier"
@@ -834,6 +838,19 @@ class HilManagerNode(RosettaLifecycleNode):
 
         # Whoever set the stop event recorded why in stop_reason.
         return self.stop_reason or TERMINATION_STOPPED
+
+    def _stopped_while_starting(self, fields: dict) -> dict:
+        """End an episode that was stopped while its child goals were starting.
+
+        A deactivate holds the one executor thread, so a child's send_goal can
+        return after the deactivate has already secured the robot. Nothing
+        more starts, and the children already started are cancelled.
+        """
+        fields["termination_reason"] = self.stop_reason or TERMINATION_STOPPED
+        fields["message"] = "Stopped while the episode was starting"
+        self._cancel_child(self._policy_goal_handle, "Robot policy")
+        self._cancel_child(self._recorder_goal_handle, "Episode recorder")
+        return fields
 
     def _send_child_goal(self, client, goal, name: str, *, feedback_callback=None):
         """Send a goal to a child action server; return the handle or None."""

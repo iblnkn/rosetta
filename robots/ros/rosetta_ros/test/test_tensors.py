@@ -101,6 +101,7 @@ def test_host_tensor_is_a_copy_of_the_message_data():
         ({"strides": [1]}, "1 strides for 2 dimensions"),
         ({"strides": [-3, 1]}, "negative strides"),
         ({"byte_offset": 4}, "reads past"),
+        ({"byte_offset": 2}, "not a multiple of its 4-byte items"),  # a misaligned device pointer kills CUDA
     ],
 )
 def test_malformed_tensors_are_refused(change, match):
@@ -319,6 +320,29 @@ observations:
     out = to_host(decode_value(_message(image), spec))
     assert out.shape == (4, 6, 3)
     assert out.dtype == np.uint8
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float16", "int16"])
+def test_tensor_on_an_image_key_must_be_uint8(dtype):
+    # A normalized float image cast to uint8 would reach the policy as black.
+    from rosetta.contract.schema import Align, Channel, Source
+    from rosetta.contract.specs import ObservationStreamSpec
+    from rosetta.frames.codecs import decode_value
+    from rosetta.operators import OperatorContext, build_operator
+
+    spec = ObservationStreamSpec(
+        key="observation.images.cam",
+        names=(),
+        fps=30,
+        source=Source(channel=Channel(topic="/cam", type=_TENSOR), align=Align("hold", "receive")),
+        dtype="video",
+        operators=(build_operator("resize", [4, 6], OperatorContext(is_image=True)),),
+        is_image=True,
+        image_resize=(4, 6),
+    )
+    image = np.full((8, 10, 3), 0.5, dtype=dtype)
+    with pytest.raises(ValueError, match=f"is {dtype}; an image tensor is uint8"):
+        decode_value(_message(image), spec)
 
 
 def test_tensor_on_an_image_key_must_be_rgb(tmp_path):

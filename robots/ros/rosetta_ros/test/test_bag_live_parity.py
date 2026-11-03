@@ -22,6 +22,9 @@ FrameLayout.assemble) driven with those semantics directly; the porter's output
 must match frame-for-frame.
 
 Pinned behaviors:
+- tick k is at the bag start plus k / fps, floored to the nanosecond, so the
+  grid doesn't drift when 1e9 / fps isn't whole (15 fps), and the last tick is
+  the last one at or before the bag end;
 - a message received exactly at tick t belongs to frame t;
 - warmup: ticks before every routed observation stream has data are skipped,
   and the first emitted frame carries real data, not zeros; late action
@@ -32,6 +35,9 @@ Pinned behaviors:
 - an unstamped message on a header-timeline stream is dropped and a
   stamped one recovers, same as the live ingest guard.
 """
+
+from fractions import Fraction
+from math import floor
 
 import numpy as np
 import pytest
@@ -45,7 +51,7 @@ from rosetta.frames.resample import StreamBuffer
 from rosetta_ros.offline.bag_frames import iter_bag_frames
 
 FPS = 10
-STEP_NS = int(1e9 / FPS)
+SEC = 1_000_000_000
 T0 = 1_000_000_000  # arbitrary bag epoch
 
 
@@ -70,24 +76,27 @@ EVENTS = [
 ]
 
 
-def _oracle_frames(specs, events, warmup_keys):
+def _oracle_frames(specs, events, warmup_keys, fps=FPS):
     """Live-semantics oracle: at each grid tick t, push every event with
     receive time <= t into the same StreamBuffers the bridge uses, then sample
     and assemble through the same FrameLayout. Ticks before all warmup buffers
-    have data are skipped."""
+    have data are skipped. Tick k is start + k / fps seconds, floored to the
+    nanosecond, up to the last tick at or before the final event."""
     layout = FrameLayout(specs)
     buffers = [StreamBuffer.from_spec(spec) for spec in specs]
 
     events = sorted(events, key=lambda e: e[1])
     start_ns = events[0][1]
     end_ns = events[-1][1]
-    n_ticks = max(1, int((end_ns - start_ns) // STEP_NS) + 1)
+    ticks = []
+    while (t := start_ns + floor(Fraction(len(ticks) * SEC, fps))) <= end_ns:
+        ticks.append(t)
+    n_ticks = len(ticks)
 
     frames = []
     ev = 0
     warmed_up = False
-    for tick_idx in range(n_ticks):
-        tick_ns = start_ns + tick_idx * STEP_NS
+    for tick_idx, tick_ns in enumerate(ticks):
         while ev < len(events) and events[ev][1] <= tick_ns:
             topic, ns, msg = events[ev]
             for spec, buf in zip(specs, buffers, strict=False):
@@ -125,6 +134,38 @@ def test_porter_matches_live_oracle(bag_dir):
         assert p["is_first"][0] == (i == 0)
         assert p["is_last"][0] == o["_is_last_tick"]
         assert p["is_terminal"][0] == o["_is_last_tick"]
+
+
+def test_porter_grid_does_not_drift_when_period_is_not_whole_ns(tmp_path):
+    # At 15 fps the period is 66666666.67 ns. Tick 3 is exactly T0 + 200 ms,
+    # and the bag ends 5 ns before tick 15. A grid built by adding the
+    # truncated period puts tick 3 at T0 + 199999998, so the message at 200 ms
+    # lands in frame 4, and it fits a 16th tick before the end.
+    fps = 15
+    specs = [
+        obs_spec("observation.state", ["position.j1", "position.j2"], "/obs_a", fps=fps),
+        obs_spec("observation.env", ["position.e1"], "/obs_b", fps=fps),
+        act_spec("action", ["position.a1"], "/cmd", fps=fps),
+    ]
+    events = [
+        ("/obs_a", T0, joint_state(["j1", "j2"], [1.0, 2.0])),
+        ("/obs_b", T0, joint_state(["e1"], [7.0])),
+        ("/obs_a", T0 + 200_000_000, joint_state(["j1", "j2"], [3.0, 4.0])),  # exactly tick 3
+        ("/cmd", T0 + 500_000_000, joint_state(["a1"], [9.0])),
+        ("/obs_b", T0 + SEC - 5, joint_state(["e1"], [8.0])),  # 5 ns before tick 15
+    ]
+    d = tmp_path / "bag_15fps"
+    write_bag(d, events)
+
+    ported = list(iter_bag_frames(d, specs, warmup_keys=WARMUP_KEYS))
+    oracle = _oracle_frames(specs, events, WARMUP_KEYS, fps=fps)
+
+    assert len(ported) == len(oracle) == 15
+    np.testing.assert_array_equal(ported[3]["observation.state"], [3.0, 4.0])
+    for i, (p, o) in enumerate(zip(ported, oracle, strict=True)):
+        for key in ("observation.state", "observation.env", "action"):
+            np.testing.assert_array_equal(p[key], o[key], err_msg=f"frame {i} key {key}")
+        assert p["is_last"][0] == o["_is_last_tick"]
 
 
 def test_warmup_skips_until_all_observations_present(bag_dir):
