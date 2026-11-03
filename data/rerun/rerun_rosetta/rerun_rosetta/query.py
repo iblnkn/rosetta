@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING
 
 from rerun.experimental.dataloader import Field, FixedRateSampling
 
-from rosetta.contract.model import ResamplePolicy
+from rosetta.contract.schema import ResamplePolicy
 from rosetta.contract.specs import iter_observation_specs, iter_policy_specs
 
 from .decoders import ContractDecoder

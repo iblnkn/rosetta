@@ -35,6 +35,8 @@ from rosetta.contract.schema import Contract
 from rosetta.contract.specs import StreamSpec, iter_specs
 from rosetta.frames.layout import FrameLayout
 
+from .sidecar import LEROBOT_CONTRACT_SIDECAR_PATH
+
 
 def build_lerobot_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]:
     """
@@ -45,7 +47,7 @@ def build_lerobot_features(specs: list[StreamSpec]) -> dict[str, dict[str, Any]]
     overrides and custom-decoder streams work). Adds the
     is_first/is_last/is_terminal boundary markers.
     """
-    features = FrameLayout(specs).lerobot_features()
+    features = FrameLayout(specs).features()
     features["is_first"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_last"] = {"dtype": "bool", "shape": (1,), "names": None}
     features["is_terminal"] = {"dtype": "bool", "shape": (1,), "names": None}
@@ -106,7 +108,7 @@ class LeRobotDatasetWriter:
             # rest of meta/, so a plain extra file survives create/load/
             # push_to_hub untouched. Prefixed to read as obviously
             # third-party to a non-rosetta consumer of the dataset.
-            shutil.copy(contract_path, self._ds.root / "meta" / "rosetta_contract.yaml")
+            shutil.copy(contract_path, self._ds.root / LEROBOT_CONTRACT_SIDECAR_PATH)
 
     def add_frame(self, frame: dict[str, Any]) -> None:
         assert self._ds is not None, "open() must be called before add_frame()"

@@ -1,12 +1,14 @@
 # rosetta
 
 Rosetta's core: the contract loader, the frame pipeline, and the protocols
-and registries that robot interfaces and framework adapters implement. A
-robot interface such as [`rosetta_ros`](../robots/ros/rosetta_ros) turns a
-robot's middleware into frames. A framework adapter such as
-[`lerobot_rosetta`](../policies/lerobot/lerobot_rosetta) turns frames into
-datasets and policy actions. Both register through entry points, so core
-imports neither.
+and registries that robot interfaces, dataset writers and policy runners
+implement. A robot interface such as [`rosetta_ros`](../robots/ros/rosetta_ros)
+turns a robot's middleware into frames. A dataset writer such as
+[`lerobot_dataset_rosetta`](../data/lerobot/lerobot_dataset_rosetta) turns
+frames into training data, and a policy runner such as
+[`lerobot_rosetta`](../policies/lerobot/lerobot_rosetta) turns them into
+actions. All three register through entry points, so core imports none of
+them.
 
 Core imports no ROS. It needs Python 3.12 or newer, `numpy` and `pyyaml`,
 and installs and tests as a plain Python package. It has no nodes. Loading a
@@ -34,8 +36,9 @@ pip install ./rosetta
   the public modules
 - [Contract](https://iblnkn.github.io/rosetta/reference/contract.html): the
   contract schema
-- [Add a robot interface](https://iblnkn.github.io/rosetta/how-to/add-a-robot-interface.html)
-  and [Add a framework](https://iblnkn.github.io/rosetta/how-to/add-a-framework.html)
+- [Add a robot interface](https://iblnkn.github.io/rosetta/how-to/add-a-robot-interface.html),
+  [Add a dataset writer](https://iblnkn.github.io/rosetta/how-to/add-a-dataset-writer.html)
+  and [Add a policy runner](https://iblnkn.github.io/rosetta/how-to/add-a-policy-runner.html)
 - Full Rosetta documentation: [iblnkn.github.io/rosetta](https://iblnkn.github.io/rosetta/)
 
 ## License

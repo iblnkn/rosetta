@@ -19,7 +19,7 @@ same entry point.
 | `--contract` | required | Contract YAML. It decodes every bag and is the copy embedded in the dataset. |
 | `--repo-id` | the `--raw-dir` directory name | Dataset repo ID, such as `my_org/my_dataset`. |
 | `--root` | the writer's default | Parent directory. The LeRobot writer puts the dataset at `<root>/<repo-id>`, or at `$HF_LEROBOT_HOME/<repo-id>` without `--root`. |
-| `--framework` | `lerobot` | Dataset writer, by its name in the `rosetta.dataset_writers` entry-point group. `--help` lists the installed ones. |
+| `--format` | `lerobot` | Dataset writer, by its name in the `rosetta.dataset_writers` entry-point group. `--help` lists the installed ones. |
 | `--num-shards` | none | Total shards for a parallel run. |
 | `--shard-index` | none | This run's shard, from 0 to `--num-shards` minus 1. Required with `--num-shards`, ignored without it. |
 | `--no-embed-contract` | embed | Skip copying `--contract` into the dataset. |

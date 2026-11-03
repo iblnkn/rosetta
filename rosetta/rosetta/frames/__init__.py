@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Frames: the shared language both sides of Rosetta speak.
+Frames: the shared language every part of Rosetta speaks.
 
 A *frame* is one synchronized sample of every contract key at a single
 instant: a dict ``{contract_key: array | str}`` covering all modalities
@@ -25,9 +25,9 @@ the LeRobot sense of the word (one row of a ``LeRobotDataset``,
 (``base_link``, ``map``, ...). This package has nothing to do with spatial
 transforms.
 
-The frame dict is the only value exchanged between the robot side and the
-policy side. This package owns everything the two sides must agree on, with no
-ROS or policy-framework dependencies:
+The frame dict is the only value exchanged between a robot and a dataset or
+a policy. This package owns everything they must agree on, with no ROS or
+learning-framework dependencies:
 
 - :mod:`.layout` (``FrameLayout``): contract keys <-> flat vectors. The single
   source of truth for frame assembly and splitting.
@@ -39,11 +39,11 @@ ROS or policy-framework dependencies:
 - :mod:`.protocols` (``FrameIO``, ``Connection``, ``RobotClock``): the
   duck-typed surface a live robot presents to a policy.
 
-With :mod:`rosetta.contract`, this package is Rosetta's waist. The robot side
-(:mod:`rosetta.robots`) and the policy side (:mod:`rosetta.policies`) import
-only these two packages, never each other. The one bridge is core's robot
-interface registry, which a framework hosting a live run uses to open a
-:class:`~.protocols.Connection` without importing any middleware.
+With :mod:`rosetta.contract`, this package is Rosetta's waist. The seams
+(:mod:`rosetta.robots`, :mod:`rosetta.data`, :mod:`rosetta.policies`) import
+these packages and the base modules, never each other. A framework hosting a
+live run itself opens a :class:`~.protocols.Connection` through the robot
+interface registry, without importing any middleware.
 
 Import from the concrete modules; this ``__init__`` imports nothing.
 """

@@ -49,8 +49,7 @@ from rclpy.lifecycle import TransitionCallbackReturn
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
-from rosetta.contract.model import SafetyBehavior
-from rosetta.contract.schema import Align, Channel, Source
+from rosetta.contract.schema import Align, Channel, SafetyBehavior, Source
 from rosetta.contract.specs import ActionStreamSpec
 from rosetta_ros import rosetta_lifecycle_node as rln
 from rosetta_ros.node_utils import (

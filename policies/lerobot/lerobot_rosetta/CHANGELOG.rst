@@ -4,6 +4,10 @@ Changelog for package lerobot_rosetta
 
 Forthcoming
 -----------
+* ``LeRobotPolicyRunner.find_contract`` follows a checkpoint to its training
+  dataset's contract, which ``policy_runner_node`` uses when
+  ``contract_path`` is empty. ``lerobot_rosetta`` now depends on
+  ``lerobot_dataset_rosetta``, where that search lives.
 * Breaking: the dataset writer moved to the new package
   ``lerobot_dataset_rosetta``. ``rosetta_port`` still finds it as ``lerobot``
   once that package is installed; code importing

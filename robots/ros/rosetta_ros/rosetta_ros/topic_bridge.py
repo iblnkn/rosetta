@@ -27,8 +27,8 @@ is the seam:
   values that arrived in device memory (see ``buffer_backends``).
 - ``publish_frame()`` consumes ``{contract_key: np.ndarray}``.
 
-Nothing here depends on LeRobot or any policy framework. Framework adapters
-(e.g. lerobot_robot_rosetta) convert these frame dicts to their own shapes.
+Nothing here depends on LeRobot or any policy framework. Dataset writers and
+policy runners (e.g. lerobot_rosetta) convert these frame dicts to their own shapes.
 """
 
 from __future__ import annotations

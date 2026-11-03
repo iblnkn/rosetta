@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import pyarrow as pa
 
-    from rosetta.contract.model import Channel
+    from rosetta.contract.schema import Channel
 
 __all__ = [
     "MessageView",

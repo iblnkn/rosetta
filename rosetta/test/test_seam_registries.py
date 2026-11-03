@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The policy-framework registry: entry-point resolution and fail-fast validation.
+"""The dataset-writer and policy-runner registries: entry-point resolution and fail-fast validation.
 
-Everything here fakes ``importlib.metadata`` (the registry's ``_ilm`` handle),
+Everything here fakes ``importlib.metadata`` (each registry's ``_ilm`` handle),
 so no real distribution metadata is involved.
 """
 
@@ -22,13 +22,10 @@ import types
 
 import pytest
 
-from rosetta.policies import load_dataset_writer, load_policy_runner, registry
-from rosetta.policies.registry import (
-    DATASET_WRITER_GROUP,
-    POLICY_RUNNER_GROUP,
-    available_dataset_writers,
-    available_policy_runners,
-)
+from rosetta.data import DATASET_WRITER_GROUP, available_dataset_writers, load_dataset_writer
+from rosetta.data import registry as data_registry
+from rosetta.policies import POLICY_RUNNER_GROUP, available_policy_runners, load_policy_runner
+from rosetta.policies import registry as policies_registry
 
 
 class GoodWriter:
@@ -49,6 +46,9 @@ class GoodWriter:
 
 
 class GoodRunner:
+    def find_contract(self, pretrained, *, warn):
+        pass
+
     def setup(self, host, contract):
         pass
 
@@ -79,6 +79,9 @@ class NeedsArgs:
     def __init__(self, required):
         self.required = required
 
+    def find_contract(self, pretrained, *, warn):
+        pass
+
     def setup(self, host, contract):
         pass
 
@@ -105,11 +108,9 @@ def _fake_ep(name, obj, dist_name="somedist", group=DATASET_WRITER_GROUP):
 
 
 def _install(monkeypatch, eps_by_group):
-    monkeypatch.setattr(
-        registry,
-        "_ilm",
-        types.SimpleNamespace(entry_points=lambda group=None: eps_by_group.get(group, [])),
-    )
+    fake = types.SimpleNamespace(entry_points=lambda group=None: eps_by_group.get(group, []))
+    for registry in (data_registry, policies_registry):
+        monkeypatch.setattr(registry, "_ilm", fake)
 
 
 @pytest.mark.parametrize(
@@ -127,7 +128,7 @@ def test_unknown_name_error_lists_available(monkeypatch):
         monkeypatch,
         {DATASET_WRITER_GROUP: [_fake_ep("beta", GoodWriter), _fake_ep("alpha", GoodWriter)]},
     )
-    with pytest.raises(ValueError, match=r"No framework 'nope'.*Available: alpha, beta"):
+    with pytest.raises(ValueError, match=r"No dataset writer 'nope'.*Available: alpha, beta"):
         load_dataset_writer("nope")
 
 
@@ -231,3 +232,12 @@ def test_available_sorted_and_deduped(monkeypatch):
     )
     assert available_dataset_writers() == ["alpha", "zeta"]
     assert available_policy_runners() == ["alpha", "dup"]
+
+
+def test_a_runner_without_find_contract_is_rejected_naming_it(monkeypatch):
+    # PolicyRunner gained find_contract, so a runner written before it must
+    # fail at load with the missing method named, not later at configure.
+    OldRunner = type("OldRunner", (), {k: v for k, v in vars(GoodRunner).items() if k != "find_contract"})
+    _install(monkeypatch, {POLICY_RUNNER_GROUP: [_fake_ep("old", OldRunner, group=POLICY_RUNNER_GROUP)]})
+    with pytest.raises(TypeError, match=r"does not implement PolicyRunner.*find_contract"):
+        load_policy_runner("old")

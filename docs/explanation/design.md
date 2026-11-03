@@ -57,55 +57,74 @@ building and serving, and the checkpoint keeps the model side the same.
 
 The contract also travels with the data. The recorder writes it into each
 bag's metadata, and the porter writes the contract it was given into the
-dataset (LeRobot's writer puts it at `meta/rosetta_contract.yaml`). A policy
-runner started without a contract path follows the checkpoint back to its
-training dataset and reads the contract there.
+dataset (LeRobot's writer puts it at `meta/rosetta_contract.yaml`). Started
+without a contract path, `policy_runner_node` asks its policy runner where a
+checkpoint keeps its contract. LeRobot's runner follows the checkpoint back
+to its training dataset and reads the contract there.
 
-## Robot interfaces and framework adapters
+## Robots, data and policies
 
-The robot side turns a robot's middleware into frames. The policy side turns
-frames into a dataset or into actions. Each side is a separate package that
-plugs into the core package `rosetta`, which imports neither.
+Three kinds of package plug into the core package `rosetta`. A robot
+interface turns a robot's middleware into frames. A dataset backend turns
+frames into training data, or reads training data back as frames. A policy
+runner turns frames into actions on a live robot. Core imports none of them.
 
 ```text
-robot  ──  middleware  ──  Rosetta  ──  framework  ──  policy
-           (ROS 2)                      (LeRobot)
+robot ── middleware ── Rosetta ─┬─ data ───── dataset  (LeRobot, Rerun)
+         (ROS 2)                └─ policies ─ policy   (LeRobot)
 ```
 
-Each side is named after its endpoint: the robot on one side, the policy on
-the other. What plugs in on a side adapts to whatever that endpoint runs on.
-A robot interface adapts a middleware, and a framework adapter adapts a
-learning framework. LeRobot is a framework, not a policy: its one adapter
-serves every policy type LeRobot's async inference supports, read from the
-checkpoint it loads. The same names organize the code and the repository:
-`rosetta.robots` and `robots/<middleware>/` on the robot side,
-`rosetta.policies` and `policies/<framework>/` on the policy side.
+Data and policies are separate because they are separate choices. A LeRobot
+policy can train from a LeRobot dataset that `rosetta_port` wrote, or from
+`.rrd` recordings that `rerun_rosetta` reads straight off a Rerun catalog
+server, with no dataset written at all. If one package had to provide both
+halves, Rerun would need a policy runner it has no use for, and porting to a
+LeRobot dataset would pull in the gRPC and inference dependencies of
+LeRobot's runner. So LeRobot ships two packages: `lerobot_dataset_rosetta`
+writes its dataset format and `lerobot_rosetta` runs its policies. LeRobot
+is a framework, not a policy: its one runner serves every policy type
+LeRobot's async inference supports, read from the checkpoint it loads.
+
+The same three names organize the code and the repository:
+`rosetta.robots` and `robots/<middleware>/`, `rosetta.data` and
+`data/<format>/`, `rosetta.policies` and `policies/<framework>/`.
 
 A robot interface such as `rosetta_ros` registers under
 `rosetta.robot_interfaces`, named after the `robot_interface` value contracts
 use. Loading a contract asks that interface which message types exist, which
 timelines each carries and whether a `qos` parses, so a contract for an
-interface that isn't installed fails to load. A framework adapter such as
-`lerobot_dataset_rosetta` registers a dataset writer and `lerobot_rosetta` a policy runner. Under ROS 2,
-`rosetta_port` joins the two sides offline and `policy_runner_node` joins
-them live, each looking the framework up by name.
+interface that isn't installed fails to load. A dataset writer registers
+under `rosetta.dataset_writers` and a policy runner under
+`rosetta.policy_runners`. Under ROS 2, `rosetta_port` hands frames to a
+writer offline and `policy_runner_node` hands them to a runner live, each
+looking it up by name. A dataset reader such as `rerun_rosetta` registers
+nothing with core: it hands frames straight to a training loop, so nothing
+in Rosetta needs to find one by name.
 
-The two sides stay apart. `rosetta_ros` never imports a framework, and no
-framework adapter imports ROS. When a framework hosts the run itself, as
+The packages stay apart. `rosetta_ros` never imports a framework, and no
+data or policy package imports ROS. When a framework hosts the run itself, as
 LeRobot's own command-line tools do with the LeRobot `Robot` plugin, the
 plugin opens the robot through the contract's robot interface
 (`RobotInterface.connect`) and gets the same `FrameIO` a ROS host would hand
-a policy runner. A framework that reads recordings itself, as `rerun_rosetta`
-does when training from `.rrd` bags, asks the contract's robot interface how
-its recordings are laid out and decodes them with the codecs that interface
-registered. Running a `ros2` contract still needs
+a policy runner. When a reader decodes recordings itself, as `rerun_rosetta`
+does, the robot interface tells it how its recordings are laid out (a
+`rerun_rosetta.layouts` entry point) and the reader decodes them with the
+codecs that interface registered. Running a `ros2` contract still needs
 `rosetta_ros` installed, because loading the contract asks it.
+
+Inside core the same rule holds as layers. Base modules (errors, plugin
+loading, the codec and operator registries) sit under the contract, the
+contract sits under frames, and `rosetta.robots`, `rosetta.data` and
+`rosetta.policies` sit on top, importing the lower layers and never each other.
+A test, `rosetta/test/test_layering.py`, reads every core import and fails on
+one that points up a layer, crosses between the three, or closes a cycle.
 
 Entry points extend this. `rosetta.robot_interfaces` adds a middleware,
 `rosetta.codecs` adds message types, `rosetta.operators` adds value
-transforms, `rosetta.dataset_writers` and `rosetta.policy_runners` add a
-framework. A contract names its robot interface, message types and operators
-but never a framework.
+transforms, `rosetta.dataset_writers` adds a dataset format and
+`rosetta.policy_runners` adds a policy framework. A contract names its robot
+interface, message types and operators but never a dataset format or a
+framework.
 
 A frame's arrays are numpy, with one exception: a value a transport
 delivered in device memory. A ROS 2 Lyrical image or `ExperimentalTensor`
@@ -113,10 +132,10 @@ from a CUDA publisher arrives that way when the policy runner's
 `buffer_backends` asks for it and the stream's decoder and operators handle
 device memory. The value stays on its device through decode and `resize`, and
 Rosetta reads it only through DLPack, so core never imports its array
-library. Where it goes next is the framework adapter's call, the same as
+library. Where it goes next is the policy runner's call, the same as
 moving data to the model's device always was. LeRobot's observations are
-numpy, so its adapter copies each contract-sized image to the host once per
-frame, and it has no way to declare a tensor. An adapter for a framework that
+numpy, so its runner copies each contract-sized image to the host once per
+frame, and it has no way to declare a tensor. A runner for a framework that
 takes device arrays would hand either one over where it is.
 
 ## One numeric key on the live path

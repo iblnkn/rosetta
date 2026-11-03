@@ -13,60 +13,49 @@
 # limitations under the License.
 
 """
-The policy side: learning frameworks adapted onto Rosetta's frames.
+The policy seam: running a trained policy against a live robot.
 
-A policy framework, to Rosetta, is anything that implements two seams:
+A policy runner, to Rosetta, implements :class:`PolicyRunner`: it drives a
+policy against a live robot through a
+:class:`~rosetta.frames.protocols.FrameIO` (inference). ``policy_runner_node``
+loads the runner it names and hosts it through a :class:`RunnerHost`.
 
-- :class:`DatasetWriter` — offline: consume frame dicts, write the
-  framework's dataset format (training data).
-- :class:`PolicyRunner` — online: drive a policy against a live robot
-  through a :class:`~rosetta.frames.protocols.FrameIO` (inference).
+Implementations live in their own packages (``lerobot_rosetta``, ...) and
+are resolved by name from setuptools entry points, so this package never
+imports a framework, and no framework ever imports the robot side. The
+registered object must be a class with a zero-argument constructor
+implementing the protocol; the loader validates this structurally at load
+time and fails fast otherwise. A package registers itself like so::
 
-Implementations live in their own adapter packages (LeRobot, ...) and are
-resolved by name from setuptools entry points, so this
-package never imports a framework — and no framework ever imports the robot
-side. The registered object must be a class with a zero-argument constructor
-implementing the protocol; the loaders validate this structurally at load
-time and fail fast otherwise. An adapter registers itself like so::
-
-    # in the adapter package's setup.py / pyproject.toml
+    # in the package's setup.py / pyproject.toml
     entry_points={
-        'rosetta.dataset_writers': [
-            'lerobot = lerobot_dataset_rosetta.dataset_writer:LeRobotDatasetWriter',
-        ],
         'rosetta.policy_runners': [
             'lerobot = lerobot_rosetta.policy_runner:LeRobotPolicyRunner',
         ],
     }
 
-This side imports Rosetta's waist (:mod:`rosetta.contract`,
-:mod:`rosetta.frames`). A framework that hosts a live run itself also opens
-its robot through :func:`rosetta.robots.registry.load_robot_interface` and
-``connect``. It never imports a robot interface package.
+This seam imports only lower layers of core (:mod:`rosetta.contract`,
+:mod:`rosetta.frames`), never :mod:`rosetta.robots` or :mod:`rosetta.data`.
+A framework that hosts a live run itself opens its robot through
+:func:`rosetta.robots.registry.load_robot_interface` and ``connect``; it
+never imports a robot interface package.
 
-Modules: :mod:`.protocols` is what an adapter *implements* (the two
-Protocols and the value types they exchange); :mod:`.registry` is how the
-hosting node *resolves* one by name at runtime.
+Modules: :mod:`.protocols` is what a runner *implements* (the protocol and
+the value types it exchanges); :mod:`.registry` is how the hosting node
+*resolves* one by name at runtime.
 """
 
 from __future__ import annotations
 
-from .protocols import DatasetWriter, PolicyRunner, RunnerFeedback, RunnerHost, RunnerResult
-from .registry import (
-    available_dataset_writers,
-    available_policy_runners,
-    load_dataset_writer,
-    load_policy_runner,
-)
+from .protocols import PolicyRunner, RunnerFeedback, RunnerHost, RunnerResult
+from .registry import POLICY_RUNNER_GROUP, available_policy_runners, load_policy_runner
 
 __all__ = [
-    "DatasetWriter",
+    "POLICY_RUNNER_GROUP",
     "PolicyRunner",
     "RunnerFeedback",
     "RunnerHost",
     "RunnerResult",
-    "available_dataset_writers",
     "available_policy_runners",
-    "load_dataset_writer",
     "load_policy_runner",
 ]

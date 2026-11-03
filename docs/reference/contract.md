@@ -272,8 +272,9 @@ Optional. Names the value's representation and checks the `select` width.
 
 A width that disagrees with `select` is an error. A `continuous` source logs
 a warning at load when four consecutive `select` entries end in `x`, `y`, `z`
-and `w` in any order, or when an entry contains `quat`. `kind` is for framework adapters
-that normalize or rotate by representation. The LeRobot adapter ignores it.
+and `w` in any order, or when an entry contains `quat`. `kind` is for
+dataset writers and policy runners that normalize or rotate by
+representation. The LeRobot writer and runner ignore it.
 
 ## Multi-source keys
 

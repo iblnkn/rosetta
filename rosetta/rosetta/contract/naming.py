@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Frame-key naming helpers shared across the framework adapters.
+"""Frame-key naming helpers shared by dataset writers and policy runners.
 
 Frame dicts are keyed by contract keys (``observation.images.cam``,
 ``observation.state``, ``action``, ...). Two derivations live here.

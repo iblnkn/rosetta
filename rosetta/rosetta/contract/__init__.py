@@ -24,8 +24,8 @@ The contract: one YAML file per robot declaring what to translate.
 - :mod:`.naming`: frame-key naming helpers.
 - :mod:`.sidecar`: finding a dataset's or checkpoint's contract file.
 
-With :mod:`rosetta.frames`, this is the only code the robot side
-(:mod:`rosetta.robots`) and the policy side (:mod:`rosetta.policies`) share.
+With :mod:`rosetta.frames`, this is the code the three seams
+(:mod:`rosetta.robots`, :mod:`rosetta.data`, :mod:`rosetta.policies`) share.
 This package imports only core's base modules (:mod:`rosetta.errors`,
 :mod:`rosetta.codecs` and the rest). This ``__init__`` imports nothing;
 import from the modules directly.

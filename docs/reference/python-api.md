@@ -15,14 +15,16 @@ Core imports no robot middleware, so every module here imports without ROS.
 | `rosetta.contract.specs` | `StreamSpec`, `ObservationStreamSpec`, `ActionStreamSpec`, `iter_specs`, `iter_policy_specs`, `iter_observation_specs`, `iter_action_specs`, `iter_reward_as_action_specs`, `iter_teleop_input_specs`, `iter_teleop_feedback_specs` | Runtime stream specs resolved from a `Contract`. `iter_specs` yields every recorded stream. `iter_policy_specs` yields observations, then actions. |
 | `rosetta.errors` | `ContractValidationError` | Raised for any invalid contract. |
 | `rosetta.plugins` | `load_entry_point_plugins`, `resolve_entry_point`, `instantiate_entry_point`, `protocol_problems` | Entry-point loading shared by every registry. `instantiate_entry_point` resolves one class by name, constructs it with no arguments and checks it against a protocol, naming each missing or non-callable member. |
-| `rosetta.contract.sidecar` | `CONTRACT_SIDECAR_FILENAME`, `LEROBOT_CONTRACT_SIDECAR_PATH`, `find_contract_for_pretrained`, `scan_inline_codec_paths` | The contract file stored with a dataset (`rosetta_contract.yaml`, at `meta/rosetta_contract.yaml` in a LeRobot dataset). `find_contract_for_pretrained` follows a checkpoint to its training dataset's contract and returns `None` when a link is missing. |
+| `rosetta.contract.sidecar` | `CONTRACT_SIDECAR_FILENAME`, `scan_inline_codec_paths` | The contract file stored with a dataset, `rosetta_contract.yaml`. `scan_inline_codec_paths` lists the inline codec paths a contract file names, without importing them. |
 | `rosetta.operators` | `Operator`, `OperatorContext`, `Invertibility`, `register_operator`, `OPERATOR_ENTRY_POINT_GROUP` | Operator plugins for `apply`. |
 | `rosetta.codecs` | `register_decoder`, `register_encoder`, `load_codec_plugins`, `DecoderFn`, `EncoderFn`, `SUPPORTED_NUMERIC_DTYPES`, `CODEC_ENTRY_POINT_GROUP` | The codec registry, keyed by message type, and codec plugins. |
 | `rosetta.frames.codecs` | `decode_value`, `encode_value`, `host_only_reason`, `NonFiniteActionError` | The message to array boundary. `encode_value` raises `NonFiniteActionError` for a NaN or Inf action value. |
-| `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice`, `build_feature` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones, or with `fill_missing=False` leaves out every key with a missing value. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.lerobot_features` gives LeRobot feature dicts. |
+| `rosetta.frames.layout` | `FrameLayout`, `KeyLayout`, `SpecSlice` | The positional layout of stream specs within frame keys. `FrameLayout.assemble` builds a frame from per-spec values and zero-fills missing ones, or with `fill_missing=False` leaves out every key with a missing value. `FrameLayout.split` cuts an action frame into per-spec `float64` vectors. `FrameLayout.features` gives each key's dtype, shape and names, in the shape of LeRobot's dataset features. |
 | `rosetta.contract.naming` | `IMAGE_KEY_PREFIX`, `camera_name`, `sanitize_field_name` | `IMAGE_KEY_PREFIX` is `observation.images.`. `camera_name` strips it and keeps dots. `sanitize_field_name` replaces every character outside `[A-Za-z0-9_]` with `_`. |
-| `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a framework adapter sees it. |
-| `rosetta.policies` | `DatasetWriter`, `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_dataset_writer`, `load_policy_runner`, `available_dataset_writers`, `available_policy_runners` | Framework adapter protocols and the registry that loads them by name. |
+| `rosetta.frames.resample` | `StreamBuffer`, `step_ns`, `tick_ns`, `num_ticks` | Fixed-rate resampling of asynchronous messages, shared by live bridges and offline replay. `StreamBuffer` holds one stream's messages and answers what value it has at a tick. `step_ns(fps)` is the frame period, `tick_ns(start_ns, index, fps)` the time of tick `index`, and `num_ticks(duration_ns, fps)` the number of ticks in a span. |
+| `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a policy runner sees it. |
+| `rosetta.data` | `DatasetWriter`, `load_dataset_writer`, `available_dataset_writers`, `DATASET_WRITER_GROUP` | The dataset writer protocol and the registry that loads a writer by name. |
+| `rosetta.policies` | `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_policy_runner`, `available_policy_runners`, `POLICY_RUNNER_GROUP` | The policy runner protocol, its value types, and the registry that loads a runner by name. |
 | `rosetta.contract.interfaces` | `ContractInterface`, `load_interface`, `available_robot_interfaces`, `discover_codecs`, `ROBOT_INTERFACE_GROUP` | What contract loading asks of a robot interface, and finding one by name. `discover_codecs` fills the codec registry from every installed interface, then from codec plugins. |
 | `rosetta.robots.protocols` | `RobotInterface` | The live robot interface protocol: `ContractInterface` plus `connect`. |
 | `rosetta.robots.registry` | `load_robot_interface`, `available_robot_interfaces`, `ROBOT_INTERFACE_GROUP` | Robot interfaces by name. |
@@ -58,7 +60,7 @@ framework opened with `RobotInterface.connect` and closes itself:
 | `simulated` | property | `True` when the robot runs on a simulator's clock rather than wall time. |
 | `now_ns()` | method | Returns the current time on this clock, in nanoseconds. |
 
-`DatasetWriter`, from `rosetta.policies`. A writer is opened once, receives
+`DatasetWriter`, from `rosetta.data`. A writer is opened once, receives
 one run of `add_frame` calls per episode, and is finalized once.
 
 | Member | Behavior |
@@ -73,6 +75,7 @@ one run of `add_frame` calls per episode, and is finalized once.
 
 | Member | Behavior |
 |---|---|
+| `find_contract(pretrained, *, warn)` | Returns the path of the contract the checkpoint `pretrained` was trained with, or `None`. Called at configure, before `setup`, only when the node has no `contract_path`. Reports each missing link through `warn` instead of raising. |
 | `setup(host, contract)` | Declares and reads settings on `host`. Called at configure, and again after a cleanup and configure. |
 | `run(frames, *, task, stop_event)` | Blocks until `stop_event` is set or the policy finishes. Returns a `RunnerResult`. |
 | `feedback()` | Returns a `RunnerFeedback`. Called from another thread while `run` blocks. |
@@ -128,13 +131,13 @@ The node toolkit that `rosetta_ros_hil` builds on, and the live connection behin
 | `rosetta_ros.offline.rrd_layout` | `Rosbag2RrdLayout`, `MessageView` | The `ros2` recording layout `rerun_rosetta` loads for rosbag2_storage_rrd bags. A channel's messages sit in the reflected column `<topic>:<pkg.msg.Type>:message`, and receive times on the `recv_timestamp` timeline. A topic recorded only in the raw form raises `ValueError`. `MessageView` serves a reflected message to the decoders as read-only attributes. | no |
 | `rosetta_ros.field_access` | `dot_get`, `dot_set`, `resolve_indexed` | Read and write message fields by dotted path. | no |
 
-## Framework adapter packages
+## Dataset and policy packages
 
 These names are each package's `__all__`. No test pins them.
 
 | Module | Names |
 |---|---|
-| `lerobot_dataset_rosetta` | `LeRobotDatasetWriter`, `build_lerobot_features` |
+| `lerobot_dataset_rosetta` | `LeRobotDatasetWriter`, `build_lerobot_features`, and in `lerobot_dataset_rosetta.sidecar`: `LEROBOT_CONTRACT_SIDECAR_PATH`, `find_contract_for_pretrained`, `resolve_repo_file` |
 | `lerobot_rosetta` | `LeRobotPolicyRunner` |
 | `lerobot_robot_rosetta` | `Rosetta`, `RosettaConfig` |
 | `lerobot_teleoperator_rosetta` | `RosettaTeleop`, `RosettaTeleopConfig` |

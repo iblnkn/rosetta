@@ -19,21 +19,29 @@ Robots are messy; policies want structure. A **contract**
 (:mod:`rosetta.contract` — one YAML per robot) declares how the robot's
 pub/sub topics become clean fixed-rate **frames**
 (:mod:`rosetta.frames` — ``{contract_key: array | str}``) and back.
-The **robot side** (:mod:`rosetta.robots`) adapts each pub/sub ecosystem
-onto that frame stream — ROS2 today; ROS1, zenoh, MQTT tomorrow. The
-**policy side** (:mod:`rosetta.policies`) adapts each learning framework
-(LeRobot, ...) to consume it, for dataset writing and
-live policy execution. Either side swaps out without touching the other,
-because both speak only frames. This package holds the protocols and
-registries for both sides and imports no robot middleware.
+Three seams plug into that frame stream, and each swaps out without
+touching the others, because all three speak only frames:
+
+- **robots** (:mod:`rosetta.robots`): each pub/sub ecosystem adapted onto
+  frames (ROS 2 today).
+- **data** (:mod:`rosetta.data`): frames written as a dataset format for
+  training (LeRobot, ...).
+- **policies** (:mod:`rosetta.policies`): a trained policy run against live
+  frames (LeRobot, ...).
+
+This package holds the protocols and registries for all three and imports
+no robot middleware and no learning framework. ``test/test_layering.py``
+pins the module layers: base modules, then :mod:`rosetta.contract`, then
+:mod:`rosetta.frames`, then the three seams, which never import each
+other.
 
 The same frame machinery runs live inference and offline bag conversion, so
 training data matches inference input sample-for-sample by construction.
 
-Both sides' implementations live in their own packages and register via
-entry points: robot interfaces such as ``rosetta_ros`` (see
-:mod:`rosetta.robots`) and framework adapters such as ``lerobot_rosetta``
-(see :mod:`rosetta.policies`).
+Implementations live in their own packages and register via entry points:
+robot interfaces such as ``rosetta_ros`` (see :mod:`rosetta.robots`), dataset
+writers such as ``lerobot_dataset_rosetta`` (see :mod:`rosetta.data`) and
+policy runners such as ``lerobot_rosetta`` (see :mod:`rosetta.policies`).
 
 Public API. Other packages import only these modules, and only the names in
 each module's ``__all__``; every other module is internal:
@@ -45,8 +53,9 @@ each module's ``__all__``; every other module is internal:
   (robot interfaces as contract loading sees them), ``contract.naming``,
   ``contract.sidecar``
 - Frames: ``frames.codecs`` (decoding and encoding), ``frames.layout``,
-  ``frames.protocols``
-- Policies: ``policies``
+  ``frames.protocols``, ``frames.resample`` (fixed-rate resampling)
+- Data: ``data`` (dataset writer plugins)
+- Policies: ``policies`` (policy runner plugins)
 - Robots: ``robots.protocols``, ``robots.registry`` (robot interface plugins)
 
 Usage::

@@ -41,13 +41,12 @@ frames back into per-stream slices, or derives per-key offsets for a backend
 (LeRobot features, other adapters' schema views) goes through
 a FrameLayout, so the layouts agree by construction.
 
-The dtype vocabulary lives in ``frames.codecs`` (SUPPORTED_NUMERIC_DTYPES /
-SPECIAL_DTYPES, lerobot-compatible by choice, and rejected at load, so this
-module's own dtype check is only a backstop for hand-built specs). This module
-has no lerobot dependency. Backends derive their own schema views from
-KeyLayout. lerobot_features() is the one
-lerobot-format emitter, kept here so the declared feature shapes and the
-zero-fill shapes share one source of truth.
+The dtype vocabulary lives in :mod:`rosetta.codecs` (SUPPORTED_NUMERIC_DTYPES /
+SPECIAL_DTYPES, lerobot-compatible by choice, and rejected at load, so the
+dtype check here is only a backstop for hand-built specs). This module has no
+lerobot dependency. Backends derive their own schema views from KeyLayout, or
+take :meth:`FrameLayout.features`, kept here so the declared feature shapes
+and the zero-fill shapes share one source of truth.
 
 The assemble / split dtype asymmetry is deliberate. Do not "unify" it.
 ``assemble`` casts to the key's declared dtype. It targets dataset storage,
@@ -84,15 +83,14 @@ __all__ = [
     "FrameLayout",
     "KeyLayout",
     "SpecSlice",
-    "build_feature",
 ]
 
 
-def build_feature(spec: ObservationStreamSpec) -> dict[str, Any]:
+def _feature(spec: ObservationStreamSpec) -> dict[str, Any]:
     """
-    Build the LeRobot feature dict for an image or string spec.
+    Build the feature dict for an image or string spec.
 
-    Numeric features come from FrameLayout.lerobot_features() only. A numeric
+    Numeric features come from FrameLayout.features() only. A numeric
     key's shape and names must cover the whole concatenated value (with
     namespacing), which a single spec cannot know.
 
@@ -110,8 +108,8 @@ def build_feature(spec: ObservationStreamSpec) -> dict[str, Any]:
         return {"dtype": "string", "shape": (1,), "names": None}
 
     raise ValueError(
-        f"build_feature() covers image/string specs only; numeric key "
-        f"'{spec.key}' gets its feature from FrameLayout.lerobot_features()."
+        f"_feature() covers image/string specs only; numeric key "
+        f"'{spec.key}' gets its feature from FrameLayout.features()."
     )
 
 
@@ -339,22 +337,25 @@ class FrameLayout:
 
     # -------------------- features --------------------
 
-    def lerobot_features(self) -> dict[str, dict[str, Any]]:
-        """Per-key LeRobot feature dicts covering the full concatenated values.
+    def features(self) -> dict[str, dict[str, Any]]:
+        """Rosetta's feature schema: per key, its dtype, shape and names.
 
-        Images and strings delegate to build_feature. Numeric keys declare the
-        key's shape, with the namespaced selector names of every slice when
-        they have them.
+        Each value is ``{"dtype": ..., "shape": ..., "names": ...}`` covering
+        the key's full concatenated value. Images declare ``video`` with
+        ``("height", "width", "channels")``; strings declare ``string`` with
+        shape ``(1,)``; numeric keys declare the key's shape, with the
+        namespaced selector names of every slice when they have them.
 
-        LeRobot is the only backend consuming this format. Other adapters
-        derive their schemas from KeyLayout directly. It lives here, not in
-        lerobot_robot_rosetta, so the declared shapes and the zero-fill shapes
-        both come from ``spec.shape`` by construction.
+        This is the shape of LeRobot's dataset features, by choice, so a
+        LeRobot dataset writer and a LeRobot policy take it as is, and a
+        dataset reader such as ``rerun_rosetta`` hands the same schema to its
+        trainer. It lives here, not in an adapter, so the declared shapes and
+        the zero-fill shapes both come from ``spec.shape`` by construction.
         """
         feats: dict[str, dict[str, Any]] = {}
         for key, layout in self._layouts.items():
             if layout.category in ("image", "string"):
-                feats[key] = build_feature(layout.slices[0].spec)
+                feats[key] = _feature(layout.slices[0].spec)
                 continue
             feats[key] = {
                 "dtype": layout.dtype,

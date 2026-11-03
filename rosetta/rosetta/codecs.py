@@ -266,7 +266,7 @@ def load_codec(path: str) -> Callable:
 # Lookup Functions
 # =============================================================================
 # These read the registry as it stands and run no discovery. Loading a
-# contract, or rosetta.frames.codecs.discover_codecs(), registers the robot
+# contract, or rosetta.contract.interfaces.discover_codecs(), registers the robot
 # interfaces' and plugins' codecs first.
 
 

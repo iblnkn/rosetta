@@ -37,7 +37,7 @@ from rosetta_ros.rosetta_lifecycle_node import BridgeLifecycleNode
 from rosetta_ros.topic_bridge import RosClock
 
 if TYPE_CHECKING:
-    from rosetta.contract.model import TeleopEventMap
+    from rosetta.contract.schema import TeleopEventMap
     from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 
 __all__ = [

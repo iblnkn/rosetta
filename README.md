@@ -59,31 +59,32 @@ follow
 ## Packages
 
 This repository holds Rosetta's core and every package maintained with it,
-organized by side. Rosetta sits between a robot and a policy, and each side
-is named after its endpoint: `robots/` holds robot interfaces, grouped by the
-middleware they adapt (ROS 2 today), and `policies/` holds framework adapters,
-grouped by the learning framework they adapt. Core's modules use the same
-names, `rosetta.robots` and `rosetta.policies`.
+grouped by role. `robots/` holds robot interfaces, grouped by the middleware
+they adapt (ROS 2 today). `data/` holds dataset backends, which write frames
+as training data or read training data back as frames. `policies/` holds
+policy runners, which run a trained policy on a live robot. Core's modules
+use the same names: `rosetta.robots`, `rosetta.data` and `rosetta.policies`.
 [About the contract](https://iblnkn.github.io/rosetta/explanation/design.html)
 explains the split.
 
 | Package | Purpose |
 |---------|---------|
-| [`rosetta`](rosetta) | Core: contract, frame pipeline, and the protocols for robot interfaces and framework adapters. No ROS. |
+| [`rosetta`](rosetta) | Core: contract, frame pipeline, and the protocols for robot interfaces, dataset writers and policy runners. No ROS. |
 | [`rosetta_ros`](robots/ros/rosetta_ros) | The ROS 2 robot interface: codecs, topic bridge, recorder, keyboard and policy runner nodes, `rosetta_port`, node toolkit |
 | [`rosetta_interfaces`](robots/ros/rosetta_interfaces) | Action, service and message definitions for every Rosetta ROS 2 node, HIL included |
 | [`rosetta_ros_hil`](robots/ros/rosetta_ros_hil) | Human-in-the-loop episode manager, built on `rosetta_ros`'s node toolkit |
 | [`lerobot_dataset_rosetta`](data/lerobot/lerobot_dataset_rosetta) | LeRobot dataset writer, the default for `rosetta_port` |
+| [`rerun_rosetta`](data/rerun/rerun_rosetta) | Rerun dataset backend: train on `.rrd` bags straight from a Rerun catalog server (experimental) |
 | [`lerobot_rosetta`](policies/lerobot/lerobot_rosetta) | LeRobot policy runner and inference servers |
 | [`lerobot_robot_rosetta`](policies/lerobot/lerobot_robot_rosetta) | LeRobot `Robot` plugin, for LeRobot's own CLIs |
 | [`lerobot_teleoperator_rosetta`](policies/lerobot/lerobot_teleoperator_rosetta) | LeRobot `Teleoperator` plugin (experimental) |
-| [`rerun_rosetta`](data/rerun/rerun_rosetta) | Rerun dataset backend: train on `.rrd` bags straight from a Rerun catalog server (experimental) |
 
 On ROS 2, install `rosetta_ros`. It has the nodes, launch files and
 `rosetta_port`, and brings `rosetta` and `rosetta_interfaces` with it.
 `rosetta` alone is the core library, with no nodes.
 
-Adapters can also live in their own repositories. They register the same
+Robot interfaces, dataset backends and policy runners can also live in their
+own repositories. They register the same
 entry points, and nothing in this repository changes.
 [CONTRIBUTING.md](CONTRIBUTING.md) says which way to go.
 

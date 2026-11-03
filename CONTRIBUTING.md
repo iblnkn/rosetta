@@ -129,13 +129,14 @@ Use one trailer per model, and no other tool trailers such as
 
 Generated code gets the same review and tests as any other code.
 
-## Where an adapter lives
+## Where a package lives
 
-Robot interfaces and framework adapters register through entry points, so
-Rosetta finds them the same way wherever they live.
+Robot interfaces, dataset backends and policy runners register through entry
+points, so Rosetta finds them the same way wherever they live.
 
-- In this repository, under `robots/<middleware>/` or `policies/<framework>/`,
-  when the adapter is maintained together with the core. Its CI runs on
+- In this repository, under `robots/<middleware>/`, `data/<format>/` or
+  `policies/<framework>/`, when the package is maintained together with the
+  core. Its CI runs on
   every core change, and core changes update it in the same commit.
 - In your own repository, for everything else. You choose the release
   schedule and the dependencies, register the same entry points, and nothing
@@ -143,9 +144,10 @@ Rosetta finds them the same way wherever they live.
   (`docs/reference/packages.md`) so people can find it.
 
 The docs guides
-[Add a framework](https://iblnkn.github.io/rosetta/how-to/add-a-framework.html)
+[Add a dataset writer](https://iblnkn.github.io/rosetta/how-to/add-a-dataset-writer.html),
+[Add a policy runner](https://iblnkn.github.io/rosetta/how-to/add-a-policy-runner.html)
 and [Add a robot interface](https://iblnkn.github.io/rosetta/how-to/add-a-robot-interface.html)
-cover both.
+cover each.
 
 ## Supported ROS distros
 
@@ -157,8 +159,9 @@ other released distros come with the first ROS release.
 ## Releasing
 
 The ROS packages release through bloom, which requires every package in this
-repository to have the same version. The packages under `policies/` depend on
-LeRobot, which has no rosdep key, so the ROS buildfarm can't build them. List
+repository to have the same version. The packages under `data/` and
+`policies/` depend on LeRobot or Rerun, which have no rosdep keys, so the ROS
+buildfarm can't build them. List
 them, one per line, in a `<track>.ignored` file on the release repository's
 `master` branch. The track is normally named after the distro, as in
 `lyrical.ignored`. bloom reads the file from `master` even when the release

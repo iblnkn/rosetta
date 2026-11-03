@@ -150,7 +150,7 @@ def ensure_live_observation_layout(observation_specs, action_specs=()) -> None:
             f"ported dataset would receive missing, misrouted, or misshaped "
             f"inputs live. Merge numeric streams under one key per role "
             f"(values concatenate in declaration order) and give every "
-            f"numeric stream a select:, or deploy with a framework adapter "
+            f"numeric stream a select:, or deploy with a policy runner "
             f"that preserves per-key layout."
         )
 
@@ -234,13 +234,13 @@ class Rosetta(Robot):
     def observation_features(self) -> dict[str, type | tuple]:
         """Feature spec: individual state values as float, images as (H, W, C) tuples.
 
-        Image shapes come from FrameLayout.lerobot_features(), which declares the
+        Image shapes come from FrameLayout.features(), which declares the
         DECODED shape (h, w, 3) — decoders always emit 3-channel RGB, so
         declaring the source encoding's channel count (1 for mono8, 4 for
         rgba8) mismatched every delivered frame.
         """
         features: dict[str, type | tuple] = {}
-        feats = self._obs_layout.lerobot_features()
+        feats = self._obs_layout.features()
         for key, short in self._obs_image_keys.items():
             features[short] = tuple(feats[key]["shape"])
         for names in self._obs_vector_names.values():

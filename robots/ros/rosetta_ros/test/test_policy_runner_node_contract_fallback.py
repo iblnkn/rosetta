@@ -13,10 +13,11 @@
 # limitations under the License.
 
 """on_configure wiring of the contract fallback: with no contract_path, the
-node hands pretrained_name_or_path to find_contract_for_pretrained and fails
-the transition when the chase comes back empty. Failures are ERROR, not
-FAILURE: setup() raises and the base routes through on_error so partial
-construction is torn down. The chase itself is pure and covered in
+node asks its policy runner's find_contract for the contract
+pretrained_name_or_path was trained with, and fails the transition when the
+runner finds none. Failures are ERROR, not FAILURE: setup() raises and the
+base routes through on_error so partial construction is torn down. The LeRobot
+chase itself is covered in lerobot_dataset_rosetta's
 test_contract_fallback_chase.py."""
 
 from node_helpers import FakeRunner
@@ -30,10 +31,11 @@ from rosetta_ros.nodes.policy_runner_node import PolicyRunnerNode
 def test_configure_without_contract_chases_pretrained_then_fails(monkeypatch):
     seen = {}
 
-    def _fake_chase(pretrained, *, warn):
-        seen["pretrained"] = pretrained
+    class ChasingRunner(FakeRunner):
+        def find_contract(self, pretrained, *, warn):
+            seen["pretrained"] = pretrained
 
-    monkeypatch.setattr(node_mod, "find_contract_for_pretrained", _fake_chase)
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: ChasingRunner())
 
     node = PolicyRunnerNode(parameter_overrides=[Parameter("pretrained_name_or_path", value="org/ckpt")])
     try:
@@ -43,6 +45,21 @@ def test_configure_without_contract_chases_pretrained_then_fails(monkeypatch):
 
     assert result == TransitionCallbackReturn.ERROR
     assert seen == {"pretrained": "org/ckpt"}
+
+
+def test_configure_with_no_contract_and_no_checkpoint_fails_before_loading_a_runner(monkeypatch):
+    # Loading LeRobot's runner imports torch, so the plain configuration
+    # error must not wait on it.
+    loaded = []
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: loaded.append(fw) or FakeRunner())
+
+    node = PolicyRunnerNode()
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.ERROR
+    finally:
+        node.destroy_node()
+
+    assert loaded == []
 
 
 MINIMAL_CONTRACT = """
@@ -104,10 +121,14 @@ def test_sidecar_contract_scanned_for_inline_codecs_before_load(monkeypatch, tmp
     order = []
     real_scan = node_mod.scan_inline_codec_paths
     real_load = node_mod.load_contract
-    monkeypatch.setattr(node_mod, "find_contract_for_pretrained", lambda p, *, warn: contract_path)
+
+    class FindingRunner(FakeRunner):
+        def find_contract(self, pretrained, *, warn):
+            return contract_path
+
     monkeypatch.setattr(node_mod, "scan_inline_codec_paths", lambda p: order.append("scan") or real_scan(p))
     monkeypatch.setattr(node_mod, "load_contract", lambda p: order.append("load") or real_load(p))
-    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: FakeRunner())
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: FindingRunner())
 
     node = PolicyRunnerNode(parameter_overrides=[Parameter("pretrained_name_or_path", value="org/ckpt")])
     try:

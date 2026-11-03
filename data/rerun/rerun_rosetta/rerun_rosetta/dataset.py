@@ -181,7 +181,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
     @property
     def features(self) -> dict[str, Any]:
         """LeRobot feature schema for the assembled frame keys (unwindowed shapes)."""
-        return self._layout.lerobot_features()
+        return self._layout.features()
 
     def set_epoch(self, epoch: int) -> None:
         """Replay the manifest in epoch ``epoch``'s order from the next iteration on."""
