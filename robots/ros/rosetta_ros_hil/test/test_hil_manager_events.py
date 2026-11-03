@@ -402,3 +402,30 @@ def test_status_is_published_without_a_goal(node):
     assert node._feedback_loop(None, 0.05, 0.0, threading.Event()) == "timeout"
     assert node._status_pub.published
     assert all(s.control_source == "policy" for s in node._status_pub.published)
+
+
+@pytest.mark.parametrize(
+    ("stopped_during", "sent"),
+    [("Episode recorder", ["Episode recorder"]), ("Robot policy", ["Episode recorder", "Robot policy"])],
+)
+def test_a_deactivate_while_children_start_sends_no_further_child_goals(node, monkeypatch, stopped_during, sent):
+    # A deactivate holds the executor thread, so the child's send_goal returns
+    # after the robot was secured. Sending the policy then would move it again.
+    stop_event = _claimed(node)
+    calls = []
+
+    def send(client, goal, name, **kwargs):
+        calls.append(("send", name))
+        if name == stopped_during:
+            node.signal_stop(TERMINATION_NODE_DEACTIVATED)
+        return SimpleNamespace(accepted=True)
+
+    monkeypatch.setattr(node, "_send_child_goal", send)
+    monkeypatch.setattr(node, "_cancel_child", lambda handle, name, **k: calls.append(("cancel", name)))
+    monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: pytest.fail("the episode ran after the stop"))
+
+    fields = node._run_episode("t", 0.0, 0.0, stop_event)
+
+    assert [name for kind, name in calls if kind == "send"] == sent
+    assert ("cancel", "Episode recorder") in calls
+    assert fields["termination_reason"] == TERMINATION_NODE_DEACTIVATED
