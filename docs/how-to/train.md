@@ -1,7 +1,9 @@
 # Train a policy
 
 Train a policy on a ported dataset with LeRobot's `lerobot-train`. Rosetta
-doesn't add anything here: a ported dataset is a plain LeRobot dataset.
+doesn't add anything here: a ported dataset is a plain LeRobot dataset. To
+train from recordings without porting them first, see
+[Train without porting](train-without-porting.md).
 
 You need a dataset from [Prepare a dataset](prepare-a-dataset.md) and LeRobot
 installed with its `training` extra (see [Installation](../installation.md)).

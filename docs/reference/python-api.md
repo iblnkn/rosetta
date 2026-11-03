@@ -23,7 +23,8 @@ Core imports no robot middleware, so every module here imports without ROS.
 | `rosetta.contract.naming` | `IMAGE_KEY_PREFIX`, `camera_name`, `sanitize_field_name` | `IMAGE_KEY_PREFIX` is `observation.images.`. `camera_name` strips it and keeps dots. `sanitize_field_name` replaces every character outside `[A-Za-z0-9_]` with `_`. |
 | `rosetta.frames.resample` | `StreamBuffer`, `step_ns`, `tick_ns`, `num_ticks` | Fixed-rate resampling of asynchronous messages, shared by live bridges and offline replay. `StreamBuffer` holds one stream's messages and answers what value it has at a tick. `step_ns(fps)` is the frame period, `tick_ns(start_ns, index, fps)` the time of tick `index`, and `num_ticks(duration_ns, fps)` the number of ticks in a span. |
 | `rosetta.frames.protocols` | `FrameIO`, `Connection`, `RobotClock` | The live robot as a policy runner sees it. |
-| `rosetta.data` | `DatasetWriter`, `load_dataset_writer`, `available_dataset_writers`, `DATASET_WRITER_GROUP` | The dataset writer protocol and the registry that loads a writer by name. |
+| `rosetta.data` | `DatasetWriter`, `FrameReader`, `StreamingFrameReader`, `ReaderInfo`, `Windows`, `load_dataset_writer`, `available_dataset_writers`, `load_frame_reader`, `frame_reader_class`, `available_frame_readers`, `DATASET_WRITER_GROUP`, `FRAME_READER_GROUP` | The dataset writer and frame reader protocols, and the registries that load them by name. `load_frame_reader(name, **options)` passes the options to the reader's constructor. `frame_reader_class(name)` returns the class without building it. |
+| `rosetta.data.stats` | `frame_stats`, `sufficient_statistics`, `merge_stats`, `value_stats`, `histogram_stats`, `quantile_name`, `QUANTILES`, `LEVELS` | Exact normalization stats over contract frames: `count`, `mean`, `std`, `min`, `max` and the quantiles `q01` to `q99`, per element for numeric keys and per channel in 0 to 255 for images. `merge_stats` combines several `sufficient_statistics` results, one per episode, into the same exact stats. |
 | `rosetta.policies` | `PolicyRunner`, `RunnerHost`, `RunnerFeedback`, `RunnerResult`, `load_policy_runner`, `available_policy_runners`, `POLICY_RUNNER_GROUP` | The policy runner protocol, its value types, and the registry that loads a runner by name. |
 | `rosetta.contract.interfaces` | `ContractInterface`, `load_interface`, `available_robot_interfaces`, `discover_codecs`, `ROBOT_INTERFACE_GROUP` | What contract loading asks of a robot interface, and finding one by name. `discover_codecs` fills the codec registry from every installed interface, then from codec plugins. |
 | `rosetta.robots.protocols` | `RobotInterface` | The live robot interface protocol: `ContractInterface` plus `connect`. |
@@ -70,6 +71,34 @@ one run of `add_frame` calls per episode, and is finalized once.
 | `save_episode()` | Flushes the buffered episode. |
 | `discard_episode()` | Drops a partly buffered episode. Safe to call with nothing buffered. |
 | `finalize()` | Writes top-level metadata and closes the dataset. Not called when every episode fails. |
+
+`FrameReader`, from `rosetta.data`. A trainer calls `prepare` once in its
+main process, then `read` may run in DataLoader worker processes. A reader
+serves samples by index, as a ported dataset does, and the trainer's sampler
+picks the order:
+
+| Member | Behavior |
+|---|---|
+| `features()` | Returns `FrameLayout.features()` of the policy streams, unwindowed. Available before `prepare`. |
+| `prepare(windows)` | Does the one-time work for `windows`: indexing, counting, stats. `windows` maps a frame key to tick offsets, such as `{"action": range(50)}`. |
+| `info()` | Returns a `ReaderInfo`: `fps`, `robot_type`, `episode_lengths` (sample starts per episode), `episode_tasks` (each episode's first task), `tasks` and `pads`, plus `num_episodes` and `num_frames` derived from `episode_lengths`. With `pads` false the reader trims windows at episode edges instead of padding them, and `episode_lengths` count the sample starts left. |
+| `stats()` | Returns exact stats per key, as `rosetta.data.stats.frame_stats` gives them. |
+| `read(indices)` | Returns the samples at `indices`, in that order. Indices run from 0 to `num_frames - 1`, episode by episode. A trainer reads a batch in one call. |
+
+Each sample holds the policy stream keys, a `[len(offsets), ...]` stack and
+`<key>_is_pad` for each windowed key, `task`, `task_index`,
+`episode_index`, `frame_index`, `index` and `timestamp`. `frame_index`
+counts ticks from the episode's first frame after warmup, as `rosetta_port`
+numbers a ported dataset's frames. `index` is the sample's own index, and
+`timestamp` is `frame_index / fps`.
+
+`StreamingFrameReader`, from `rosetta.data`, is a `FrameReader` that also
+streams its samples in an order of its own, for a recording format that reads
+faster that way:
+
+| Member | Behavior |
+|---|---|
+| `stream(*, seed, epoch, worker)` | Yields every sample once, in an order set by `seed` and `epoch`. `worker` is `(index, count)`. The shares of one epoch partition the samples. |
 
 `PolicyRunner`, from `rosetta.policies`:
 
@@ -133,15 +162,18 @@ The node toolkit that `rosetta_ros_hil` builds on, and the live connection behin
 
 ## Dataset and policy packages
 
-These names are each package's `__all__`. No test pins them.
+These are the names each module exports. No test pins them.
 
 | Module | Names |
 |---|---|
-| `lerobot_dataset_rosetta` | `LeRobotDatasetWriter`, `build_lerobot_features`, and in `lerobot_dataset_rosetta.sidecar`: `LEROBOT_CONTRACT_SIDECAR_PATH`, `find_contract_for_pretrained`, `resolve_repo_file` |
-| `lerobot_rosetta` | `LeRobotPolicyRunner` |
+| `lerobot_dataset_rosetta.dataset_writer` | `LeRobotDatasetWriter`, `build_lerobot_features` |
+| `lerobot_dataset_rosetta.view` | `LeRobotView`, `LeRobotStreamView`, `policy_windows`, `split_episodes` |
+| `lerobot_dataset_rosetta.sidecar` | `LEROBOT_CONTRACT_SIDECAR_PATH`, `READER_DATASET_NAMESPACE`, `find_contract_for_pretrained`, `resolve_repo_file` |
+| `lerobot_dataset_rosetta.train` | `main`, `split_rosetta_args` |
+| `lerobot_rosetta.policy_runner` | `LeRobotPolicyRunner` |
 | `lerobot_robot_rosetta` | `Rosetta`, `RosettaConfig` |
 | `lerobot_teleoperator_rosetta` | `RosettaTeleop`, `RosettaTeleopConfig` |
-| `rerun_rosetta` | `contract_dataset`, `ContractFrames`, `compile_contract`, `CompiledQuery`, `RecordingLayout`, `load_layout`, `write_stats_layer`, `load_stats`, `stats_layer_name` |
+| `rerun_rosetta` | `RerunReader`, `contract_dataset`, `ContractFrames`, `compile_contract`, `CompiledQuery`, `RecordingLayout`, `load_layout`, `write_stats_layer`, `load_stats`, `stats_layer_name` |
 
 ## Lifecycle nodes
 

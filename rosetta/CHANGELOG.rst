@@ -4,6 +4,17 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Frame readers.** ``rosetta.data.FrameReader`` applies the contract at
+  training time. It serves samples from recordings by index, with the windows
+  a trainer asks for, ``<key>_is_pad``, and task and index columns, so a
+  framework can train on recordings without porting them.
+  ``StreamingFrameReader`` adds ``stream(seed, epoch, worker)`` for a reader
+  that reads faster in an order of its own. ``ReaderInfo`` describes a
+  reader's episodes. Readers register under ``rosetta.frame_readers`` and load
+  with ``load_frame_reader(name, **options)``, or ``frame_reader_class(name)``
+  for the class itself. ``Windows`` is the mapping a reader's ``prepare``
+  takes, from frame key to tick offsets. ``rosetta.data.stats`` holds the
+  exact normalization stats that were ``rerun_rosetta``'s.
 * **Breaking: three seams, and core in layers.** ``rosetta.policies`` held
   both the offline ``DatasetWriter`` and the live ``PolicyRunner``. The writer
   is now ``rosetta.data``. Core's modules sit in layers (base, contract,
