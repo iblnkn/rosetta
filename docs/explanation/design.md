@@ -95,7 +95,10 @@ framework adapter imports ROS. When a framework hosts the run itself, as
 LeRobot's own command-line tools do with the LeRobot `Robot` plugin, the
 plugin opens the robot through the contract's robot interface
 (`RobotInterface.connect`) and gets the same `FrameIO` a ROS host would hand
-a policy runner. Running a `ros2` contract still needs
+a policy runner. A framework that reads recordings itself, as `rerun_rosetta`
+does when training from `.rrd` bags, asks the contract's robot interface how
+its recordings are laid out and decodes them with the codecs that interface
+registered. Running a `ros2` contract still needs
 `rosetta_ros` installed, because loading the contract asks it.
 
 Entry points extend this. `rosetta.robot_interfaces` adds a middleware,

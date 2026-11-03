@@ -76,6 +76,7 @@ explains the split.
 | [`lerobot_rosetta`](policies/lerobot/lerobot_rosetta) | LeRobot adapter: dataset writer, policy runner, inference servers |
 | [`lerobot_robot_rosetta`](policies/lerobot/lerobot_robot_rosetta) | LeRobot `Robot` plugin, for LeRobot's own CLIs |
 | [`lerobot_teleoperator_rosetta`](policies/lerobot/lerobot_teleoperator_rosetta) | LeRobot `Teleoperator` plugin (experimental) |
+| [`rerun_rosetta`](policies/rerun/rerun_rosetta) | Rerun dataset backend: train on `.rrd` bags straight from a Rerun catalog server (experimental) |
 
 On ROS 2, install `rosetta_ros`. It has the nodes, launch files and
 `rosetta_port`, and brings `rosetta` and `rosetta_interfaces` with it.

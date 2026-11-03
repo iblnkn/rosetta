@@ -1,0 +1,34 @@
+name: rerun
+
+# industrial_ci builds and tests inside an official ROS Docker image; rosdep
+# resolves dependencies from each package.xml. TARGET_WORKSPACE builds only
+# this slice of the repository and the packages it depends on. rosetta_ros is
+# in the slice because the tests compare against its offline porter and load
+# its "ros2" recording layout.
+on:
+  pull_request:
+    paths: [rosetta/**, robots/ros/**, policies/rerun/**, .github/workflows/rerun.yml]
+  push:
+    branches: [main, dev]
+    paths: [rosetta/**, robots/ros/**, policies/rerun/**, .github/workflows/rerun.yml]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  industrial_ci:
+    name: industrial_ci (rerun)
+    runs-on: ubuntu-latest
+    env:
+      ROS_DISTRO: lyrical
+      ROS_REPO: main
+      TARGET_WORKSPACE: "rosetta robots/ros policies/rerun"
+      # rerun-sdk and torch have no rosdep keys. CPU torch keeps the image small.
+      BEFORE_BUILD_TARGET_WORKSPACE: >-
+        pip install --break-system-packages
+        'rerun-sdk[dataloader,catalog]>=0.41' torch
+        --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master

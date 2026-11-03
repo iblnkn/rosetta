@@ -168,9 +168,15 @@ Running a robot takes more than loading contracts, all of it in your package:
 - A process that hosts a `PolicyRunner` on that bridge.
 - A recorder, and a tool that replays recordings as frame dicts into a
   `DatasetWriter`.
+- If the recorder writes Rerun `.rrd` files, a recording layout registered
+  under `rerun_rosetta.layouts`, named like the interface. It tells
+  `rerun_rosetta` which column holds each channel, which Rerun timeline holds
+  receive times, and how one recorded message becomes the input your decoders
+  take. See `RecordingLayout` in `rerun_rosetta.layout`.
 
 In `rosetta_ros` these are `TopicBridge`, `RosConnection`,
-`policy_runner_node`, `episode_recorder_node` and `rosetta_port`.
+`policy_runner_node`, `episode_recorder_node`, `rosetta_port` and
+`Rosbag2RrdLayout`.
 
 ## Package it
 

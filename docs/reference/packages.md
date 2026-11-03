@@ -25,7 +25,7 @@ interface in this sense.
 
 ## Packages in this repository
 
-All seven are at version 0.2.0.
+All eight are at version 0.2.0.
 
 | Package | Path | Build type | Contains |
 |---|---|---|---|
@@ -36,6 +36,7 @@ All seven are at version 0.2.0.
 | [`lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta) | `policies/lerobot/lerobot_rosetta/` | `ament_python` | The LeRobot framework adapter, registered as `lerobot`. Also installs `rosetta_policy_server` and `rosetta_classifier_server` as plain console scripts, not `ros2 run` executables. |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_robot_rosetta) | `policies/lerobot/lerobot_robot_rosetta/` | `ament_python` | A LeRobot `Robot` plugin, `--robot.type=rosetta` in LeRobot's own command-line tools. |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_teleoperator_rosetta) | `policies/lerobot/lerobot_teleoperator_rosetta/` | `ament_python` | A LeRobot `Teleoperator` plugin, `--teleop.type=rosetta_teleop`. Experimental. |
+| [`rerun_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/rerun/rerun_rosetta) | `policies/rerun/rerun_rosetta/` | `ament_python` | Torch datasets of contract frames, read from `.rrd` bags on a Rerun catalog server through Rerun's dataloader. A library with no entry points of its own. It reads the recording layout each robot interface registers under `rerun_rosetta.layouts`. Experimental. |
 
 The two LeRobot plugin packages are named for LeRobot's plugin discovery,
 which imports installed packages whose names start with `lerobot_robot_` or
@@ -59,6 +60,7 @@ and [Add a robot interface](../how-to/add-a-robot-interface.md) cover both.
 | `rosetta.operators` | A module that calls `register_operator` | Contract load | None |
 | `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --framework` | `lerobot` by `lerobot_rosetta` |
 | `rosetta.policy_runners` | A class implementing `PolicyRunner` | `policy_runner_node` parameter `framework` | `lerobot` by `lerobot_rosetta` |
+| `rerun_rosetta.layouts` | A class implementing `RecordingLayout`, named after a contract's `robot_interface` value | `rerun_rosetta.contract_dataset` | `ros2` by `rosetta_ros` |
 
 Each class is instantiated with no arguments. A codec plugin that fails to
 import fails every contract load in that environment. An operator plugin that
@@ -82,5 +84,11 @@ LeRobot policy runner uses. `lerobot_robot_rosetta` and
 LeRobot packages imports ROS, but driving a `ros2` contract needs `rosetta_ros`
 installed. `rosdep` has no key for LeRobot, so install it with `pip`. For
 the same reason the LeRobot packages are not released to the ROS buildfarm.
+
+`rerun_rosetta` needs `rosetta` and `rerun-sdk[dataloader,catalog]>=0.41`,
+which `rosdep` has no key for either. It reads bags recorded with
+[`rosbag2_storage_rrd`](https://github.com/rerun-io/rosbag2_storage_rrd), not
+part of this repository.
+
 The repository's pixi environment installs LeRobot 0.6.1 from PyPI with the
 `dataset`, `async`, `training`, `peft` and `smolvla` extras.

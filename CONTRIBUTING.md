@@ -51,13 +51,14 @@ mount, but the repository's path differs between them, so run
 
 CI runs the workflows in `.github/workflows/`. All but `lint` and `docs` run
 on pull requests that touch their paths, so a core change runs `core`, `ros`,
-`lerobot` and `pixi`.
+`lerobot`, `rerun` and `pixi`.
 
 | Workflow | Runs | On changes to |
 |---|---|---|
 | `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12, 3.13 and 3.14 with no ROS | `rosetta/` |
 | `ros` | Builds and tests `rosetta` and `robots/ros` with industrial_ci on ROS 2 Lyrical | `rosetta/`, `robots/` |
 | `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Lyrical, against LeRobot's newest release before 0.6.2. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
+| `rerun` | Builds and tests `rosetta`, `robots/ros` and `policies/rerun` with industrial_ci on ROS 2 Lyrical, with `rerun-sdk` and CPU torch | `rosetta/`, `robots/ros/`, `policies/rerun/` |
 | `lint` | The `pre-commit` hooks: ruff check and format, plus file checks for whitespace, line endings, YAML, XML, merge conflicts and large files | every pull request |
 | `pixi` | `pixi run test`, which builds and tests every package together in the locked pixi environment with LeRobot 0.6.1, then `pixi run docs-build` | `pixi.toml`, `pixi.lock`, `pixi/`, `rosetta/`, `robots/`, `policies/`, `docs/` |
 | `devcontainer` | Builds the default dev container and runs `pixi run build` inside it | `.devcontainer/` |

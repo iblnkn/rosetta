@@ -15,7 +15,8 @@
 """
 Offline ROS2 tooling.
 
-Rosbag2 replay (:mod:`.bag_frames`) and the bag->dataset porter
-(:mod:`.port`). Everything else in :mod:`rosetta_ros` is the live
+Rosbag2 replay (:mod:`.bag_frames`), the bag->dataset porter
+(:mod:`.port`), and the layout of rrd bags for rerun_rosetta
+(:mod:`.rrd_layout`). Everything else in :mod:`rosetta_ros` is the live
 path.
 """
