@@ -52,13 +52,16 @@ def resolve_repo_file(
     """Return a local path to ``filename`` under ``path_or_repo_id``, or ``None``.
 
     ``path_or_repo_id`` is tried as a local directory first, then as a Hub
-    repo. Never raises: a local miss returns ``None`` quietly; any other
-    failure returns ``None`` after calling ``warn``.
+    repo. Never raises: every miss returns ``None`` after calling ``warn``
+    with what was missing.
     """
     local_dir = Path(path_or_repo_id)
     if local_dir.is_dir():
         candidate = local_dir / filename
-        return candidate if candidate.is_file() else None
+        if not candidate.is_file():
+            warn(f"{candidate} not found")
+            candidate = None
+        return candidate
     if local_dir.exists():
         warn(f"{path_or_repo_id} exists but is not a directory; not probing the Hub for {filename}")
         return None
@@ -106,12 +109,19 @@ def find_contract_for_pretrained(
 
     try:
         dataset = json.loads(train_config_path.read_text())["dataset"]
-        dataset_ref = dataset.get("root") or dataset.get("repo_id")
+        dataset_refs = [dataset.get("root"), dataset.get("repo_id")]
     except Exception as e:
         warn(f"Failed to read dataset reference from {train_config_path}: {e}")
         return None
-    if not isinstance(dataset_ref, str) or not dataset_ref:
+    dataset_refs = list(dict.fromkeys(ref for ref in dataset_refs if isinstance(ref, str) and ref))
+    if not dataset_refs:
         warn(f"{train_config_path}: dataset has neither a usable 'root' nor 'repo_id'")
         return None
 
-    return resolve_repo_file(dataset_ref, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=warn)
+    # root first, then repo_id: a root recorded on the training machine is
+    # usually missing on the robot, while the Hub copy carries the sidecar too.
+    for ref in dataset_refs:
+        found = resolve_repo_file(ref, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=warn)
+        if found is not None:
+            return found
+    return None

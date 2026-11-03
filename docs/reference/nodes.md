@@ -255,11 +255,12 @@ The run ends with `termination_reason`:
 With an empty `contract_path`, configure asks the `framework`'s policy
 runner where `pretrained_name_or_path` keeps its contract. The `lerobot`
 runner follows the checkpoint to its `train_config.json`, then to the
-training dataset's `root` or `repo_id`, then to `meta/rosetta_contract.yaml`
-there.
+training dataset's `root`, then to `meta/rosetta_contract.yaml` there. When
+`root` has no contract, as on a robot that isn't the training machine, it
+tries the dataset's `repo_id` instead.
 A link that names an existing local directory is read from it. Any other
-link is fetched from the Hub. A missing link fails configure, and a Hub miss
-also logs a warning naming it. Each inline `decoder:` or
+link is fetched from the Hub. Each missing link logs a warning naming it, and
+configure fails when no contract is found. Each inline `decoder:` or
 `encoder:` in a contract found this way logs a warning before the contract
 loads, because loading it imports that code. A non-empty `contract_path` is
 used as given and never compared with the checkpoint's contract.

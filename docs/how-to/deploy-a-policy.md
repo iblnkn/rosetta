@@ -61,8 +61,8 @@ ros2 launch rosetta_ros policy_runner_launch.py \
     pretrained_name_or_path:=outputs/train/my_policy/checkpoints/last/pretrained_model
 ```
 
-The node logs `Using model-embedded contract (via dataset chain):` with the
-path it found. If it finds none, configure fails with `contract_path parameter
+The node logs `Using the contract policy runner 'lerobot' found for the
+checkpoint:` with the path it found. If it finds none, configure fails with `contract_path parameter
 required`. [Contract fallback](../reference/nodes.md#contract-fallback) lists
 each link it follows.
 

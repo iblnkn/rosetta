@@ -232,3 +232,12 @@ def test_available_sorted_and_deduped(monkeypatch):
     )
     assert available_dataset_writers() == ["alpha", "zeta"]
     assert available_policy_runners() == ["alpha", "dup"]
+
+
+def test_a_runner_without_find_contract_is_rejected_naming_it(monkeypatch):
+    # PolicyRunner gained find_contract, so a runner written before it must
+    # fail at load with the missing method named, not later at configure.
+    OldRunner = type("OldRunner", (), {k: v for k, v in vars(GoodRunner).items() if k != "find_contract"})
+    _install(monkeypatch, {POLICY_RUNNER_GROUP: [_fake_ep("old", OldRunner, group=POLICY_RUNNER_GROUP)]})
+    with pytest.raises(TypeError, match=r"does not implement PolicyRunner.*find_contract"):
+        load_policy_runner("old")

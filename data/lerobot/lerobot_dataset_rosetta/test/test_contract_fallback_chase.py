@@ -80,21 +80,36 @@ def test_full_chain_resolves_to_dataset_contract(tmp_path):
     assert warnings == []
 
 
-def test_missing_train_config_yields_none_quietly(tmp_path):
+def test_missing_train_config_warns_and_yields_none(tmp_path):
+    # The node's error points at these warnings, so a local miss is named too.
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     warnings = []
     assert find_contract_for_pretrained(str(checkpoint), warn=warnings.append) is None
-    assert warnings == []
+    assert any("train_config.json not found" in w for w in warnings), warnings
 
 
-def test_missing_dataset_contract_yields_none_quietly(tmp_path):
+def test_missing_dataset_contract_warns_for_root_and_repo_id(hub, tmp_path):
     dataset_root = tmp_path / "dataset"
     dataset_root.mkdir()
     pretrained = _make_checkpoint(tmp_path, {"repo_id": "org/my_data", "root": str(dataset_root)})
     warnings = []
     assert find_contract_for_pretrained(pretrained, warn=warnings.append) is None
-    assert warnings == []
+    assert any(f"{dataset_root}/meta/rosetta_contract.yaml not found" in w for w in warnings), warnings
+    assert any("org/my_data" in w for w in warnings), warnings
+
+
+@pytest.mark.parametrize("root_exists", [False, True], ids=["root-missing", "root-without-sidecar"])
+def test_repo_id_is_tried_when_root_has_no_contract(hub, tmp_path, root_exists):
+    # Trained with --dataset.root on another machine, deployed from the Hub copy.
+    _, sidecar = _make_dataset(tmp_path)
+    hub[("org/my_data", "meta/rosetta_contract.yaml", "dataset")] = sidecar
+    root = tmp_path / "trainer_root"
+    if root_exists:
+        root.mkdir()
+    pretrained = _make_checkpoint(tmp_path, {"repo_id": "org/my_data", "root": str(root)})
+
+    assert find_contract_for_pretrained(pretrained, warn=lambda _w: None) == sidecar
 
 
 @pytest.mark.parametrize(

@@ -173,32 +173,36 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         Any failure raises. The base logs the traceback and routes through
         on_error, which tears down whatever this method partially built.
         """
+        contract_path = self.get_parameter("contract_path").value
+        pretrained = self.get_parameter("pretrained_name_or_path").value
+        if not contract_path and not pretrained:
+            # Before loading the runner, whose import can be heavy (LeRobot's is torch).
+            raise ValueError("contract_path parameter required")
+
         # The runner is loaded first: with no contract_path, it is the one that
         # knows where its checkpoints keep their contract.
         framework = self.get_parameter("framework").value
         runner = load_policy_runner(framework)
 
-        contract_path = self.get_parameter("contract_path").value
         if not contract_path:
-            pretrained = self.get_parameter("pretrained_name_or_path").value
-            fallback = runner.find_contract(pretrained, warn=self.get_logger().warning) if pretrained else None
+            fallback = runner.find_contract(pretrained, warn=self.get_logger().warning)
             if fallback is None:
-                if pretrained:
-                    raise ValueError(
-                        f"contract_path parameter required: no contract sidecar found via "
-                        f"pretrained_name_or_path={pretrained!r} (see warnings above)"
-                    )
-                raise ValueError("contract_path parameter required")
+                raise ValueError(
+                    f"contract_path parameter required: policy runner '{framework}' found no contract "
+                    f"for pretrained_name_or_path={pretrained!r} (see warnings above)"
+                )
             contract_path = str(fallback)
-            self.get_logger().info(f"Using model-embedded contract (via dataset chain): {contract_path}")
-            # A hub-resolved contract is third-party config, and loading it
-            # imports the code its inline codec paths name. Surface each one
-            # BEFORE load_contract runs those imports.
+            self.get_logger().info(
+                f"Using the contract policy runner '{framework}' found for the checkpoint: {contract_path}"
+            )
+            # A contract found through a checkpoint may be third-party config,
+            # and loading it imports the code its inline codec paths name.
+            # Surface each one BEFORE load_contract runs those imports.
             for role, path in scan_inline_codec_paths(contract_path):
                 self.get_logger().warning(
-                    f"Hub-resolved contract declares an inline {role} '{path}': loading this "
-                    f"contract imports and executes that installed code. Pass an explicit "
-                    f"contract_path to use a locally reviewed contract."
+                    f"The contract found for the checkpoint declares an inline {role} '{path}': loading "
+                    f"it imports and executes that installed code. Pass an explicit contract_path to use "
+                    f"a locally reviewed contract."
                 )
 
         self._contract = load_contract(contract_path)

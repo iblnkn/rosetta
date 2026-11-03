@@ -47,3 +47,4 @@ def test_find_contract_follows_the_checkpoint_to_its_dataset(tmp_path):
 def test_find_contract_warns_and_returns_none_without_a_train_config(tmp_path):
     warnings = []
     assert LeRobotPolicyRunner().find_contract(str(tmp_path), warn=warnings.append) is None
+    assert any("train_config.json not found" in w for w in warnings), warnings

@@ -47,6 +47,21 @@ def test_configure_without_contract_chases_pretrained_then_fails(monkeypatch):
     assert seen == {"pretrained": "org/ckpt"}
 
 
+def test_configure_with_no_contract_and_no_checkpoint_fails_before_loading_a_runner(monkeypatch):
+    # Loading LeRobot's runner imports torch, so the plain configuration
+    # error must not wait on it.
+    loaded = []
+    monkeypatch.setattr(node_mod, "load_policy_runner", lambda fw: loaded.append(fw) or FakeRunner())
+
+    node = PolicyRunnerNode()
+    try:
+        assert node.on_configure(None) == TransitionCallbackReturn.ERROR
+    finally:
+        node.destroy_node()
+
+    assert loaded == []
+
+
 MINIMAL_CONTRACT = """
 robot_type: test
 robot_interface: ros2
