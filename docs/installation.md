@@ -127,6 +127,6 @@ python3 -c "from rosetta.contract.schema import load_contract; load_contract('$(
 The first command lists arguments from `params_file` to `activate`. The
 second prints `OK`.
 
-With `lerobot_rosetta` built, `ros2 run rosetta_ros rosetta_port --help`
+With `lerobot_dataset_rosetta` built, `ros2 run rosetta_ros rosetta_port --help`
 lists `lerobot` after `Installed:` under `--framework`. That list comes from
-the built adapters and does not check that LeRobot itself imports.
+the built dataset writers and does not check that LeRobot itself imports.

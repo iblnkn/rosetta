@@ -86,7 +86,7 @@ A robot interface such as `rosetta_ros` registers under
 use. Loading a contract asks that interface which message types exist, which
 timelines each carries and whether a `qos` parses, so a contract for an
 interface that isn't installed fails to load. A framework adapter such as
-`lerobot_rosetta` registers a dataset writer and a policy runner. Under ROS 2,
+`lerobot_dataset_rosetta` registers a dataset writer and `lerobot_rosetta` a policy runner. Under ROS 2,
 `rosetta_port` joins the two sides offline and `policy_runner_node` joins
 them live, each looking the framework up by name.
 

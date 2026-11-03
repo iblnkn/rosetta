@@ -4,6 +4,11 @@ Changelog for package lerobot_rosetta
 
 Forthcoming
 -----------
+* Breaking: the dataset writer moved to the new package
+  ``lerobot_dataset_rosetta``. ``rosetta_port`` still finds it as ``lerobot``
+  once that package is installed; code importing
+  ``lerobot_rosetta.dataset_writer`` imports
+  ``lerobot_dataset_rosetta.dataset_writer`` instead.
 * ``policy_type`` defaults to empty, which reads the type from the
   checkpoint's ``config.json`` the way LeRobot does
   (``PreTrainedConfig.from_pretrained``), or uses ``reward_classifier`` with

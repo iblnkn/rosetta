@@ -17,15 +17,12 @@
 import subprocess
 import sys
 
-import pytest
-
 BLOCKED = ("rclpy", "rosidl_runtime_py", "rosetta_ros")
 
 
-@pytest.mark.parametrize("module", ["lerobot_rosetta.policy_runner", "lerobot_rosetta.dataset_writer"])
-def test_imports_with_ros_unavailable(module):
+def test_imports_with_ros_unavailable():
     # A None entry in sys.modules makes any import of that name raise ImportError.
     block = "; ".join(f"sys.modules[{name!r}] = None" for name in BLOCKED)
-    code = f"import sys; {block}; import {module}"
+    code = f"import sys; {block}; import lerobot_rosetta.policy_runner"
     proc = subprocess.run([sys.executable, "-c", code], check=False, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stderr

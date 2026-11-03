@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Setup for lerobot_rosetta - Rosetta's LeRobot backend adapter.
+Setup for lerobot_rosetta - Rosetta's LeRobot policy runner and inference servers.
 
 Deliberately NOT named with a 'lerobot_robot_*'/'lerobot_teleoperator_*'
 prefix: those names are reserved for LeRobot's plugin auto-discovery. The
@@ -41,18 +41,16 @@ setup(
         "numpy",
         "lerobot<0.6.2",  # 0.6.2 removes async_inference, which the policy runner uses
         "rosetta",  # Depends on rosetta.contract/frames/policies
+        "lerobot_dataset_rosetta",  # the contract sidecar a checkpoint's dataset carries
         "lerobot_robot_rosetta",  # RosettaConfig; Robot plugin discovered by lerobot at runtime
         "grpcio",  # policy_server.py / classifier_server.py
         "torch",  # classifier_server.py
     ],
     entry_points={
-        # Rosetta framework adapters: resolved by name by the framework-agnostic
-        # node / porter so rosetta core never imports lerobot.
+        # Resolved by name by the framework-agnostic policy_runner_node, so
+        # rosetta core never imports lerobot.
         "rosetta.policy_runners": [
             "lerobot = lerobot_rosetta.policy_runner:LeRobotPolicyRunner",
-        ],
-        "rosetta.dataset_writers": [
-            "lerobot = lerobot_rosetta.dataset_writer:LeRobotDatasetWriter",
         ],
         "console_scripts": [
             "rosetta_classifier_server = lerobot_rosetta.classifier_server:main",
@@ -72,6 +70,6 @@ setup(
         "Topic :: Software Development",
         "Topic :: Scientific/Engineering",
     ],
-    description="Rosetta's LeRobot backend adapter - dataset writer, policy runner, and inference servers.",
+    description="Rosetta's LeRobot policy runner and inference servers.",
     license="Apache-2.0",
 )

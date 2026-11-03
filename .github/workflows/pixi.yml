@@ -6,10 +6,10 @@ name: pixi
 # docs.yml otherwise only builds on main.
 on:
   pull_request:
-    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, policies/**, docs/**, .github/workflows/pixi.yml]
+    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, data/**, policies/**, docs/**, .github/workflows/pixi.yml]
   push:
     branches: [main, dev]
-    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, policies/**, docs/**, .github/workflows/pixi.yml]
+    paths: [pixi.toml, pixi.lock, pixi/**, rosetta/**, robots/**, data/**, policies/**, docs/**, .github/workflows/pixi.yml]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

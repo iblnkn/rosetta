@@ -3,12 +3,13 @@
 <package format="3">
   <name>lerobot_rosetta</name>
   <version>0.2.0</version>
-  <description>Rosetta's LeRobot backend adapter - dataset writer, policy runner, and inference servers.</description>
+  <description>Rosetta's LeRobot policy runner and inference servers.</description>
   <maintainer email="isaac.blankenau@gmail.com">Isaac Blankenau</maintainer>
   <license>Apache-2.0</license>
 
   <depend>rosetta</depend>
   <depend>lerobot_robot_rosetta</depend>
+  <depend>lerobot_dataset_rosetta</depend>
   <depend>python3-numpy</depend>
   <!-- lerobot and torch have no rosdep keys, so rosdep can neither install them
        nor report them missing: install them with pip (they are in setup.py

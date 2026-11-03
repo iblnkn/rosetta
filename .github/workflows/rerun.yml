@@ -7,10 +7,10 @@ name: rerun
 # its "ros2" recording layout.
 on:
   pull_request:
-    paths: [rosetta/**, robots/ros/**, policies/rerun/**, .github/workflows/rerun.yml]
+    paths: [rosetta/**, robots/ros/**, data/rerun/**, .github/workflows/rerun.yml]
   push:
     branches: [main, dev]
-    paths: [rosetta/**, robots/ros/**, policies/rerun/**, .github/workflows/rerun.yml]
+    paths: [rosetta/**, robots/ros/**, data/rerun/**, .github/workflows/rerun.yml]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -23,7 +23,7 @@ jobs:
     env:
       ROS_DISTRO: lyrical
       ROS_REPO: main
-      TARGET_WORKSPACE: "rosetta robots/ros policies/rerun"
+      TARGET_WORKSPACE: "rosetta robots/ros data/rerun"
       # rerun-sdk and torch have no rosdep keys. CPU torch keeps the image small.
       BEFORE_BUILD_TARGET_WORKSPACE: >-
         pip install --break-system-packages

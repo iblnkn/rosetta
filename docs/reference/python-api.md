@@ -131,7 +131,8 @@ These names are each package's `__all__`. No test pins them.
 
 | Module | Names |
 |---|---|
-| `lerobot_rosetta` | `LeRobotDatasetWriter`, `LeRobotPolicyRunner`, `build_lerobot_features` |
+| `lerobot_dataset_rosetta` | `LeRobotDatasetWriter`, `build_lerobot_features` |
+| `lerobot_rosetta` | `LeRobotPolicyRunner` |
 | `lerobot_robot_rosetta` | `Rosetta`, `RosettaConfig` |
 | `lerobot_teleoperator_rosetta` | `RosettaTeleop`, `RosettaTeleopConfig` |
 | `rerun_rosetta` | `contract_dataset`, `ContractFrames`, `compile_contract`, `CompiledQuery`, `RecordingLayout`, `load_layout`, `write_stats_layer`, `load_stats`, `stats_layer_name` |

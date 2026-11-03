@@ -9,10 +9,11 @@ preview = ["pixi-build"]
 # The packages' own dependencies come from their package.xml files: each one
 # is a [dev] source package, and pixi resolves its package.xml at install time.
 [dev]
+ros-lyrical-lerobot-dataset-rosetta = { path = "data/lerobot/lerobot_dataset_rosetta/package.xml" }
 ros-lyrical-lerobot-robot-rosetta = { path = "policies/lerobot/lerobot_robot_rosetta/package.xml" }
 ros-lyrical-lerobot-rosetta = { path = "policies/lerobot/lerobot_rosetta/package.xml" }
 ros-lyrical-lerobot-teleoperator-rosetta = { path = "policies/lerobot/lerobot_teleoperator_rosetta/package.xml" }
-ros-lyrical-rerun-rosetta = { path = "policies/rerun/rerun_rosetta/package.xml" }
+ros-lyrical-rerun-rosetta = { path = "data/rerun/rerun_rosetta/package.xml" }
 ros-lyrical-rosetta = { path = "rosetta/package.xml" }
 ros-lyrical-rosetta-interfaces = { path = "robots/ros/rosetta_interfaces/package.xml" }
 ros-lyrical-rosetta-ros = { path = "robots/ros/rosetta_ros/package.xml" }

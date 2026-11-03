@@ -25,7 +25,7 @@ interface in this sense.
 
 ## Packages in this repository
 
-All eight are at version 0.2.0.
+All nine are at version 0.2.0.
 
 | Package | Path | Build type | Contains |
 |---|---|---|---|
@@ -33,10 +33,11 @@ All eight are at version 0.2.0.
 | [`rosetta_ros`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros) | `robots/ros/rosetta_ros/` | `ament_python` | The ROS 2 robot interface, registered as `ros2`: message codecs, `TopicBridge`, the node toolkit, the executables `episode_recorder_node`, `episode_keyboard_node`, `policy_runner_node` and `rosetta_port`, and the `contracts/`, `params/` and `launch/` files. |
 | [`rosetta_interfaces`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_interfaces) | `robots/ros/rosetta_interfaces/` | `ament_cmake` | The actions `RecordEpisode`, `RunPolicy` and `ManageEpisode`, the services `StartRecording`, `StartPolicy` and `StartHILEpisode`, and the six `~/status` and `~/result` messages. |
 | [`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil) | `robots/ros/rosetta_ros_hil/` | `ament_python` | The human-in-the-loop manager, `hil_manager_node`, built on the recorder, the policy runner and the node toolkit. |
-| [`lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta) | `policies/lerobot/lerobot_rosetta/` | `ament_python` | The LeRobot framework adapter, registered as `lerobot`. Also installs `rosetta_policy_server` and `rosetta_classifier_server` as plain console scripts, not `ros2 run` executables. |
+| [`lerobot_dataset_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/lerobot/lerobot_dataset_rosetta) | `data/lerobot/lerobot_dataset_rosetta/` | `ament_python` | The LeRobot dataset writer, registered as `lerobot`. It copies the contract into each dataset as `meta/rosetta_contract.yaml`. |
+| [`lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta) | `policies/lerobot/lerobot_rosetta/` | `ament_python` | The LeRobot policy runner, registered as `lerobot`. Also installs `rosetta_policy_server` and `rosetta_classifier_server` as plain console scripts, not `ros2 run` executables. |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_robot_rosetta) | `policies/lerobot/lerobot_robot_rosetta/` | `ament_python` | A LeRobot `Robot` plugin, `--robot.type=rosetta` in LeRobot's own command-line tools. |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_teleoperator_rosetta) | `policies/lerobot/lerobot_teleoperator_rosetta/` | `ament_python` | A LeRobot `Teleoperator` plugin, `--teleop.type=rosetta_teleop`. Experimental. |
-| [`rerun_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/rerun/rerun_rosetta) | `policies/rerun/rerun_rosetta/` | `ament_python` | Torch datasets of contract frames, read from `.rrd` bags on a Rerun catalog server through Rerun's dataloader. A library with no entry points of its own. It reads the recording layout each robot interface registers under `rerun_rosetta.layouts`. Experimental. |
+| [`rerun_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/rerun/rerun_rosetta) | `data/rerun/rerun_rosetta/` | `ament_python` | Torch datasets of contract frames, read from `.rrd` bags on a Rerun catalog server through Rerun's dataloader. A library with no entry points of its own. It reads the recording layout each robot interface registers under `rerun_rosetta.layouts`. Experimental. |
 
 The two LeRobot plugin packages are named for LeRobot's plugin discovery,
 which imports installed packages whose names start with `lerobot_robot_` or
@@ -58,7 +59,7 @@ and [Add a robot interface](../how-to/add-a-robot-interface.md) cover both.
 | `rosetta.robot_interfaces` | A class implementing `RobotInterface`, named after a contract's `robot_interface` value | Contract load | `ros2` by `rosetta_ros` |
 | `rosetta.codecs` | A module that calls `register_decoder` and `register_encoder` | Contract load | None |
 | `rosetta.operators` | A module that calls `register_operator` | Contract load | None |
-| `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --framework` | `lerobot` by `lerobot_rosetta` |
+| `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --framework` | `lerobot` by `lerobot_dataset_rosetta` |
 | `rosetta.policy_runners` | A class implementing `PolicyRunner` | `policy_runner_node` parameter `framework` | `lerobot` by `lerobot_rosetta` |
 | `rerun_rosetta.layouts` | A class implementing `RecordingLayout`, named after a contract's `robot_interface` value | `rerun_rosetta.contract_dataset` | `ros2` by `rosetta_ros` |
 

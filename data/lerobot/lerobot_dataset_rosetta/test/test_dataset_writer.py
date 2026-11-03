@@ -25,8 +25,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot_dataset_rosetta.dataset_writer import LeRobotDatasetWriter
 
-from lerobot_rosetta.dataset_writer import LeRobotDatasetWriter
 from rosetta.contract.schema import load_contract
 from rosetta.frames.codecs import discover_codecs
 

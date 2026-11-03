@@ -1,9 +1,10 @@
 # lerobot_rosetta
 
-Rosetta's framework adapter for [LeRobot](https://github.com/huggingface/lerobot):
-a dataset writer, a policy runner, and two gRPC inference servers. Rosetta
-loads it by the name `lerobot`, as `rosetta_port --framework lerobot` and as
-`policy_runner_node`'s `framework` parameter, which is the default for both.
+Rosetta's policy runner for [LeRobot](https://github.com/huggingface/lerobot),
+and two gRPC inference servers. Rosetta loads the runner by the name `lerobot`,
+as `policy_runner_node`'s `framework` parameter, which is the default. The
+dataset writer is in
+[`lerobot_dataset_rosetta`](../../../data/lerobot/lerobot_dataset_rosetta).
 
 This package is the Rosetta-to-LeRobot direction. The other direction, the
 `Robot` and `Teleoperator` plugins that LeRobot itself discovers, is in
@@ -18,7 +19,6 @@ The policy runner uses `lerobot_robot_rosetta` to drive LeRobot's
 
 | Group | Name | Target |
 |---|---|---|
-| `rosetta.dataset_writers` | `lerobot` | `lerobot_rosetta.dataset_writer:LeRobotDatasetWriter` |
 | `rosetta.policy_runners` | `lerobot` | `lerobot_rosetta.policy_runner:LeRobotPolicyRunner` |
 | `console_scripts` | `rosetta_policy_server` | `lerobot_rosetta.policy_server:main` |
 | `console_scripts` | `rosetta_classifier_server` | `lerobot_rosetta.classifier_server:main` |
