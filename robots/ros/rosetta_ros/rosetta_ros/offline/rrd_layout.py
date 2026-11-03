@@ -30,9 +30,9 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
-import pyarrow as pa
-
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from rosetta.contract.schema import Channel
 
 __all__ = [
@@ -85,6 +85,8 @@ class MessageView:
     __slots__ = ("_fields", "_row")
 
     def __init__(self, row: pa.StructScalar) -> None:
+        import pyarrow as pa  # imported here so rosetta_ros loads without Rerun's dependencies
+
         if not pa.types.is_struct(row.type):
             raise TypeError(f"MessageView needs a struct row, got Arrow type {row.type}")
         self._row = row
@@ -107,6 +109,8 @@ class MessageView:
 
 
 def _convert(value: pa.Scalar) -> Any:
+    import pyarrow as pa
+
     if not value.is_valid:
         return None
     if pa.types.is_struct(value.type):

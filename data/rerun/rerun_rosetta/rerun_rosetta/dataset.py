@@ -27,6 +27,7 @@ robot interface's :class:`~.layout.RecordingLayout`.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from collections.abc import Iterator
 from multiprocessing.sharedctypes import RawValue
@@ -65,6 +66,10 @@ def contract_dataset(
     return ContractFrames(catalog_url, dataset_name, contract, **kwargs)
 
 
+class NoSamplesError(RuntimeError):
+    """No tick has data for every observation stream, so there is nothing to sample."""
+
+
 class ContractFrames(torch.utils.data.IterableDataset):
     """Iterable dataset yielding porter-identical frame dicts.
 
@@ -95,10 +100,9 @@ class ContractFrames(torch.utils.data.IterableDataset):
 
     Building the manifest scans the whole dataset. With ``manifest`` set to a
     path, the first run writes the manifest there and later runs load it
-    instead. A saved manifest that doesn't match this dataset, contract,
-    ``windows`` or ``num_workers`` raises. It records which samples existed
-    when it was built, so delete it after registering new recordings or
-    changing ``segments``.
+    instead. A saved manifest that doesn't match this dataset, its segments,
+    the contract, ``windows`` or ``num_workers`` raises, so registering new
+    recordings or changing ``segments`` means deleting it to rebuild.
     """
 
     def __init__(
@@ -128,6 +132,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
         self._query = compile_contract(contract, dataset_entry.schema().column_names(), layout, windows=windows)
         self._layout = FrameLayout(self._query.specs)
         self._source = DataSource(dataset_entry, segments)
+        segment_ids = _segment_ids(dataset_entry, segments)
         num_workers_per_rank = max(1, num_workers)
         # A parquet-backed manifest pickles as its path, so DataLoader workers
         # don't each receive every row (which also starts them one at a time).
@@ -137,7 +142,7 @@ class ContractFrames(torch.utils.data.IterableDataset):
             manifest = Path(self._manifest_dir.name) / "manifest.parquet"
         if manifest is not None and Path(manifest).exists():
             self._manifest = Manifest.from_parquet(manifest)
-            _check_manifest(self._manifest, dataset_entry, self._query, num_workers_per_rank, manifest)
+            _check_manifest(self._manifest, dataset_entry, self._query, num_workers_per_rank, manifest, segment_ids)
         else:
             self._manifest = Manifest.generate(
                 self._source,
@@ -149,9 +154,10 @@ class ContractFrames(torch.utils.data.IterableDataset):
             )
             if manifest is not None:
                 self._manifest.write_parquet(manifest)
+                _record_segments(manifest, segment_ids)
                 self._manifest = Manifest.from_parquet(manifest)
         if not self._manifest.num_rows:
-            raise RuntimeError("No sample has data for every observation stream; nothing to train on.")
+            raise NoSamplesError("No sample has data for every observation stream; nothing to train on.")
         self._seed = seed
         # Shared memory, inherited by DataLoader workers when they spawn, so
         # persistent workers see every set_epoch.
@@ -213,10 +219,55 @@ class ContractFrames(torch.utils.data.IterableDataset):
         return {key: frame[key] for key in self._layout.keys}
 
 
+# Rerun's manifest header doesn't name the segments it was built from (a
+# segment with no samplable tick leaves no rows), so rerun_rosetta adds them.
+_SEGMENTS_KEY = b"rerun_rosetta.segments"
+
+
+def _segment_ids(entry: DatasetEntry, segments: list[str] | None) -> list[str]:
+    """The dataset's segments, or ``segments`` when given, sorted."""
+    if segments is not None:
+        return sorted(segments)
+    return sorted(entry.segment_table().to_arrow_table().column("rerun_segment_id").to_pylist())
+
+
+def _record_segments(path: str | Path, segment_ids: list[str]) -> None:
+    """Add the segment ids to the manifest's parquet schema metadata, keeping Rerun's header."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path)
+    metadata = {**(table.schema.metadata or {}), _SEGMENTS_KEY: json.dumps(segment_ids).encode()}
+    pq.write_table(table.replace_schema_metadata(metadata), path, compression="zstd")
+
+
+def _saved_segments(path: str | Path) -> list[str] | None:
+    """The segment ids a saved manifest was built from, or None if it predates recording them."""
+    import pyarrow.parquet as pq
+
+    saved = (pq.read_schema(path).metadata or {}).get(_SEGMENTS_KEY)
+    return None if saved is None else json.loads(saved)
+
+
+def _segment_change(saved: list[str] | None, current: list[str]) -> str | None:
+    """How the segments changed since the manifest was built, or None if they didn't."""
+    if saved is None:
+        return "segment list (it was saved before manifests recorded one)"
+    added, removed = sorted(set(current) - set(saved)), sorted(set(saved) - set(current))
+    if not added and not removed:
+        return None
+    parts = [f"{len(added)} added: {added}" if added else "", f"{len(removed)} removed: {removed}" if removed else ""]
+    return f"segment list ({', '.join(p for p in parts if p)})"
+
+
 def _check_manifest(
-    manifest: Manifest, entry: DatasetEntry, query: CompiledQuery, num_workers_per_rank: int, path: str | Path
+    manifest: Manifest,
+    entry: DatasetEntry,
+    query: CompiledQuery,
+    num_workers_per_rank: int,
+    path: str | Path,
+    segment_ids: list[str],
 ) -> None:
-    """Raise unless ``manifest`` is the one ``Manifest.generate`` would build for ``query``."""
+    """Raise unless ``manifest`` is the one ``Manifest.generate`` would build for ``query`` and ``segment_ids``."""
     meta = manifest.metadata
     expected = {
         "dataset": (meta.dataset_id, str(entry.id)),
@@ -228,6 +279,9 @@ def _check_manifest(
         "num_workers": (meta.num_workers_per_rank, num_workers_per_rank),
     }
     differ = [name for name, (saved, now) in expected.items() if saved != now]
+    segments_changed = _segment_change(_saved_segments(path), segment_ids)
+    if segments_changed:
+        differ.append(segments_changed)
     if differ:
         raise ValueError(
             f"Manifest {path} was built for a different {', '.join(differ)}. "

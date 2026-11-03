@@ -34,12 +34,24 @@ class _SlowWriter:
         self.release.wait(5.0)
 
 
-def test_the_writer_lock_is_free_while_the_bag_finalizes():
-    writer = _SlowWriter()
-    node = SimpleNamespace(_writer=writer, _writer_lock=threading.Lock(), _episode_subs={})
+def _node(writer):
+    node = SimpleNamespace(
+        _writer=writer, _writer_lock=threading.Lock(), _finalize_lock=threading.Lock(), _episode_subs={}
+    )
     node.destroy_subscription = lambda sub: None
+    return node
+
+
+def _close_on_thread(node):
     closer = threading.Thread(target=EpisodeRecorderNode._close_writer, args=(node,))
     closer.start()
+    return closer
+
+
+def test_the_writer_lock_is_free_while_the_bag_finalizes():
+    writer = _SlowWriter()
+    node = _node(writer)
+    closer = _close_on_thread(node)
     try:
         assert writer.closing.wait(2.0)
         assert node._writer is None  # callbacks see no writer and return at once
@@ -48,3 +60,22 @@ def test_the_writer_lock_is_free_while_the_bag_finalizes():
     finally:
         writer.release.set()
         closer.join(5.0)
+
+
+def test_a_close_at_shutdown_waits_for_the_finalize_in_progress():
+    # teardown() closes the writer too. Returning while the record thread is
+    # still finalizing would let the process exit and leave the bag unindexed.
+    writer = _SlowWriter()
+    node = _node(writer)
+    finalizing = _close_on_thread(node)
+    try:
+        assert writer.closing.wait(2.0)
+        teardown = _close_on_thread(node)
+        teardown.join(0.5)
+        assert teardown.is_alive(), "teardown returned while the bag was still finalizing"
+        writer.release.set()
+        teardown.join(5.0)
+        assert not teardown.is_alive()
+    finally:
+        writer.release.set()
+        finalizing.join(5.0)

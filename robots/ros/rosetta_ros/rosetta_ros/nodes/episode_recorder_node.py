@@ -203,6 +203,9 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         self._writer: rosbag2_py.SequentialWriter | None = None
         self._writer_lock = threading.Lock()
+        # Held for a whole finalize, which callbacks never take, so a close
+        # that teardown starts at shutdown waits for one already running.
+        self._finalize_lock = threading.Lock()
         self._messages_written = 0
         self._topic_msg_counts: dict[str, int] = {}
         # _bag_lock guards which bag ~/delete_last_bag targets: the recording
@@ -694,12 +697,14 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         The writer is swapped out under the lock and closed outside it.
         Callbacks write only under the lock, so none can still be writing to
         it, and the finalize (seconds for a bag with images) doesn't block the
-        callbacks on the node's one executor thread.
+        callbacks on the node's one executor thread. A second close waits for
+        a finalize in progress, so shutdown doesn't exit mid-write.
         """
-        with self._writer_lock:
-            writer, self._writer = self._writer, None
-        if writer is not None:
-            writer.close()  # Explicitly close to finalize MCAP indices
+        with self._finalize_lock:
+            with self._writer_lock:
+                writer, self._writer = self._writer, None
+            if writer is not None:
+                writer.close()  # Explicitly close to finalize MCAP indices
         # Atomic swap so two callers (record thread + teardown) destroy disjoint sets.
         episode_subs, self._episode_subs = self._episode_subs, {}
         for sub in episode_subs.values():

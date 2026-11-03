@@ -265,6 +265,9 @@ def load_codec(path: str) -> Callable:
 # =============================================================================
 # Lookup Functions
 # =============================================================================
+# These read the registry as it stands and run no discovery. Loading a
+# contract, or rosetta.contract.interfaces.discover_codecs(), registers the robot
+# interfaces' and plugins' codecs first.
 
 
 def get_decoder_dtype(msg_type: str) -> str:
@@ -275,12 +278,12 @@ def get_decoder_dtype(msg_type: str) -> str:
 
 
 def has_decoder(msg_type: str) -> bool:
-    """True if a decoder (built-in or discovered plugin) is registered for ``msg_type``."""
+    """True if a decoder is registered for ``msg_type`` (see the note above on discovery)."""
     return msg_type in DECODERS
 
 
 def has_encoder(msg_type: str) -> bool:
-    """True if an encoder (built-in or discovered plugin) is registered for ``msg_type``."""
+    """True if an encoder is registered for ``msg_type`` (see the note above on discovery)."""
     return msg_type in ENCODERS
 
 

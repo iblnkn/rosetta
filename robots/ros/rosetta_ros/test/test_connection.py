@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 import rclpy
 from sensor_msgs.msg import JointState, Joy
+from std_msgs.msg import Float64MultiArray
 
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
@@ -39,7 +40,7 @@ observations:
     select: [position.a, position.b]
 actions:
   action:
-    channel: {topic: /connection_test/cmd, type: std_msgs/msg/Float64MultiArray}
+    channel: {topic: /connection_test/cmd, type: std_msgs/msg/Float64MultiArray, safety: zeros}
     align: {strategy: hold, timeline: receive}
     select: [a, b]
 teleop:
@@ -166,6 +167,31 @@ def test_a_connection_whose_spin_thread_died_raises_instead_of_serving_stale_fra
         with pytest.raises(RuntimeError, match="spin thread died"):
             call()
     conn.close()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the crash is the point
+def test_close_after_the_spin_thread_died_still_sends_the_safety_action(contract, publisher_node):
+    # A callback that raises kills the executor and the bridge's watchdog with
+    # it. LeRobot then disconnects, and the robot must still get its safety
+    # command rather than keep executing the last one.
+    received = []
+    publisher_node.create_subscription(Float64MultiArray, "/connection_test/cmd", received.append, 10)
+    conn = _connect(contract)
+    # A command that arrives proves the publisher and subscription are matched.
+    deadline = time.monotonic() + 5.0
+    while not received and time.monotonic() < deadline:
+        conn.publish_frame({"action": np.array([1.0, 2.0])})
+        rclpy.spin_once(publisher_node, timeout_sec=0.05)
+    assert received, "the connection's commands never arrived"
+
+    conn._host.node.create_timer(0.01, lambda: (_ for _ in ()).throw(RuntimeError("callback boom")))
+    conn._host._spin_thread.join(timeout=5.0)
+    conn.close()
+
+    deadline = time.monotonic() + 5.0
+    while list(received[-1].data) != [0.0, 0.0] and time.monotonic() < deadline:
+        rclpy.spin_once(publisher_node, timeout_sec=0.05)
+    assert list(received[-1].data) == [0.0, 0.0]
 
 
 def test_a_closed_connection_raises(contract):

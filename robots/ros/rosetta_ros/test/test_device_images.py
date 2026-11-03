@@ -35,7 +35,7 @@ from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
 from rosetta.operators import OperatorContext, build_operator
 from rosetta_ros import decoders, topic_bridge
-from rosetta_ros.buffers import message_bytes
+from rosetta_ros.buffers import device_memory_unavailable, message_bytes
 from rosetta_ros.decoders import ImageDataMissing
 from rosetta_ros.topic_bridge import TopicBridge
 
@@ -105,9 +105,22 @@ def test_device_resize_picks_the_host_pixels(device, shape, size):
     np.testing.assert_array_equal(to_host(out), resize.forward(img))
 
 
-def test_empty_image_data_is_named():
-    with pytest.raises(ImageDataMissing, match="taken after its memory was recycled"):
+class _EmptyCudaData:
+    backend_type = "cuda"
+
+    def __len__(self):
+        return 0
+
+
+def test_empty_host_image_data_is_named_without_cuda_advice():
+    with pytest.raises(ImageDataMissing, match="no data for its 2x2 rgb8 image") as err:
         _decode(_image(2, 2, "rgb8", b""))
+    assert "CUDA" not in str(err.value)
+
+
+def test_empty_cuda_image_data_says_its_memory_was_recycled():
+    with pytest.raises(ImageDataMissing, match="recycled"):
+        _decode(_image(2, 2, "rgb8", _EmptyCudaData()))
 
 
 def test_host_data_is_a_numpy_view():
@@ -147,6 +160,14 @@ def test_stream_with_a_host_only_step_takes_host_memory(cuda_importable):
     bridge = TopicBridge([], [], fps=30, buffer_backends=("cuda",))
     assert bridge._accepted_buffer_backends(spec, logger) == ()
     assert any("takes host memory: inline decoder" in m for m in logger.infos)
+
+
+def test_cuda_memory_is_unavailable_with_a_torch_that_has_no_cuda(monkeypatch):
+    # A CPU-only torch would otherwise accept cuda memory, then drop every
+    # message and zero-fill the image forever.
+    torch = _torch()
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert "has no CUDA device" in device_memory_unavailable("cuda")
 
 
 def test_backend_this_process_cant_import_is_skipped_with_a_warning(monkeypatch):

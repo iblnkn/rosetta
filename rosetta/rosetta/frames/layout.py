@@ -288,7 +288,14 @@ class FrameLayout:
             parts = [_tensor_part(key, sl, val, np_dtype) for sl, val in zip(layout.slices, key_values, strict=True)]
             # Concatenation runs on the host: rosetta has no device concatenate,
             # and keys several specs share are small vectors.
-            frame[key] = parts[0] if len(parts) == 1 else np.concatenate([to_host(p) for p in parts])
+            if len(parts) > 1:
+                frame[key] = np.concatenate([to_host(p) for p in parts])
+            elif layout.category == "numeric" and isinstance(parts[0], np.ndarray):
+                # A copy, so a consumer that normalizes in place doesn't change
+                # the sample a hold strategy serves again next tick.
+                frame[key] = parts[0].copy()
+            else:
+                frame[key] = parts[0]
 
         return frame
 

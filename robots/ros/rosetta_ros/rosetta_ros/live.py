@@ -127,7 +127,9 @@ class RosConnection:
     ) -> None:
         overrides = [Parameter("use_sim_time", Parameter.Type.BOOL, True)] if use_sim_time else None
         self._host = NodeHost()
-        node = self._host.start(
+        # Kept for close() alone: everything else goes through _live(), but the
+        # safety action must still go out after the spin thread has died.
+        self._node = node = self._host.start(
             lambda context: _ConnectionNode(
                 name, observations, actions, fps, events, context=context, parameter_overrides=overrides
             )
@@ -180,12 +182,12 @@ class RosConnection:
         return self._live().events()
 
     def close(self) -> None:
-        try:
-            node = self._host.node
-        except RuntimeError:
-            node = None  # the spin thread died; there is nothing left to transition
-        # The host stops even if a transition raises, so a failed close still
-        # releases the spin thread and context as the error propagates.
+        # Deactivating sends the safety action. trigger_* runs on the calling
+        # thread, so it works even after the spin thread has died, when the
+        # watchdog has stopped and the robot would otherwise keep its last
+        # command. The host stops even if a transition raises, so a failed
+        # close still releases the spin thread and context.
+        node, self._node = self._node, None
         try:
             if node is not None:
                 if node.is_active:
