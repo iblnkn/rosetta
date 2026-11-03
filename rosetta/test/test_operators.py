@@ -71,10 +71,20 @@ def test_resize_upsample_is_symmetric():
         ((7, 13, 3), [5, 9]),
     ],
 )
-def test_resize_matches_reference_sampling(shape, size):
+@pytest.mark.parametrize(
+    "prepare",
+    [
+        lambda a: a,
+        lambda a: a[::-1, ::2],  # a flipped, strided camera view
+        lambda a: a.astype(np.float32),  # a depth image
+    ],
+    ids=["contiguous", "strided-view", "float32"],
+)
+def test_resize_matches_reference_sampling(shape, size, prepare):
     # Datasets and trained policies depend on these exact pixels, so any faster
     # implementation must reproduce the original fancy-index gather bit for bit.
-    img = np.random.default_rng(0).integers(0, 256, shape, dtype=np.uint8)
+    img = prepare(np.random.default_rng(0).integers(0, 256, shape, dtype=np.uint8))
+    shape = img.shape
     y = np.round(np.linspace(0, shape[0] - 1, size[0])).astype(np.int64)
     x = np.round(np.linspace(0, shape[1] - 1, size[1])).astype(np.int64)
     out = build_operator("resize", size, IMG_CTX).forward(img)

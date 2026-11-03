@@ -55,9 +55,9 @@ on pull requests that touch their paths, so a core change runs `core`, `ros`,
 
 | Workflow | Runs | On changes to |
 |---|---|---|
-| `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12 and 3.13 with no ROS | `rosetta/` |
+| `core` | `pytest rosetta/test` and a wheel build, on plain Python 3.12, 3.13 and 3.14 with no ROS | `rosetta/` |
 | `ros` | Builds and tests `rosetta` and `robots/ros` with industrial_ci on ROS 2 Lyrical | `rosetta/`, `robots/` |
-| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Lyrical, against LeRobot's newest release before 0.6.2 and against LeRobot's `main`, which is allowed to fail. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
+| `lerobot` | Builds and tests `rosetta`, `robots/ros` and `policies/lerobot` with industrial_ci on ROS 2 Lyrical, against LeRobot's newest release before 0.6.2. Also runs nightly. | `rosetta/`, `robots/ros/`, `policies/lerobot/` |
 | `rerun` | Builds and tests `rosetta`, `robots/ros` and `policies/rerun` with industrial_ci on ROS 2 Lyrical, with `rerun-sdk` and CPU torch | `rosetta/`, `robots/ros/`, `policies/rerun/` |
 | `lint` | The `pre-commit` hooks: ruff check and format, plus file checks for whitespace, line endings, YAML, XML, merge conflicts and large files | every pull request |
 | `pixi` | `pixi run test`, which builds and tests every package together in the locked pixi environment with LeRobot 0.6.1, then `pixi run docs-build` | `pixi.toml`, `pixi.lock`, `pixi/`, `rosetta/`, `robots/`, `policies/`, `docs/` |
@@ -87,6 +87,47 @@ The pixi environment reads each package's dependencies from its
 LeRobot, has no `package.xml` key that pixi resolves, so it also goes in
 `pixi.toml`'s `pypi-dependencies`. A new package needs a line in the `[dev]`
 table.
+
+## Commits and pull requests
+
+Write the commit subject as what the code does after the change, in the
+present tense. The body explains why.
+
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+```
+
+Pull requests use [the template](.github/pull_request_template.md). Open
+with the problem or goal in a few sentences, then fill in each section:
+
+| Section | What goes in it |
+|---|---|
+| Changes | One bullet per change a reviewer should know about. Start a breaking change with `Breaking:`. |
+| Testing | What you ran and what it showed, such as a test that fails without the change, or the log line that changed. |
+| Merge danger | Whether a revert undoes it, and what could break. Renaming or removing a public API name, contract field, node topic, parameter, service or action, bag metadata key, or the dataset layout can't be fully reverted, because bags and datasets already written keep the old form. |
+
+## Generative AI
+
+Rosetta follows the [OSRF policy on generative tools](https://github.com/openrobotics/osra-policies-and-procedures/blob/main/OSRF%20Policy%20on%20the%20Use%20of%20Generative%20Tools%20(%E2%80%9CGenerative%20AI%E2%80%9D)%20in%20Contributions.md).
+When an AI tool wrote part of a commit, end the commit with an `Assisted-by`
+trailer that names the tool and the exact model:
+
+```text
+Porter ticks are exact multiples of the frame period, so the grid never drifts
+
+The body explains why.
+
+Assisted-by: Claude:claude-opus-5-5
+```
+
+Use one trailer per model, and no other tool trailers such as
+`Co-Authored-By`. End the pull request description with the same thing:
+
+```text
+🤖 This pull request was assisted by Claude:claude-opus-5-5.
+```
+
+Generated code gets the same review and tests as any other code.
 
 ## Where an adapter lives
 

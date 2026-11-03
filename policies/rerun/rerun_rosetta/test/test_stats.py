@@ -19,7 +19,36 @@ import pytest
 
 pytest.importorskip("rerun")
 
-from rerun_rosetta.stats import QUANTILES, histogram_stats, quantile_name, value_stats
+from rerun_rosetta.stats import (
+    QUANTILES,
+    _sufficient_statistics,
+    _write_layer,
+    histogram_stats,
+    load_stats,
+    quantile_name,
+    stats_layer_name,
+    value_stats,
+)
+
+from rosetta.contract.schema import load_contract
+from rosetta.contract.specs import iter_policy_specs
+from rosetta.frames.layout import FrameLayout
+
+CONTRACT = """\
+robot_type: stats_test
+robot_interface: ros2
+fps: 10
+observations:
+  observation.state:
+    channel: {topic: /js, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.a, position.b]
+actions:
+  action:
+    channel: {topic: /cmd, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.a, position.b]
+"""
 
 
 def _numpy_stats(values):
@@ -59,3 +88,28 @@ def test_value_stats_of_concatenated_episodes_equal_stats_of_all_values():
     assert got["count"].tolist() == [23]
     for name, value in want.items():
         np.testing.assert_array_equal(got[name], value, err_msg=name)
+
+
+def test_a_segment_with_no_samples_adds_nothing_to_the_stats(catalog_url, tmp_path):
+    # A short episode, or one whose camera never published, has no tick to
+    # sample. Its layer records 0 frames, and training still gets stats from
+    # every other segment.
+    from rerun.catalog import CatalogClient
+
+    contract_path = tmp_path / "contract.yaml"
+    contract_path.write_text(CONTRACT)
+    layout = FrameLayout(list(iter_policy_specs(load_contract(contract_path))))
+    rng = np.random.default_rng(0)
+    frames = [{"observation.state": rng.normal(size=2), "action": rng.normal(size=2)} for _ in range(6)]
+    name = stats_layer_name(CONTRACT)
+    _write_layer(tmp_path / "full.rrd", "full", name, *_sufficient_statistics(frames, layout), CONTRACT)
+    _write_layer(tmp_path / "empty.rrd", "empty", name, 0, {}, CONTRACT)
+    dataset = CatalogClient(catalog_url).create_dataset("stats_with_an_empty_segment")
+    dataset.register([(tmp_path / f).as_uri() for f in ("full.rrd", "empty.rrd")], layer_name=name).wait()
+
+    stats = load_stats(dataset, contract_path)
+
+    want = value_stats(np.stack([f["observation.state"] for f in frames]))
+    assert stats["observation.state"]["count"].tolist() == [6]
+    for field in ("mean", "std", "min", "max"):
+        np.testing.assert_allclose(stats["observation.state"][field], want[field], err_msg=field)

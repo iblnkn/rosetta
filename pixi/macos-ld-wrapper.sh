@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS-only linker wrapper, wired in via pixi.toml's osx-arm64 LDFLAGS.
 #
-# robostack-jazzy's clang (conda-forge, cross-compiling "arm64-apple-darwin20.0.0"
+# robostack-lyrical's clang (conda-forge, cross-compiling "arm64-apple-darwin20.0.0"
 # triple) ships its own bundled `ld`. On recent macOS SDKs (observed on macOS 26.5)
 # that bundled linker fails to resolve implicit libSystem symbols
 # (___assert_rtn, ___stack_chk_fail, ___stack_chk_guard), breaking every dylib
