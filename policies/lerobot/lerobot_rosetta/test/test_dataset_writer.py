@@ -145,3 +145,27 @@ def test_embed_contract_writes_sidecar(contract_path: Path, ds_root: Path, open_
 def test_no_sidecar_without_contract_or_opt_in(contract_path: Path, ds_root: Path, open_kwargs):
     _open_writer(contract_path, **{"contract_path": contract_path, **open_kwargs})
     assert not (ds_root / "meta" / "rosetta_contract.yaml").exists()
+
+
+def test_shaped_stream_is_stored_at_its_shape(tmp_path: Path, ds_root: Path):
+    """A ``shape:`` stream is an N-D feature, written and read back at that shape."""
+    shaped = CONTRACT_YAML.replace(
+        "actions:",
+        "  observation.features:\n"
+        "    channel: {topic: /features, type: std_msgs/msg/Float32MultiArray}\n"
+        "    align: {strategy: hold, timeline: receive}\n"
+        "    shape: [2, 3]\n"
+        "actions:",
+    )
+    path = tmp_path / "shaped.yaml"
+    path.write_text(shaped)
+    writer = _open_writer(path)
+    for i in range(2):
+        writer.add_frame({**_frame(i), "observation.features": np.full((2, 3), i, dtype=np.float32)})
+    writer.save_episode()
+    writer.finalize()
+
+    info = json.loads((ds_root / "meta" / "info.json").read_text())
+    assert info["features"]["observation.features"]["shape"] == [2, 3]
+    item = LeRobotDataset("smoke/ds", root=ds_root)[1]
+    assert tuple(item["observation.features"].shape) == (2, 3)

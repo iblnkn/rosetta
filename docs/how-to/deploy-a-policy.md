@@ -88,6 +88,12 @@ PYTHONPATH=rosetta/policies/lerobot/lerobot_rosetta python3 -m lerobot_rosetta.p
 model before the server accepts connections. They go together. Without them
 the server loads the model when the runner first connects.
 
+Use this server rather than LeRobot's own `lerobot.async_inference.policy_server`.
+LeRobot's server skips an observation whose joint state is within an L2
+distance of 1.0 of the last one it ran, so a slow-moving arm can go a tick or
+more without an action each time the runner needs a new chunk.
+`lerobot_rosetta.policy_server` runs every observation.
+
 On the robot, point the runner at the server and name the same checkpoint:
 
 ```bash

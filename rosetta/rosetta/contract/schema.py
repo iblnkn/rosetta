@@ -302,6 +302,22 @@ def _parse_select_paths(raw: Any, ctx: str) -> tuple[str, ...] | None:
     return tuple(raw)
 
 
+def _parse_shape(raw: Any, select: tuple[str, ...] | None, ctx: str) -> tuple[int, ...] | None:
+    """Parse ``shape``: the value shape of a stream that has no ``select`` names."""
+    if raw is None:
+        return None
+    if select is not None:
+        raise ContractValidationError(
+            f"'shape' in {ctx} conflicts with 'select': a stream's shape is (len(select),) when it selects fields"
+        )
+    if not isinstance(raw, list) or not raw:
+        raise ContractValidationError(f"'shape' in {ctx} must be a non-empty list of positive integers, got {raw!r}")
+    dims = tuple(_parse_strict_int(d, f"shape[{i}] in {ctx}") for i, d in enumerate(raw))
+    if any(d <= 0 for d in dims):
+        raise ContractValidationError(f"'shape' in {ctx} must be positive integers, got {list(dims)}")
+    return dims
+
+
 def _parse_select_map(raw: Any, ctx: str) -> dict[str, str]:
     """Parse the dict form of ``select`` (teleop events): event name -> field path."""
     if not isinstance(raw, dict):
@@ -353,7 +369,7 @@ def _parse_apply(raw: Any, ctx: str, *, require_serveable: bool = False) -> list
     return operators
 
 
-_SOURCE_KEYS = frozenset({"channel", "align", "select", "apply", "kind"})
+_SOURCE_KEYS = frozenset({"channel", "align", "select", "shape", "apply", "kind"})
 
 _ALIGN_KEYS = frozenset({"strategy", "timeline", "tolerance_ms"})
 
@@ -426,6 +442,7 @@ def _parse_source(data: Any, ctx: str, section: str) -> Source:
     align = _parse_align(data["align"], f"{ctx}.align")
 
     select = _parse_select_paths(data.get("select"), ctx)
+    shape = _parse_shape(data.get("shape"), select, ctx)
     apply = _parse_apply(data.get("apply"), ctx, require_serveable=section in _SERVEABLE)
     kind = _validate_kind(data.get("kind"), select, ctx)
 
@@ -433,6 +450,7 @@ def _parse_source(data: Any, ctx: str, section: str) -> Source:
         channel=channel,
         align=align,
         select=select,
+        shape=shape,
         apply=tuple(apply),
         kind=kind,
     )

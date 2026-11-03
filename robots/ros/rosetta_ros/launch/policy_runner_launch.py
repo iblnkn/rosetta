@@ -153,7 +153,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "buffer_backends",
             default_value="",  # Empty = use value from params file
-            description="rosidl buffer backends image subscriptions accept, e.g. cuda (empty = use params file value)",
+            description="rosidl buffer backends subscriptions accept, e.g. cuda (empty = use params file value)",
         ),
         # Server configuration
         DeclareLaunchArgument(

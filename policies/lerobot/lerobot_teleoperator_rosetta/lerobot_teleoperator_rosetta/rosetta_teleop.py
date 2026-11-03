@@ -98,21 +98,23 @@ class RosettaTeleop(Teleoperator):
     def _feedback_layout(self) -> FrameLayout:
         return FrameLayout(self.config.feedback_specs)
 
+    @cached_property
+    def _input_names(self) -> dict[str, tuple[str, ...]]:
+        """Input key -> its namespaced selector names, in value order."""
+        return {key: self._input_layout[key].names for key in self._input_layout.keys}
+
+    @cached_property
+    def _feedback_names(self) -> dict[str, tuple[str, ...]]:
+        """Feedback key -> its namespaced selector names, in value order."""
+        return {key: self._feedback_layout[key].names for key in self._feedback_layout.keys}
+
     @property
     def action_features(self) -> dict[str, type]:
-        features: dict[str, type] = {}
-        for spec in self.config.input_specs:
-            for name in spec.namespaced_names:
-                features[name] = float
-        return features
+        return {name: float for names in self._input_names.values() for name in names}
 
     @property
     def feedback_features(self) -> dict[str, type]:
-        features: dict[str, type] = {}
-        for spec in self.config.feedback_specs:
-            for name in spec.namespaced_names:
-                features[name] = float
-        return features
+        return {name: float for names in self._feedback_names.values() for name in names}
 
     @property
     def is_connected(self) -> bool:
@@ -137,6 +139,15 @@ class RosettaTeleop(Teleoperator):
         del calibrate  # Unused - the teleop device needs no calibration
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} already connected")
+        # LeRobot actions are per-name floats, so a stream without select has
+        # nothing to be called. rosetta_ros_hil forwards such streams fine.
+        nameless = self._input_layout.nameless_specs + self._feedback_layout.nameless_specs
+        if nameless:
+            streams = ", ".join(f"'{s.key}' (topic {s.source.channel.topic})" for s in nameless)
+            raise ValueError(
+                f"Teleop streams without select: {streams}. The LeRobot teleoperator addresses every "
+                f"input and feedback value by its selected name; add 'select:' to these sources."
+            )
 
         events = self.config.events_spec
         if events is not None:
@@ -167,8 +178,7 @@ class RosettaTeleop(Teleoperator):
         frame = self._connection.sample_frame(fill_missing=False)
         action: dict[str, Any] = {}
         for key, vec in frame.items():
-            names = [name for sl in self._input_layout[key].slices for name in sl.spec.namespaced_names]
-            for name, value in zip(names, np.asarray(vec).flatten(), strict=True):
+            for name, value in zip(self._input_names[key], np.asarray(vec).flatten(), strict=True):
                 action[name] = float(value)
         return action
 
@@ -192,8 +202,7 @@ class RosettaTeleop(Teleoperator):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
         frame: dict[str, Any] = {}
-        for key in self._feedback_layout.keys:
-            names = [name for sl in self._feedback_layout[key].slices for name in sl.spec.namespaced_names]
+        for key, names in self._feedback_names.items():
             if not all(name in feedback for name in names):
                 return
             frame[key] = np.array([feedback[name] for name in names], dtype=np.float64)

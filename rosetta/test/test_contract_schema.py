@@ -289,12 +289,12 @@ def test_shared_key_sources_ordered(tmp_path):
     ]
 
 
-@pytest.mark.parametrize("dtype", ["float32", "float64", "int32", "int64", "bool"])
+@pytest.mark.parametrize("dtype", ["float16", "float32", "float64", "uint8", "int32", "int64", "bool"])
 def test_supported_numeric_dtypes_load(tmp_path, dtype):
     _load(tmp_path, _channel(f"dtype: {dtype}"))
 
 
-@pytest.mark.parametrize("dtype", ["uint8", "float16", "image", "not_a_dtype", "flot32", "Float32", "'(-1,)f4'", "','"])
+@pytest.mark.parametrize("dtype", ["image", "not_a_dtype", "flot32", "Float32", "'(-1,)f4'", "','"])
 def test_unsupported_dtypes_rejected_at_load(tmp_path, dtype):
     """The vocabulary is closed and checked at load: anything FrameLayout
     cannot assemble is refused here, not at bridge configure or writer open."""
@@ -705,3 +705,53 @@ def test_unknown_type_rejected_at_load(text, tmp_path):
 def test_scalars_are_not_coerced(old, new, match, tmp_path):
     assert old in BASE
     _expect_error(tmp_path, BASE.replace(old, new, 1), match)
+
+
+# ---------- shape ----------
+
+
+def _shaped(shape_line):
+    """BASE with the observation on fake/Data (no select needed) and its select replaced by ``shape_line``."""
+    text = BASE.replace(OBS_SELECT, f"    {shape_line}\nactions:", 1)
+    return text.replace(OBS_CHANNEL, "channel: {topic: /state, type: fake/Data}", 1)
+
+
+def test_shape_does_not_stand_in_for_names_a_decoder_needs(tmp_path):
+    _expect_error(tmp_path, BASE.replace(OBS_SELECT, "    shape: [2]\nactions:", 1), "add 'select:'")
+
+
+def test_shape_gives_a_select_less_stream_its_shape(tmp_path):
+    from rosetta.contract.specs import iter_observation_specs
+
+    (spec,) = iter_observation_specs(_load(tmp_path, _shaped("shape: [2, 3]")))
+    assert spec.shape == (2, 3)
+    assert spec.dim == 6
+
+
+def test_a_stream_with_select_is_a_vector_of_its_names(tmp_path):
+    from rosetta.contract.specs import iter_observation_specs
+
+    (spec,) = iter_observation_specs(_load(tmp_path, BASE))
+    assert spec.shape == (1,)
+
+
+@pytest.mark.parametrize(
+    ("shape_line", "match"),
+    [
+        ("shape: [2]\n    select: [a]", "conflicts with 'select'"),
+        ("shape: []", "non-empty list"),
+        ("shape: 4", "non-empty list"),
+        ("shape: [2, 0]", "positive integers"),
+        ("shape: [2.5]", "must be an integer"),
+    ],
+)
+def test_bad_shapes_are_rejected(tmp_path, shape_line, match):
+    _expect_error(tmp_path, _shaped(shape_line), match)
+
+
+def test_action_shape_must_be_a_vector(tmp_path):
+    align = f"    align: {ALIGN}\n"
+    action = f"    {ACT_CHANNEL}\n{align}    select: [a]\n"
+    shaped = f"    channel: {{topic: /cmd, type: fake/Data}}\n{align}    shape: [2, 2]\n"
+    assert action in BASE
+    _expect_error(tmp_path, BASE.replace(action, shaped), "must have one dimension")

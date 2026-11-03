@@ -81,3 +81,21 @@ def test_gate_passes_multi_topic_single_key():
         _obs("observation.state", ["g"], topic="/gripper"),
     ]
     ensure_live_observation_layout(specs, [_act("action", ["x"])])
+
+
+def test_gate_refuses_a_tensor_stream_by_name():
+    tensor = ObservationStreamSpec(
+        key="observation.state",
+        names=[],
+        fps=30,
+        source=Source(
+            channel=Channel(topic="/features", type="tensor_msgs/msg/ExperimentalTensor"),
+            align=Align("hold", "receive"),
+            shape=(4, 8),
+        ),
+        is_image=False,
+        image_resize=None,
+        dtype="float32",
+    )
+    with pytest.raises(ValueError, match=r"tensor streams with a declared shape.*topic /features"):
+        ensure_live_observation_layout([tensor], [_act("action", ["x"])])

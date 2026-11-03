@@ -52,6 +52,7 @@ from rosetta.contract.specs import iter_policy_specs
 from rosetta.frames.layout import FrameLayout
 
 from .dataset import ContractFrames, NoSamplesError
+from .layout import load_layout
 
 if TYPE_CHECKING:
     from rerun.catalog import DatasetEntry
@@ -87,6 +88,7 @@ def write_stats_layer(
     contract = load_contract(contract_path)
     name = stats_layer_name(text)
     frame_layout = FrameLayout(list(iter_policy_specs(contract)))
+    layout = layout or load_layout(contract.robot_interface)  # once, not per segment
     todo = sorted(segment for segment, layers in _segment_layers(dataset_entry).items() if name not in layers)
 
     layer_dir = Path(out_dir) / name
@@ -173,12 +175,12 @@ def _stats_from_layers(
         if frame_layout[key].category == "image":
             stats[key] = histogram_stats(sum(row.reshape(-1, LEVELS) for row in present), sum(frames))
         else:
-            stats[key] = value_stats(np.concatenate([row.reshape(-1, frame_layout[key].dim) for row in present]))
+            stats[key] = value_stats(np.concatenate([row.reshape(-1, *frame_layout[key].shape) for row in present]))
     return stats
 
 
 def value_stats(values: np.ndarray) -> dict[str, np.ndarray]:
-    """Stats of ``(count, width)`` values, per column."""
+    """Stats of ``(count, *shape)`` values, per element."""
     stats = {
         "count": np.array([len(values)]),
         "mean": values.mean(axis=0),

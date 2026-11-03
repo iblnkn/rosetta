@@ -24,7 +24,7 @@ parity is why an offline-trained policy behaves the same online. The frame dict
 is the seam:
 
 - ``sample_frame()`` returns ``{contract_key: array | str}``: numpy, except
-  images that arrived in device memory (see ``buffer_backends``).
+  values that arrived in device memory (see ``buffer_backends``).
 - ``publish_frame()`` consumes ``{contract_key: np.ndarray}``.
 
 Nothing here depends on LeRobot or any policy framework. Framework adapters
@@ -103,7 +103,7 @@ class TopicBridge:
         action_specs: Resolved action stream specs (publishers).
         fps: Contract rate (Hz). Sets the watchdog period on the ROS clock, so
             the timeout tracks sim time under use_sim_time.
-        buffer_backends: rosidl buffer backends (e.g. ``"cuda"``) an image
+        buffer_backends: rosidl buffer backends (e.g. ``"cuda"``) a
             subscription accepts, so a publisher's device memory arrives
             without a copy and stays on its device. Applied to a stream only
             where its decoder and operators all handle device memory and
@@ -214,8 +214,8 @@ class TopicBridge:
         )
 
     def _accepted_buffer_backends(self, spec: ObservationStreamSpec, logger) -> tuple[str, ...]:
-        """The configured buffer backends ``spec``'s subscription can accept, logging why for image streams."""
-        if not self._buffer_backends or not spec.is_image:
+        """The configured buffer backends ``spec``'s subscription can accept, logging why."""
+        if not self._buffer_backends:
             return ()
         where = f"'{spec.key}' ({spec.source.channel.topic})"
         reason = host_only_reason(spec)

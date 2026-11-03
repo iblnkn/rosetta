@@ -60,11 +60,14 @@ def lerobot_stats(stats: dict, image_keys: set[str]) -> dict:
 def collate(samples: list[dict], image_keys: set[str]) -> dict[str, torch.Tensor]:
     """Frame dicts -> ACT batch: images HWC uint8 -> CHW float [0, 1], vectors float32.
 
+    String streams are left out, as they are from the policy's features.
     ``action`` arrives as a ``[chunk, D]`` window. The dataloader never lets a
     window cross the episode edge, so no chunk position is padded.
     """
     batch: dict[str, torch.Tensor] = {}
-    for key in samples[0]:
+    for key, value in samples[0].items():
+        if isinstance(value, str):
+            continue
         stacked = torch.from_numpy(np.stack([s[key] for s in samples]))
         batch[key] = stacked.permute(0, 3, 1, 2).float() / 255.0 if key in image_keys else stacked.float()
     batch["action_is_pad"] = torch.zeros(batch["action"].shape[:2], dtype=torch.bool)

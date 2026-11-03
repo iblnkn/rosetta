@@ -60,8 +60,9 @@ See [Nodes](nodes.md).
 
 ## Source
 
-A source is a mapping with the keys `channel`, `align`, `select`, `apply` and
-`kind`. `channel` and `align` are required. Any other key is an error.
+A source is a mapping with the keys `channel`, `align`, `select`, `shape`,
+`apply` and `kind`. `channel` and `align` are required. Any other key is an
+error.
 
 ```yaml
 observation.state:
@@ -83,7 +84,7 @@ observation.state:
 | `topic` | yes | Non-empty string. |
 | `type` | yes | Message type such as `sensor_msgs/msg/JointState`. Must import. |
 | `qos` | no | See [`qos`](#qos). |
-| `dtype` | per section | One of `float32`, `float64`, `int32`, `int64`, `bool`, `string`, `video`. |
+| `dtype` | per section | One of `float16`, `float32`, `float64`, `uint8`, `int32`, `int64`, `bool`, `string`, `video`. Decoded values are cast to it. |
 | `decoder` | no | Custom decoder as `module.path:function`. Every section except `tasks`, `adjunct` and `teleop.events`. See [Custom codecs](message-types.md#custom-codecs). |
 | `encoder` | no | Custom encoder as `module.path:function`. `actions` and `teleop.feedback` only. |
 | `safety` | no | `actions` only. `none` (default), `zeros` or `hold`. |
@@ -211,8 +212,27 @@ A channel with a custom `decoder` is exempt. An action of one of these types
 is exempt only with both a custom `decoder` and a custom `encoder`, because
 actions are decoded when porting.
 
-The width of a source is `len(select)`, or 1 without `select`. A decoded or
-encoded value of any other width fails for that message.
+The width of a source is `len(select)`, the product of its `shape`, or 1
+without either. A decoded or encoded value of any other width fails for that
+message.
+
+### `shape`
+
+Optional. A non-empty list of positive integers: the shape of the source's
+value, for a source without `select`. The frame holds the value at that
+shape, and the dataset stores it as a feature of that shape.
+
+```yaml
+observation.features:
+  channel: {topic: /dino/features, type: tensor_msgs/msg/ExperimentalTensor, dtype: float16}
+  align: {strategy: hold, timeline: receive}
+  shape: [384, 16, 16]
+```
+
+`shape` together with `select` is an error. So is `shape` on an image key,
+whose shape comes from `resize`. An `actions`, `rewards` or `teleop.feedback`
+source publishes a vector, so its `shape` has one dimension. A source of a
+multi-source key needs `select`, so `shape` is for single-source keys.
 
 ### `apply`
 
@@ -283,7 +303,7 @@ observation.state:
 - An empty list is an error.
 
 The LeRobot live path accepts one numeric observation key, one action key, and
-no numeric source without `select`. The policy runner checks this at
+no numeric source without `select`, which includes a source with `shape`. The policy runner checks this at
 configure and the LeRobot `Robot` plugin at connect, not at load. See
 [About the contract](../explanation/design.md#one-numeric-key-on-the-live-path).
 
@@ -377,6 +397,10 @@ source's codec and inverse `apply`. The feedback `select` must match the
 origin source in width. The loader checks neither width. A mismatch fails
 every message at runtime with a logged error.
 
+The LeRobot teleoperator addresses each value by its selected name, so it
+needs `select` on every `input` and `feedback` source and refuses a source
+without one at connect. `rosetta_ros_hil` forwarding needs no `select`.
+
 Event names are open. The loader accepts any name, and each consumer acts on
 the names it knows and logs the ones it ignores, so one contract can serve
 several consumers. The human-in-the-loop manager's names are in the
@@ -403,7 +427,7 @@ These pass `load_contract` and fail later:
 | One topic declared with two different types. | Recorder configure, and every episode when porting. |
 | One topic declared with two different `qos`. | Recorder configure. |
 | An action type with a custom encoder but no decoder. | Every episode when porting. |
-| Two numeric observation keys, two action keys, or a numeric source without `select`, on the LeRobot live path. | Policy runner configure, or LeRobot `Robot` plugin connect. |
+| Two numeric observation keys, two action keys, or a numeric source without `select` (a `shape` source included), on the LeRobot live path. | Policy runner configure, or LeRobot `Robot` plugin connect. |
 | `is_classifier` with no `rewards` section. | Policy runner configure. |
 
 ## Embedding
