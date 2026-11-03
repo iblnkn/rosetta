@@ -22,7 +22,14 @@ import types
 
 import pytest
 
-from rosetta.data import DATASET_WRITER_GROUP, available_dataset_writers, load_dataset_writer
+from rosetta.data import (
+    DATASET_WRITER_GROUP,
+    FRAME_READER_GROUP,
+    available_dataset_writers,
+    available_frame_readers,
+    load_dataset_writer,
+    load_frame_reader,
+)
 from rosetta.data import registry as data_registry
 from rosetta.policies import POLICY_RUNNER_GROUP, available_policy_runners, load_policy_runner
 from rosetta.policies import registry as policies_registry
@@ -241,3 +248,58 @@ def test_a_runner_without_find_contract_is_rejected_naming_it(monkeypatch):
     _install(monkeypatch, {POLICY_RUNNER_GROUP: [_fake_ep("old", OldRunner, group=POLICY_RUNNER_GROUP)]})
     with pytest.raises(TypeError, match=r"does not implement PolicyRunner.*find_contract"):
         load_policy_runner("old")
+
+
+class GoodReader:
+    def __init__(self, *, source="x"):
+        self.source = source
+
+    def features(self):
+        pass
+
+    def prepare(self, windows):
+        pass
+
+    def info(self):
+        pass
+
+    def stats(self):
+        pass
+
+    def read(self, indices):
+        return []
+
+
+class PartialReader:
+    def __init__(self, **options):
+        pass
+
+    def info(self):
+        pass
+
+
+def _install_readers(monkeypatch, eps):
+    monkeypatch.setattr(data_registry, "_ilm", types.SimpleNamespace(entry_points=lambda group=None: eps))
+
+
+def test_load_frame_reader_passes_options(monkeypatch):
+    _install_readers(monkeypatch, [_fake_ep("good", GoodReader, group=FRAME_READER_GROUP)])
+    reader = load_frame_reader("good", source="catalog")
+    assert isinstance(reader, GoodReader)
+    assert reader.source == "catalog"
+
+
+def test_load_frame_reader_names_missing_members(monkeypatch):
+    _install_readers(monkeypatch, [_fake_ep("partial", PartialReader, group=FRAME_READER_GROUP)])
+    with pytest.raises(
+        TypeError,
+        match=r"does not implement FrameReader \(missing or non-callable: features, prepare, read, stats\)",
+    ):
+        load_frame_reader("partial")
+
+
+def test_load_frame_reader_unknown_lists_available(monkeypatch):
+    _install_readers(monkeypatch, [_fake_ep("rerun", GoodReader, group=FRAME_READER_GROUP)])
+    with pytest.raises(ValueError, match=r"No frame reader 'nope'.*Available: rerun"):
+        load_frame_reader("nope")
+    assert available_frame_readers() == ["rerun"]

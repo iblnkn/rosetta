@@ -33,21 +33,43 @@ itself like so::
         ],
     }
 
-Reading data back is not a seam: a reader such as ``rerun_rosetta`` hands
-frames straight to a training loop, so nothing in Rosetta resolves one by
-name.
+A :class:`FrameReader` is the other schedule: it applies the contract at
+training time, serving frames from recordings straight to a framework's
+trainer, so a contract change needs no new port. Readers register under
+``rosetta.frame_readers`` and take keyword options (see :mod:`.readers`).
 
 This seam imports only lower layers of core (:mod:`rosetta.contract`,
 :mod:`rosetta.frames`), never :mod:`rosetta.robots` or
 :mod:`rosetta.policies`.
 
-Modules: :mod:`.protocols` is what a writer *implements*; :mod:`.registry`
-is how the porter *resolves* one by name.
+Modules: :mod:`.protocols` and :mod:`.readers` are what writers and readers
+*implement*; :mod:`.registry` resolves either by name; :mod:`.stats` is
+shared by readers.
 """
 
 from __future__ import annotations
 
 from .protocols import DatasetWriter
-from .registry import DATASET_WRITER_GROUP, available_dataset_writers, load_dataset_writer
+from .readers import FrameReader, ReaderInfo, StreamingFrameReader, Windows
+from .registry import (
+    DATASET_WRITER_GROUP,
+    FRAME_READER_GROUP,
+    available_dataset_writers,
+    available_frame_readers,
+    load_dataset_writer,
+    load_frame_reader,
+)
 
-__all__ = ["DATASET_WRITER_GROUP", "DatasetWriter", "available_dataset_writers", "load_dataset_writer"]
+__all__ = [
+    "DATASET_WRITER_GROUP",
+    "FRAME_READER_GROUP",
+    "DatasetWriter",
+    "FrameReader",
+    "ReaderInfo",
+    "StreamingFrameReader",
+    "Windows",
+    "available_dataset_writers",
+    "available_frame_readers",
+    "load_dataset_writer",
+    "load_frame_reader",
+]
