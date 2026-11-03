@@ -28,13 +28,7 @@ either is missing.
 from __future__ import annotations
 
 import itertools
-import os
-import shutil
-import signal
-import socket
-import subprocess
 import textwrap
-import time
 
 import numpy as np
 import pytest
@@ -173,38 +167,6 @@ def _register(catalog_url: str, name: str, bags_dir) -> str:
 @pytest.fixture(scope="module")
 def dataset_name(bag_dir, catalog_url):
     return _register(catalog_url, f"parity_{bag_dir.parent.name}", bag_dir.parent)
-
-
-@pytest.fixture(scope="module")
-def catalog_url():
-    if shutil.which("rerun") is None:
-        pytest.skip("rerun binary not on PATH")
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    proc = subprocess.Popen(
-        ["rerun", "server", "--host", "127.0.0.1", "--port", str(port)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,  # `rerun` is a Python shim that spawns the server binary
-    )
-    url = f"rerun+http://127.0.0.1:{port}"
-    try:
-        _wait_for_port(port)
-        yield url
-    finally:
-        os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=10)
-
-
-def _wait_for_port(port: int, timeout_s: float = 30.0) -> None:
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        with socket.socket() as s:
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                return
-        time.sleep(0.1)
-    raise TimeoutError(f"rerun server did not open port {port}")
 
 
 def _porter_frames(bag_dir, contract):

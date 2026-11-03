@@ -52,8 +52,10 @@ Writer-specific options, passed to the writer only when given:
   exits 0.
 - Every shard writes its own dataset, so shards that share `--root` and
   `--repo-id` collide. The later shard fails with `FileExistsError`.
-- Ticks start at the bag's start time and are `1 / fps` apart. Ticks before
-  every observation source has a sample are skipped.
+- Tick `k` is at the bag's start time plus `k / fps` seconds, rounded down
+  to the nanosecond, so the grid does not drift when `1e9 / fps` is not a
+  whole number. The last tick is the last one at or before the bag's end.
+  Ticks before every observation source has a sample are skipped.
 - When the first bag's embedded contract differs from `--contract` after
   parsing, the porter logs this warning and carries on:
 

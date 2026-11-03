@@ -97,5 +97,5 @@ def test_gate_refuses_a_tensor_stream_by_name():
         image_resize=None,
         dtype="float32",
     )
-    with pytest.raises(ValueError, match=r"tensor streams with a declared shape.*'/features'|topic /features"):
+    with pytest.raises(ValueError, match=r"tensor streams with a declared shape.*topic /features"):
         ensure_live_observation_layout([tensor], [_act("action", ["x"])])

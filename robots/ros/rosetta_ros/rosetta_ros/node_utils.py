@@ -22,6 +22,7 @@ descriptors, and the node entry point (``spin_lifecycle_node``).
 
 from __future__ import annotations
 
+import os
 import signal
 import threading
 import time
@@ -33,7 +34,7 @@ from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
 from rclpy.executors import ExternalShutdownException
 from rclpy.experimental import EventsExecutor
-from rclpy.lifecycle import LifecycleNode
+from rclpy.lifecycle import LifecycleNode, TransitionCallbackReturn
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
 
@@ -220,6 +221,13 @@ def wait_until(predicate: Callable[[], bool], timeout: float, poll: float = 0.1)
 # =============================================================================
 
 
+FORCE_QUIT_AFTER_SEC = 2.0
+"""A SIGINT this long after shutdown began quits at once, so a hung shutdown can be ended."""
+
+WORK_EXIT_TIMEOUT_SEC = 30.0
+"""How long the exit waits after the shutdown transition for work still finishing (a bag's metadata)."""
+
+
 def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None) -> int:
     """Run a lifecycle node until SIGINT or SIGTERM, then drive its shutdown transition.
 
@@ -251,10 +259,18 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     on its own thread, through ``RosettaLifecycleNode.create_work_action_server``
     or ``handle_start_service``.
 
+    A SIGINT at least ``FORCE_QUIT_AFTER_SEC`` after shutdown began quits at
+    once with exit code 130, so someone at the terminal can end a hung
+    shutdown with another Ctrl+C. Launch's SIGINT burst and its SIGTERM stay
+    absorbed. After the transition, work still finishing on its own thread
+    (the recorder writing a bag's metadata) gets up to
+    ``WORK_EXIT_TIMEOUT_SEC`` before the node is destroyed.
+
     Returns:
         0 after a signal or an external context shutdown, which ``ros2 launch``
         reports as finished cleanly. 1 when a callback raised and stopped the
-        executor; the traceback is logged before the shutdown transition runs.
+        executor (the traceback is logged before the shutdown transition
+        runs), or when the shutdown transition failed.
 
     """
     # A plain list, not a threading.Event: Python runs handlers on the main
@@ -262,10 +278,18 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     # so a burst of signals nests Event.set() (a lock and a notify) inside
     # itself until the nesting raises. A list.append cannot be interrupted.
     stop = []
+    shutdown_began = []  # monotonic time, once the shutdown transition starts
+
+    def on_signal(signum, _frame):
+        stop.append(signum)
+        if signum == signal.SIGINT and shutdown_began and time.monotonic() - shutdown_began[0] >= FORCE_QUIT_AFTER_SEC:
+            os.write(2, b"Shutdown forced by a repeated Ctrl+C\n")
+            os._exit(130)
+
     previous = {}
     if threading.current_thread() is threading.main_thread():
         for signum in (signal.SIGINT, signal.SIGTERM):
-            previous[signum] = signal.signal(signum, lambda *_: stop.append(True))
+            previous[signum] = signal.signal(signum, on_signal)
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     exit_code = 0
     try:
@@ -280,13 +304,27 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
                 executor.spin_once(timeout_sec=0.1)
         except ExternalShutdownException:
             pass
-        except Exception:
+        except BaseException:
+            # BaseException too: a callback calling sys.exit() must not skip
+            # the shutdown transition and its safety action.
             node.get_logger().error(f"Executor stopped by an exception:\n{traceback.format_exc()}")
             exit_code = 1
+        shutdown_began.append(time.monotonic())
         try:
-            node.trigger_shutdown()
+            if node.trigger_shutdown() != TransitionCallbackReturn.SUCCESS:
+                node.get_logger().error("Shutdown transition failed")
+                exit_code = 1
         except Exception as e:
-            node.get_logger().warning(f"Shutdown transition not driven: {e}")
+            node.get_logger().error(f"Shutdown transition not driven: {e}")
+            exit_code = 1
+        if getattr(node, "busy", False):
+            node.get_logger().info(
+                f"Waiting up to {WORK_EXIT_TIMEOUT_SEC:.0f}s for work to finish "
+                f"(Ctrl+C again after {FORCE_QUIT_AFTER_SEC:.0f}s quits now)"
+            )
+            if not wait_until(lambda: not node.busy, timeout=WORK_EXIT_TIMEOUT_SEC):
+                node.get_logger().error("Work did not finish before exit")
+                exit_code = 1
         node.destroy_node()
     finally:
         # uninstall_handlers=False: rclpy installed none, and its uninstall

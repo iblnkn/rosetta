@@ -183,10 +183,12 @@ def decode_ros_image(msg) -> Any:
         raise ValueError(f"Unsupported image encoding: '{enc}'. Supported: {sorted(IMAGE_ENCODINGS)}")
 
     if len(msg.data) == 0:
-        raise ImageDataMissing(
-            "Image message has no data. From a CUDA-backed publisher, the message was taken after "
-            "its memory was recycled: keep the subscription's QoS history shallow and its callbacks fast."
-        )
+        if getattr(msg.data, "backend_type", "cpu") == "cuda":
+            raise ImageDataMissing(
+                "Image message has no data: it was taken after the CUDA backend recycled its memory. "
+                "Keep the subscription's QoS history shallow and its callbacks fast."
+            )
+        raise ImageDataMissing(f"Image message has no data for its {h}x{w} {enc} image")
 
     ch, is_bgr = IMAGE_ENCODINGS[enc]
     step = int(msg.step) or w * ch  # 0 = tightly packed rows
@@ -325,6 +327,13 @@ def _dec_tensor(msg: Any, spec: StreamSpec) -> Any:
             raise ValueError(
                 f"ExperimentalTensor on image key '{spec.key}' has shape {list(shape)}; "
                 f"an image tensor is (height, width, {DECODED_IMAGE_CHANNELS}) RGB"
+            )
+        msg_dtype = DLPACK_DTYPES.get((int(msg.dtype_code), int(msg.dtype_bits)))
+        if msg_dtype != "uint8" or int(msg.dtype_lanes) != 1:
+            # Casting a float image to uint8 would truncate [0, 1] pixels to black.
+            raise ValueError(
+                f"ExperimentalTensor on image key '{spec.key}' is {msg_dtype or 'an unsupported dtype'}; "
+                f"an image tensor is uint8"
             )
         return decode_tensor(msg, shape, "uint8")
     return decode_tensor(msg, spec.shape, spec.dtype)
