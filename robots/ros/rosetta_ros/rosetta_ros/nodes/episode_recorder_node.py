@@ -50,7 +50,7 @@ from rosetta.contract.schema import parse_contract
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.msg import RecordEpisodeResult, RecordEpisodeStatus
 from rosetta_interfaces.srv import StartRecording
-from rosetta_ros.bag_metadata import write_provenance
+from rosetta_ros.bag_metadata import provenance_entries, write_provenance
 from rosetta_ros.bag_topics import (
     Topic,
     adapt_publisher_qos,
@@ -530,7 +530,14 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 feedback_rate = float(self.get_parameter("feedback_rate_hz").value)
                 self.get_logger().info(f"Recording ({source}): {bag_dir}, max={max_duration}s")
 
-                discovered = self._open_writer(bag_dir)
+                # Provenance goes in at open too. A storage plugin that keeps the
+                # metadata inside the recording (rosbag2_storage_rrd) has it from
+                # rosbag2's custom_data, and the metadata.yaml update after close
+                # can't reach a recording that's already written.
+                provenance = provenance_entries(
+                    prompt=prompt, contract_text=self._contract_text, goal_id=self._goal_id_str(goal_handle)
+                )
+                discovered = self._open_writer(bag_dir, provenance)
                 writer_opened = True
 
                 while not stop_event.wait(1.0 / feedback_rate):
@@ -635,9 +642,10 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         sec, nsec = divmod(t_ns, 1_000_000_000)
         return self._bag_base / f"{sec:010d}_{nsec:09d}"
 
-    def _open_writer(self, bag_dir: Path) -> list[Topic]:
+    def _open_writer(self, bag_dir: Path, custom_data: dict[str, str] | None = None) -> list[Topic]:
         """Discover topics, open the bag, register topics, then create per-episode subs.
 
+        ``custom_data`` is handed to rosbag2 at open, as the bag's custom_data.
         Returns the discovered (non-contract) topics being recorded.
         """
         discovered = self._discover_topics() if self.get_parameter("record_all").value else []
@@ -645,6 +653,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         storage_options = rosbag2_py.StorageOptions(
             uri=str(bag_dir),
             storage_id=self._storage_id,
+            custom_data=dict(custom_data or {}),
         )
         converter_options = rosbag2_py.ConverterOptions(
             input_serialization_format="cdr",
