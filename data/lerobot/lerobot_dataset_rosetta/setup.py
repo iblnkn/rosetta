@@ -39,12 +39,18 @@ setup(
     install_requires=[
         "setuptools",
         "numpy",
-        "lerobot[dataset]<0.6.2",  # the same LeRobot the policy runner pins
+        # The same LeRobot the policy runner pins. rosetta-lerobot-train runs
+        # lerobot_train, which needs the training extra (accelerate).
+        "lerobot[training]<0.6.2",
         "rosetta",
+        "torch",  # LeRobotView is a torch Dataset
     ],
     entry_points={
         "rosetta.dataset_writers": [
             "lerobot = lerobot_dataset_rosetta.dataset_writer:LeRobotDatasetWriter",
+        ],
+        "console_scripts": [
+            "rosetta-lerobot-train = lerobot_dataset_rosetta.train:main",
         ],
     },
     extras_require={"test": ["pytest"]},

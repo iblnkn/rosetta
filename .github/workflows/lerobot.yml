@@ -43,7 +43,7 @@ jobs:
         'draccus @ git+https://github.com/francocipollone/draccus.git@8976f1d5bd3c7f78521f43c9c302396076064af2'
         > /tmp/overrides.txt
         && uv pip install --system --break-system-packages --override /tmp/overrides.txt
-        'lerobot[dataset]<0.6.2' torch
+        'lerobot[training]<0.6.2' torch
         --index-strategy unsafe-best-match
         --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
         && uv pip install --system --break-system-packages --upgrade protobuf grpcio

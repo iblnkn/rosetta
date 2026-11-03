@@ -75,7 +75,8 @@ class RerunReader:
     file's text). For :meth:`stream`, ``num_workers`` must match the
     DataLoader's: Rerun builds its manifest for that many workers.
     :meth:`read` works in any number of workers. ``manifest`` caches the
-    manifest at a path, as in :class:`~.dataset.ContractFrames`.
+    manifest at a path, as in :class:`~.dataset.ContractFrames`. ``segments``
+    limits the reader to those segment ids, a list or a comma-separated string.
 
     ``shuffle`` sets :meth:`stream`'s order and is ``"sample"`` (Rerun's ``SampleShuffle``, the default: every
     sample at a random position, one catalog query each), ``"block"``
@@ -93,7 +94,7 @@ class RerunReader:
         dataset: str,
         contract: str | Path,
         token: str | None = None,
-        segments: list[str] | None = None,
+        segments: list[str] | str | None = None,
         num_workers: int = 0,
         manifest: str | Path | None = None,
         shuffle: str | ShuffleStrategy = "sample",
@@ -109,6 +110,8 @@ class RerunReader:
                 "Port the recordings with rosetta_port instead."
             )
         self._token = token
+        if isinstance(segments, str):  # a command line's "seg_a,seg_b"
+            segments = [s for s in segments.split(",") if s]
         self._segments = segments
         self._num_workers = int(num_workers)
         self._manifest = manifest
