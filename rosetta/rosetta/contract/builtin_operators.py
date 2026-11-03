@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 
+from ..frames.arrays import take
 from .errors import ContractValidationError
 from .operators import Invertibility, Operator, OperatorContext, register_operator
 
@@ -49,6 +50,8 @@ allocating gigabytes on the first message."""
 class ResizeOperator(Operator):
     """Nearest-neighbor resize to ``[h, w]`` for HxW or HxWxC images. Image streams only."""
 
+    device_capable = True
+
     def __init__(self, args: Any, ctx: OperatorContext) -> None:
         if not ctx.is_image:
             raise ContractValidationError("resize operator is only valid on image streams (observation.images.*)")
@@ -60,7 +63,7 @@ class ResizeOperator(Operator):
             raise ContractValidationError(f"resize operator dimensions must be in [1, {_MAX_RESIZE_DIM}], got {args!r}")
         self.output_hw = (args[0], args[1])
 
-    def forward(self, arr: np.ndarray) -> np.ndarray:
+    def forward(self, arr: Any) -> Any:
         return _nearest_resize(arr, *self.output_hw)
 
 
@@ -100,18 +103,18 @@ class ClampOperator(Operator):
         return self._clip(arr)
 
 
-def _nearest_resize(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
-    """Pure-numpy nearest-neighbor resize for HxW or HxWxC arrays.
+def _nearest_resize(img: Any, rh: int, rw: int) -> Any:
+    """Nearest-neighbor resize for HxW or HxWxC arrays, numpy or device.
 
     Indices are ``round(linspace(0, n-1, rn))``, so sampling is unbiased
     (2x2 -> 4x4 takes rows [0, 0, 1, 1]). Recording and serving share this
     code, so train and inference pixels match; cv2/PIL may differ by a pixel.
-    ``np.take`` gathers the same indices as ``img[y][:, x]``, about 2.5x faster
-    on camera-sized HxWxC images.
+    The indices are computed with numpy and only the gather runs where the
+    image lives, so a device resize picks the same pixels as the host one.
     """
     h, w = img.shape[:2]
     if h == rh and w == rw:
         return img
     y = np.round(np.linspace(0, h - 1, rh)).astype(np.int64)
     x = np.round(np.linspace(0, w - 1, rw)).astype(np.int64)
-    return np.take(np.take(img, y, axis=0), x, axis=1)
+    return take(take(img, y, axis=0), x, axis=1)

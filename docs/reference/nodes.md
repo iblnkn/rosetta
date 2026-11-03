@@ -205,15 +205,16 @@ Runs a policy on the live robot through a framework adapter. Node name
 | `pretrained_name_or_path` | string | `""` | Checkpoint, a local path or a Hugging Face Hub repo ID. Read by the adapter and by the contract fallback. Read-only. |
 | `framework` | string | `lerobot` | Adapter, by its name in the `rosetta.policy_runners` entry-point group. Read-only. |
 | `is_classifier` | bool | `false` | Publish the contract's `rewards` section as the output instead of `actions`. Read-only. |
+| `buffer_backends` | string | `""` | Comma-separated rosidl buffer backends that image subscriptions accept, such as `cuda` (ROS 2 Lyrical and newer). An image stream accepts them only when its decoder and every `apply` operator handle device memory (`sensor_msgs/msg/Image` and `resize` do). Such images are decoded and resized on their device, and the LeRobot adapter copies each contract-sized image to the host once per frame, because LeRobot observations are numpy. Configure logs which streams accept device memory and why the others do not. Empty accepts host memory only. Read-only. |
 | `default_prompt` | string | `""` | Task used when a goal or service call leaves `prompt` empty. Read at each run start. |
 | `default_max_duration_s` | double | `0.0` | Seconds. Used when the goal's `max_duration_s` is zero or less. Zero or less runs until stopped. Read at each run start. |
 | `feedback_rate_hz` | double | `2.0` | Hz, 0.1 to 1000. Rate of action feedback and `~/status`. Read at each run start. |
 | `use_sim_time` | bool | `false` | Use the `/clock` time. The LeRobot adapter then paces observations and actions on it at the contract `fps`. |
 
 Launch arguments: `params_file`, `contract_path`,
-`pretrained_name_or_path`, `policy_type`, `policy_device`, `server_address`,
-`launch_local_server`, `use_sim_time`, `output_prefix`, `log_level`,
-`configure`, `activate`.
+`pretrained_name_or_path`, `policy_type`, `policy_device`, `buffer_backends`,
+`server_address`, `launch_local_server`, `use_sim_time`, `output_prefix`,
+`log_level`, `configure`, `activate`.
 
 | Name | Kind | Type |
 |---|---|---|

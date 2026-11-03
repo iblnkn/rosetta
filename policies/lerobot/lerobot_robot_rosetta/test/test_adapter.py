@@ -130,6 +130,33 @@ def test_get_observation_flattens_state_and_passes_images_through(contract):
         assert obs[short] is bridge.frame[f"observation.images.{short}"]
 
 
+class _DeviceImage:
+    """A device array, as a CUDA frame would be: another library's array, read through DLPack."""
+
+    def __init__(self, data):
+        self.data = data
+
+    def __dlpack__(self, **kwargs):
+        return self.data.__dlpack__(**kwargs)
+
+    def __dlpack_device__(self):
+        return self.data.__dlpack_device__()
+
+
+def test_get_observation_brings_device_images_to_the_host():
+    robot, bridge = _injected_robot(_FakeClock(active=False))
+    for key, img in list(bridge.frame.items()):
+        if key.startswith("observation.images."):
+            bridge.frame[key] = _DeviceImage(img + 7)
+
+    obs = robot.get_observation()
+
+    image_keys = [short for short, ft in robot.observation_features.items() if ft is not float]
+    for short in image_keys:
+        assert isinstance(obs[short], np.ndarray)
+        np.testing.assert_array_equal(obs[short], bridge.frame[f"observation.images.{short}"].data)
+
+
 # -------------------- Injected-mode sim pacing --------------------
 
 

@@ -71,6 +71,7 @@ PUBLIC_API = {
         "iter_teleop_feedback_specs",
         "iter_teleop_input_specs",
     },
+    "rosetta.frames.arrays": {"is_device_array", "take", "to_host"},
     "rosetta.frames.codecs": {
         "CODEC_ENTRY_POINT_GROUP",
         "DecoderFn",
@@ -80,6 +81,7 @@ PUBLIC_API = {
         "decode_value",
         "discover_codecs",
         "encode_value",
+        "host_only_reason",
         "register_decoder",
         "register_encoder",
     },

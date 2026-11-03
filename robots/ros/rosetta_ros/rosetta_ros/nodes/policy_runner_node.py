@@ -120,6 +120,17 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             ),
         )
         self.declare_parameter(
+            "buffer_backends",
+            "",
+            ParameterDescriptor(
+                description="Comma-separated rosidl buffer backends image subscriptions accept (e.g. 'cuda'), so "
+                "a publisher's device memory is decoded and resized without leaving its device. Applies to streams "
+                "whose decoder and operators handle device memory; configure logs each stream's choice. "
+                "Empty = host memory only.",
+                read_only=True,
+            ),
+        )
+        self.declare_parameter(
             "feedback_rate_hz",
             2.0,
             positive_rate_descriptor("Rate for publishing action feedback"),
@@ -196,7 +207,8 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         else:
             act_specs = list(iter_action_specs(self._contract))
 
-        self._bridge = TopicBridge(obs_specs, act_specs, self._contract.fps)
+        buffer_backends = [b.strip() for b in self.get_parameter("buffer_backends").value.split(",") if b.strip()]
+        self._bridge = TopicBridge(obs_specs, act_specs, self._contract.fps, buffer_backends=buffer_backends)
         self._bridge.setup(self)
 
         # Assign self._runner before calling setup() on it: a setup() that

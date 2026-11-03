@@ -16,7 +16,7 @@
 Frame I/O protocols: how the robot side and the policy side meet.
 
 A live robot, to Rosetta, is a duck-typed feed of frame dicts
-(``{contract_key: np.ndarray | str}``, see :mod:`rosetta.frames` for what a
+(``{contract_key: array | str}``, see :mod:`rosetta.frames` for what a
 frame is): observations sampled out on the clock set by the contract's
 ``fps``, actions published back in. These protocols name that surface so a
 :class:`~rosetta.policies.PolicyRunner` can be written and tested against
@@ -80,7 +80,11 @@ class FrameIO(Protocol):
     """
 
     def sample_frame(self, *, fill_missing: bool = True) -> dict[str, Any]:
-        """Current observation frame: ``{contract_key: np.ndarray | str}``.
+        """Current observation frame: ``{contract_key: array | str}``.
+
+        Numeric vectors are numpy. Images are numpy, or device arrays when
+        the transport delivered them in device memory (see
+        :mod:`rosetta.frames.arrays`).
 
         A stream with no data yet zero-fills, so every key is present. With
         ``fill_missing=False`` a key with any such stream is left out instead,

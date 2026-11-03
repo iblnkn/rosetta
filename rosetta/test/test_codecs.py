@@ -225,7 +225,7 @@ def test_decode_rejects_non_array_with_operators(fake_interface, tmp_path):
     # A custom decoder whose real output disagrees with its dtype slips past
     # load-time validation; the declared pipeline must not be skipped silently.
     obs, _ = _specs(tmp_path, decoder="test_codecs:_str_decoder", apply="[{clamp: {min: 0, max: 1}}]")
-    with pytest.raises(ValueError, match="numpy array"):
+    with pytest.raises(ValueError, match="not an array"):
         decode_value(FakeVector({"a": 1.0}), obs)
 
 

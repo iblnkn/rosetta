@@ -27,6 +27,7 @@ import sys
 import rosetta
 import rosetta.contract.schema
 import rosetta.contract.specs
+import rosetta.frames.arrays
 import rosetta.frames.codecs
 import rosetta.frames.layout
 import rosetta.frames.naming
@@ -37,6 +38,7 @@ import rosetta.robots.protocols
 import rosetta.robots.registry
 assert 'rclpy' not in sys.modules, 'rclpy leaked into the core import graph'
 assert 'rosidl_runtime_py' not in sys.modules, 'rosidl leaked into the core import graph'
+assert 'torch' not in sys.modules, 'an accelerator library leaked into the core import graph'
 """
 
 

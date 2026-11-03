@@ -37,6 +37,12 @@ for the annotated reference):
         channel: {topic: /my_sensor, type: my_msgs/msg/MyMessage,
                   decoder: "my_package.codecs:decode_my_message"}
         align: {strategy: hold, timeline: receive}
+
+A decoder registered ``device_capable=True`` handles messages whose data is in
+device memory, returning the image as the device array the robot interface
+imported (see :mod:`rosetta.frames.arrays`) instead of copying it to the host. A robot
+interface delivers device memory only to streams :func:`host_only_reason`
+clears, so every other stream decodes as numpy, as always.
 """
 
 from __future__ import annotations
@@ -48,6 +54,7 @@ import numpy as np
 
 from ..contract.operators import forward_pipeline, inverse_pipeline
 from ..contract.plugins import load_entry_point_plugins
+from .arrays import is_device_array
 
 __all__ = [
     "CODEC_ENTRY_POINT_GROUP",
@@ -58,6 +65,7 @@ __all__ = [
     "decode_value",
     "discover_codecs",
     "encode_value",
+    "host_only_reason",
     "register_decoder",
     "register_encoder",
 ]
@@ -70,7 +78,9 @@ if TYPE_CHECKING:
 # Type Aliases
 # =============================================================================
 
-DecoderFn = Callable[[Any, "ObservationStreamSpec | ActionStreamSpec"], "np.ndarray | str"]
+DecoderFn = Callable[[Any, "ObservationStreamSpec | ActionStreamSpec"], Any]
+"""``(msg, spec) -> np.ndarray | str``. A ``device_capable`` decoder may also
+return a device array."""
 EncoderFn = Callable[[np.ndarray, "ActionStreamSpec", int | None], Any]
 
 
@@ -107,6 +117,7 @@ def is_valid_dtype(dtype: str) -> bool:
 DECODERS: dict[str, DecoderFn] = {}
 DTYPES: dict[str, str] = {}  # msg_type -> LeRobot dtype
 DECODER_REQUIRES_SELECT: set[str] = set()
+DECODER_DEVICE_CAPABLE: set[str] = set()
 ENCODERS: dict[str, EncoderFn] = {}
 ENCODER_REQUIRES_SELECT: set[str] = set()
 
@@ -124,16 +135,23 @@ def _check_registration(registry: dict, type_str: str, override: bool, kind: str
         raise ValueError(f"override=True for '{type_str}' but no {kind.lower()} is registered; nothing to override.")
 
 
-def _record_requires_select(select_registry: set[str], type_str: str, requires_select: bool) -> None:
-    # discard on re-registration: an override that no longer needs select must
-    # not inherit the flag from the codec it replaced.
-    if requires_select:
-        select_registry.add(type_str)
+def _record_flag(flag_registry: set[str], type_str: str, flag: bool) -> None:
+    # discard on re-registration: an override that no longer has the flag
+    # (needs select, runs on a device) must not inherit it from the codec it replaced.
+    if flag:
+        flag_registry.add(type_str)
     else:
-        select_registry.discard(type_str)
+        flag_registry.discard(type_str)
 
 
-def register_decoder(type_str: str, dtype: str, *, override: bool = False, requires_select: bool = False):
+def register_decoder(
+    type_str: str,
+    dtype: str,
+    *,
+    override: bool = False,
+    requires_select: bool = False,
+    device_capable: bool = False,
+):
     """
     Register a decoder for a ROS message type.
 
@@ -157,6 +175,10 @@ def register_decoder(type_str: str, dtype: str, *, override: bool = False, requi
         contract outright instead of the decoder raising per-message at
         runtime (where ingest treats it like a corrupt message and the
         stream silently zero-fills).
+    device_capable: The decoder handles a message whose data is in device
+        memory, returning the image on that device as a device array
+        (see :mod:`rosetta.frames.arrays`). It must produce the same bytes it would on the
+        host, and still return numpy for a message whose data is on the host.
 
     Example:
     -------
@@ -175,7 +197,8 @@ def register_decoder(type_str: str, dtype: str, *, override: bool = False, requi
         _check_registration(DECODERS, type_str, override, "Decoder")
         DECODERS[type_str] = fn
         DTYPES[type_str] = dtype
-        _record_requires_select(DECODER_REQUIRES_SELECT, type_str, requires_select)
+        _record_flag(DECODER_REQUIRES_SELECT, type_str, requires_select)
+        _record_flag(DECODER_DEVICE_CAPABLE, type_str, device_capable)
         return fn
 
     return _wrap
@@ -209,7 +232,7 @@ def register_encoder(type_str: str, *, override: bool = False, requires_select: 
     def _wrap(fn: EncoderFn):
         _check_registration(ENCODERS, type_str, override, "Encoder")
         ENCODERS[type_str] = fn
-        _record_requires_select(ENCODER_REQUIRES_SELECT, type_str, requires_select)
+        _record_flag(ENCODER_REQUIRES_SELECT, type_str, requires_select)
         return fn
 
     return _wrap
@@ -336,9 +359,35 @@ def width_mismatch_message(what: str, key: str, topic: str, got: int, dim: int, 
     )
 
 
-def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> "np.ndarray | str":
+def host_only_reason(spec: "ObservationStreamSpec | ActionStreamSpec") -> str | None:
+    """
+    Why ``spec`` can't take device memory from its transport, or None if it can.
+
+    A stream can when it is an image stream, its decoder is a registered
+    ``device_capable`` one (an inline ``decoder:`` path never is), and every
+    operator in its ``apply`` is ``device_capable``. A robot interface asks
+    its transport for device memory only on such streams.
+    """
+    if not spec.is_image:
+        return "only image streams leave the host"
+    if spec.source.channel.decoder:
+        return f"inline decoder '{spec.source.channel.decoder}' runs on the host"
+    discover_codecs()
+    if spec.source.channel.type not in DECODER_DEVICE_CAPABLE:
+        return f"the {spec.source.channel.type} decoder runs on the host"
+    host_ops = [op.name for op in spec.operators if not op.device_capable]
+    if host_ops:
+        return f"operator(s) {', '.join(host_ops)} run on the host"
+    return None
+
+
+def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> Any:
     """
     Decode a ROS message: codec projection, then the forward operator pipeline.
+
+    An image whose message data was in device memory stays there, as a device
+    array, with its work queued on the device's legacy default stream (see
+    :mod:`rosetta.frames.arrays`).
 
     The codec (custom or registry) reduces the message to a numeric array via
     field selection. ``spec.operators`` is then applied front-to-back (the build /
@@ -352,7 +401,8 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> "np.n
 
     Returns:
     -------
-        Decoded value (numpy array or string)
+        Decoded value: a numpy array or string, or a device image as a device
+        array
 
     Raises:
     ------
@@ -380,11 +430,20 @@ def decode_value(msg, spec: "ObservationStreamSpec | ActionStreamSpec") -> "np.n
     # Run the forward op pipeline (rad2deg, resize, ...) on numeric values.
     operators = spec.operators
     if operators:
-        if not isinstance(val, np.ndarray):
+        on_device = is_device_array(val)
+        if not on_device and not isinstance(val, np.ndarray):
             raise ValueError(
                 f"stream '{spec.key}' declares apply operators but its decoder returned "
-                f"{type(val).__name__}, not a numpy array; operators transform numeric arrays only"
+                f"{type(val).__name__}, not an array; operators transform numeric arrays only"
             )
+        if on_device:
+            host_ops = [op.name for op in operators if not op.device_capable]
+            if host_ops:
+                raise ValueError(
+                    f"stream '{spec.key}' decoded to device memory, but operator(s) "
+                    f"{', '.join(host_ops)} run on numpy only; the robot interface must not "
+                    f"request device memory for this stream (see host_only_reason)"
+                )
         val = forward_pipeline(val, operators)
 
     # Width gate for numeric vectors (images and strings excepted): select
