@@ -44,7 +44,6 @@ import time
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionClient, ActionServer
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rosidl_runtime_py.utilities import get_message
 from std_msgs.msg import Int8
@@ -88,14 +87,6 @@ INTERVENTION_QOS = QoSProfile(
 
 class HilManagerNode(RosettaLifecycleNode):
     """Lifecycle node that runs one HIL episode at a time behind ManageEpisode."""
-
-    # Longer than the base default because episode teardown cancels up to
-    # three child goals. 10 s covers children that answer promptly. A child
-    # that uses its full cancel and result timeouts (about 45 s across all
-    # three) is logged and not waited for: deactivate warns and runs the
-    # safety action, the episode thread keeps winding the children down, and
-    # cleanup is refused until _busy releases.
-    STOP_WORK_TIMEOUT_SEC = 10.0
 
     def __init__(self, **kwargs):
         super().__init__("hil_manager", **kwargs)
@@ -232,14 +223,6 @@ class HilManagerNode(RosettaLifecycleNode):
         # Live recorder message count, fed by _on_recorder_feedback.
         self._recorder_messages_written = 0
 
-        # Callback groups. Teleop events get their own mutually-exclusive
-        # group: edge detection is order-sensitive (a press processed after
-        # its release fires a spurious one-shot), and the reentrant groups
-        # give no ordering guarantee across executor threads.
-        self._action_cbg = ReentrantCallbackGroup()
-        self._sub_cbg = ReentrantCallbackGroup()
-        self._events_cbg = MutuallyExclusiveCallbackGroup()
-
         self.get_logger().info("Node created (unconfigured)")
 
     def setup(self) -> None:
@@ -259,19 +242,17 @@ class HilManagerNode(RosettaLifecycleNode):
         reward_remap_prefix = self.get_parameter("reward_remap_prefix").value
 
         policy_action = self.get_parameter("policy_action_name").value
-        self._policy_client = ActionClient(self, RunPolicy, policy_action, callback_group=self._action_cbg)
+        self._policy_client = ActionClient(self, RunPolicy, policy_action)
 
         recorder_action = self.get_parameter("recorder_action_name").value
-        self._recorder_client = ActionClient(self, RecordEpisode, recorder_action, callback_group=self._action_cbg)
+        self._recorder_client = ActionClient(self, RecordEpisode, recorder_action)
 
         if enable_reward:
             reward_action = self.get_parameter("reward_classifier_action_name").value
-            self._reward_client = ActionClient(self, RunPolicy, reward_action, callback_group=self._action_cbg)
+            self._reward_client = ActionClient(self, RunPolicy, reward_action)
 
         # Takeover: the policy's or the human's commands onto the action topics.
-        self._forwarder = CommandForwarder(
-            self, self._contract, policy_remap_prefix, lambda: self._episode.control, self._sub_cbg
-        )
+        self._forwarder = CommandForwarder(self, self._contract, policy_remap_prefix, lambda: self._episode.control)
 
         # Reward publishers, created even without a classifier so human
         # reward overrides have somewhere to go.
@@ -292,7 +273,6 @@ class HilManagerNode(RosettaLifecycleNode):
                     remapped_topic,
                     lambda msg, topic=ch.topic: self._on_reward_classifier_output(msg, topic),
                     qos_profile_from_dict(ch.qos),
-                    callback_group=self._sub_cbg,
                 )
                 self._mux_subs.append(sub)
                 self.get_logger().info(f"Reward mux: {remapped_topic} -> {ch.topic}")
@@ -306,7 +286,6 @@ class HilManagerNode(RosettaLifecycleNode):
                 events_spec.channel.topic,
                 lambda msg: self._on_teleop_events(msg, events_spec),
                 qos,
-                callback_group=self._events_cbg,
             )
             self._mux_subs.append(sub)
             self.get_logger().info(f"Teleop events: {events_spec.channel.topic}")
@@ -332,7 +311,6 @@ class HilManagerNode(RosettaLifecycleNode):
             StartHILEpisode,
             "~/start_episode",
             self._on_start_episode,
-            callback_group=self._action_cbg,
         )
         # ~/end_episode is the labelled end (the end_success/end_failure
         # buttons); ~/cancel_episode abandons the take (an action cancel).
@@ -340,42 +318,29 @@ class HilManagerNode(RosettaLifecycleNode):
             SetBool,
             "~/end_episode",
             self._on_end_episode,
-            callback_group=self._action_cbg,
         )
         self._cancel_episode_service = self.create_service(
             Trigger,
             "~/cancel_episode",
             self._on_cancel_episode,
-            callback_group=self._action_cbg,
         )
         self._intervention_service = self.create_service(
             SetBool,
             "~/set_intervention",
             self._on_set_intervention,
-            callback_group=self._action_cbg,
         )
         self._reward_override_service = self.create_service(
             SetBool,
             "~/set_reward_override",
             self._on_set_reward_override,
-            callback_group=self._action_cbg,
         )
         self._clear_reward_service = self.create_service(
             Trigger,
             "~/clear_reward_override",
             self._on_clear_reward_override,
-            callback_group=self._action_cbg,
         )
 
-        self._action_server = ActionServer(
-            self,
-            ManageEpisode,
-            "manage_episode",
-            execute_callback=self._execute,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=self._action_cbg,
-        )
+        self._action_server = self.create_work_action_server(ManageEpisode, "manage_episode", self._execute)
 
         # Client to this server's own cancel service, so ~/cancel_episode can
         # perform a real cancel. Relative name, so it expands through the same
@@ -383,7 +348,6 @@ class HilManagerNode(RosettaLifecycleNode):
         self._cancel_client = self.create_client(
             CancelGoal,
             "manage_episode/_action/cancel_goal",
-            callback_group=self._action_cbg,
         )
 
         self.get_logger().info(
@@ -759,13 +723,13 @@ class HilManagerNode(RosettaLifecycleNode):
             else:
                 self.get_logger().info("Recording disabled (enable_recording=false) -- nothing will be saved")
 
+            if stop_event.is_set():
+                return self._stopped_while_starting(fields)
             if manage_policy:
                 policy_gh = self._send_child_goal(self._policy_client, RunPolicy.Goal(prompt=prompt), "Robot policy")
                 if policy_gh is None:
                     fields["message"] = "Failed to start robot policy"
-                    # wait_result: a retry usually follows, and the recorder's
-                    # goal slot must be free (and its bag finalized) first.
-                    self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
+                    self._cancel_child(self._recorder_goal_handle, "Episode recorder")
                     return fields
                 self._policy_goal_handle = policy_gh
             else:
@@ -776,6 +740,8 @@ class HilManagerNode(RosettaLifecycleNode):
 
             reward_gh = None
             # The client exists iff enable_reward (read-only param, set in setup).
+            if stop_event.is_set():
+                return self._stopped_while_starting(fields)
             if enable_reward:
                 reward_gh = self._send_child_goal(
                     self._reward_client, RunPolicy.Goal(prompt=prompt), "Reward classifier"
@@ -787,12 +753,10 @@ class HilManagerNode(RosettaLifecycleNode):
             reason = self._feedback_loop(goal_handle, max_duration, reward_threshold, stop_event)
 
             self.get_logger().info(f"Episode ending: {reason}")
-            # wait_result: each child's goal slot must be free before the next
-            # episode sends a new goal.
             if manage_policy:
-                self._cancel_child(self._policy_goal_handle, "Robot policy", wait_result=True)
+                self._cancel_child(self._policy_goal_handle, "Robot policy")
             if reward_gh is not None:
-                self._cancel_child(self._reward_goal_handle, "Reward classifier", wait_result=True)
+                self._cancel_child(self._reward_goal_handle, "Reward classifier")
 
             recorder_result = self._stop_recorder()
 
@@ -875,13 +839,41 @@ class HilManagerNode(RosettaLifecycleNode):
         # Whoever set the stop event recorded why in stop_reason.
         return self.stop_reason or TERMINATION_STOPPED
 
+    def _stopped_while_starting(self, fields: dict) -> dict:
+        """End an episode that was stopped while its child goals were starting.
+
+        A deactivate holds the one executor thread, so a child's send_goal can
+        return after the deactivate has already secured the robot. Nothing
+        more starts, and the children already started are cancelled.
+        """
+        fields["termination_reason"] = self.stop_reason or TERMINATION_STOPPED
+        fields["message"] = "Stopped while the episode was starting"
+        self._cancel_child(self._policy_goal_handle, "Robot policy")
+        self._cancel_child(self._recorder_goal_handle, "Episode recorder")
+        return fields
+
     def _send_child_goal(self, client, goal, name: str, *, feedback_callback=None):
         """Send a goal to a child action server; return the handle or None."""
         return send_goal(client, goal, name=name, logger=self.get_logger(), feedback_callback=feedback_callback)
 
-    def _cancel_child(self, goal_handle, name: str, wait_result: bool = False):
-        """Best-effort cancel of a child goal; with ``wait_result``, return its result."""
-        return cancel_goal(goal_handle, name=name, logger=self.get_logger(), wait_result=wait_result)
+    def _cancel_child(self, goal_handle, name: str):
+        """Best-effort cancel of a child goal, returning its result when it waits for one.
+
+        It waits so the child's goal slot is free (and the recorder's bag
+        finalized) before the next episode, which usually follows at once.
+        Except on deactivation: the transition holds the executor that would
+        complete the wait, and no episode can start until the node is
+        active again. So it doesn't wait once acceptance has closed, and a wait
+        already under way ends as soon as a deactivate starts. The cancel is
+        still sent.
+        """
+
+        def deactivating() -> bool:
+            return not self.accepting_work
+
+        return cancel_goal(
+            goal_handle, name=name, logger=self.get_logger(), wait_result=not deactivating(), abandon=deactivating
+        )
 
     def _on_recorder_feedback(self, fb) -> None:
         """Track the recorder's live message count for ManageEpisode feedback."""
@@ -889,27 +881,22 @@ class HilManagerNode(RosettaLifecycleNode):
         self._recorder_messages_written = fb.feedback.messages_written
 
     def _stop_recorder(self):
-        """Cancel the recorder and wait for its result, which carries bag_path.
+        """Cancel the recorder and return its result, which carries bag_path.
 
         So the recorder's ``termination_reason`` is always ``"cancelled"``,
         whatever ended the episode. The real reason is on the ManageEpisode
         result.
         """
-        result = self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
+        result = self._cancel_child(self._recorder_goal_handle, "Episode recorder")
         if result is not None:
             self.get_logger().info(f"Recorder stopped: {result.messages_written} messages -> {result.bag_path}")
         return result
 
     def _cancel_all_children(self) -> None:
-        """Best-effort cancel of all child action goals.
-
-        All three wait for the result: their goal slots must be free before
-        the retry that usually follows, and the recorder's result means its
-        bag is finalized.
-        """
-        self._cancel_child(self._policy_goal_handle, "Robot policy", wait_result=True)
-        self._cancel_child(self._reward_goal_handle, "Reward classifier", wait_result=True)
-        self._cancel_child(self._recorder_goal_handle, "Episode recorder", wait_result=True)
+        """Best-effort cancel of all child action goals (see :meth:`_cancel_child`)."""
+        self._cancel_child(self._policy_goal_handle, "Robot policy")
+        self._cancel_child(self._reward_goal_handle, "Reward classifier")
+        self._cancel_child(self._recorder_goal_handle, "Episode recorder")
 
 
 def main(args=None):

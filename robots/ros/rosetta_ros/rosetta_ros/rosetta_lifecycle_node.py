@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import threading
 import traceback
+from collections.abc import Callable
 from contextlib import contextmanager
 
-from rclpy.action import CancelResponse, GoalResponse
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.exceptions import InvalidHandle
 from rclpy.lifecycle import Node, State, TransitionCallbackReturn
+from rclpy.task import Future
 
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
 from rosetta_ros.node_utils import (
@@ -68,9 +70,10 @@ class RosettaLifecycleNode(Node):
 
     **Run one piece of work at a time** (a goal, a recording, an episode):
 
-    - Pass :meth:`on_goal` and :meth:`on_cancel` to your ``ActionServer``.
-      :meth:`on_goal` claims the work slot; :meth:`on_cancel` routes a cancel
-      by goal id, so a stale cancel never stops the goal that replaced it.
+    - Serve goals with :meth:`create_work_action_server`. Its goal callback,
+      :meth:`on_goal`, claims the work slot; its cancel callback,
+      :meth:`on_cancel`, routes a cancel by goal id, so a stale cancel never
+      stops the goal that replaced it. Each goal runs on its own thread.
     - Wrap execution in ``with self.goal_work(goal_handle) as stop_event:``.
       It yields the stop event to poll and releases the slot on every exit.
     - End the goal with :func:`node_utils.finish_goal`, reporting
@@ -82,8 +85,12 @@ class RosettaLifecycleNode(Node):
 
     Deactivate closes acceptance, stops in-progress work (waiting up to
     :attr:`STOP_WORK_TIMEOUT_SEC`), then calls :meth:`send_safety_action`.
-    Hooks and helpers may be called from executor threads; the work-gate state
-    is guarded by one lock inside the base.
+
+    The node spins on one executor thread (see
+    :func:`node_utils.spin_lifecycle_node`), so callbacks never block: both
+    ways to start work, goals and start services, run the work on its own
+    thread. Hooks and helpers are called from the executor thread and from
+    work threads; the work-gate state is guarded by one lock inside the base.
     """
 
     #: Bounded wait for in-progress work to end during deactivate/shutdown.
@@ -242,8 +249,8 @@ class RosettaLifecycleNode(Node):
     def on_cancel(self, goal_handle) -> CancelResponse:
         """Default action cancel callback. Stop work only if the cancel targets the bound goal.
 
-        The cancel is routed by goal id. Under the reentrant callback group a
-        cancel for goal A can run after A finished and goal B claimed the slot.
+        The cancel is routed by goal id. Goals end on their own threads, so a
+        cancel for goal A can arrive after A finished and goal B claimed the slot.
         An unconditional ``signal_stop()`` would then kill B, which is the
         stale-cancel race. A cancel landing in the accept->bind window finds no
         bound goal and skips the signal here; :meth:`goal_work` re-checks
@@ -266,6 +273,37 @@ class RosettaLifecycleNode(Node):
         if routed:
             self.unblock_stop()
         return CancelResponse.ACCEPT
+
+    def create_work_action_server(self, action_type, name: str, execute: Callable) -> ActionServer:
+        """Serve ``action_type`` as ``name``, running each goal as this node's work.
+
+        Goals are accepted by :meth:`on_goal` and cancelled through
+        :meth:`on_cancel`. ``execute(goal_handle)`` runs on its own thread and
+        the action server awaits it, so the executor thread keeps delivering
+        messages, cancels and transitions while a goal runs. ``execute`` wraps
+        itself in :meth:`goal_work` and returns the result message.
+        """
+
+        async def execute_on_thread(goal_handle):
+            done = Future()
+
+            def work():
+                try:
+                    done.set_result(execute(goal_handle))
+                except BaseException as e:
+                    done.set_exception(e)
+
+            threading.Thread(target=work, name=f"{name}_goal", daemon=True).start()
+            return await done
+
+        return ActionServer(
+            self,
+            action_type,
+            name,
+            execute_callback=execute_on_thread,
+            goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel,
+        )
 
     @contextmanager
     def goal_work(self, goal_handle):
@@ -525,6 +563,18 @@ class RosettaLifecycleNode(Node):
         """
         with self._work_gate:
             return self._busy
+
+    @property
+    def accepting_work(self) -> bool:
+        """True while the node is active and takes new work.
+
+        It turns false the moment a deactivate starts, before the transition
+        waits for work to stop, so a work thread can see the transition coming
+        and stop waiting on futures the transition's executor would complete.
+        Same "caller must not hold the gate" rule as :attr:`busy`.
+        """
+        with self._work_gate:
+            return self._accepting_work
 
     @property
     def stop_reason(self) -> str | None:

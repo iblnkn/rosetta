@@ -36,6 +36,7 @@ from rosetta_ros.node_utils import (
     TERMINATION_STOPPED,
     wait_until,
 )
+from rosetta_ros_hil import hil_manager_node as hmn
 from rosetta_ros_hil.hil_episode import (
     OUTCOME_FAILURE,
     OUTCOME_SUCCESS,
@@ -222,6 +223,28 @@ def test_feedback_loop_reports_the_recorded_stop_reason(node, reason):
     assert node._feedback_loop(None, 0.0, 0.0, stop_event) == reason
 
 
+@pytest.mark.parametrize(("accepting", "waits"), [(True, True), (False, False)], ids=["active", "deactivating"])
+def test_children_are_waited_for_until_a_deactivate_starts(node, monkeypatch, accepting, waits):
+    """A deactivate holds the executor that completes the wait: no wait once it starts, and a wait under way ends."""
+    calls = []
+    monkeypatch.setattr(
+        hmn,
+        "cancel_goal",
+        lambda handle, *, name, logger, wait_result, abandon: calls.append((wait_result, abandon)),
+    )
+    _claimed(node)
+    node.signal_stop(TERMINATION_STOPPED)  # the user ended the episode first, so this reason stays latched
+    node._accepting_work = accepting
+
+    node._cancel_child(SimpleNamespace(), "Robot policy")
+
+    ((wait, abandon),) = calls
+    assert wait is waits
+    assert abandon() is not accepting
+    node._accepting_work = False  # a deactivate starts while the episode thread waits
+    assert abandon() is True
+
+
 # -------------------- Outcome: did the robot do the task? --------------------
 
 
@@ -379,3 +402,30 @@ def test_status_is_published_without_a_goal(node):
     assert node._feedback_loop(None, 0.05, 0.0, threading.Event()) == "timeout"
     assert node._status_pub.published
     assert all(s.control_source == "policy" for s in node._status_pub.published)
+
+
+@pytest.mark.parametrize(
+    ("stopped_during", "sent"),
+    [("Episode recorder", ["Episode recorder"]), ("Robot policy", ["Episode recorder", "Robot policy"])],
+)
+def test_a_deactivate_while_children_start_sends_no_further_child_goals(node, monkeypatch, stopped_during, sent):
+    # A deactivate holds the executor thread, so the child's send_goal returns
+    # after the robot was secured. Sending the policy then would move it again.
+    stop_event = _claimed(node)
+    calls = []
+
+    def send(client, goal, name, **kwargs):
+        calls.append(("send", name))
+        if name == stopped_during:
+            node.signal_stop(TERMINATION_NODE_DEACTIVATED)
+        return SimpleNamespace(accepted=True)
+
+    monkeypatch.setattr(node, "_send_child_goal", send)
+    monkeypatch.setattr(node, "_cancel_child", lambda handle, name, **k: calls.append(("cancel", name)))
+    monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: pytest.fail("the episode ran after the stop"))
+
+    fields = node._run_episode("t", 0.0, 0.0, stop_event)
+
+    assert [name for kind, name in calls if kind == "send"] == sent
+    assert ("cancel", "Episode recorder") in calls
+    assert fields["termination_reason"] == TERMINATION_NODE_DEACTIVATED

@@ -4,6 +4,17 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* ``episode_recorder_node`` subscribes raw and writes each message's
+  serialized bytes as received, with no deserialize and serialize per message.
+* Every lifecycle node spins on rclpy's single-threaded ``EventsExecutor``.
+  The ``MultiThreadedExecutor`` cost the recorder about 3x the CPU and delayed
+  its messages by tens of milliseconds.
+* ``RosettaLifecycleNode.create_work_action_server`` serves an action whose
+  goals run on their own thread, wired to ``on_goal`` and ``on_cancel``. The
+  recorder and the policy runner use it, and no longer set callback groups.
+* Breaking: ``child_goals.cancel_goal`` drops ``cancel_timeout``. It sends the
+  cancel and, with ``wait_result``, waits only for the result. Without it, it
+  returns at once.
 * ``params/policy_runner.yaml`` sets ``policy_type`` to empty, so the LeRobot
   runner reads it from the checkpoint.
 * Split out of ``rosetta``: the ROS 2 robot interface, its nodes, launch

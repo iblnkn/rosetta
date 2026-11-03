@@ -46,9 +46,8 @@ import pytest
 import rclpy
 from action_msgs.msg import GoalStatus
 from action_msgs.srv import CancelGoal
-from rclpy.action import ActionClient, ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.action import ActionClient
+from rclpy.experimental import EventsExecutor
 
 from rosetta_interfaces.action import RecordEpisode
 from rosetta_ros.node_utils import (
@@ -69,7 +68,6 @@ class _ProbeNode(RosettaLifecycleNode):
 
     def __init__(self):
         super().__init__("rosetta_cancel_probe")
-        self._cbg = ReentrantCallbackGroup()
         self._server = None
         self._cancel_client = None
         #: "wait" blocks until somebody stops it; "timeout" ends on its own;
@@ -82,20 +80,8 @@ class _ProbeNode(RosettaLifecycleNode):
         self.may_return.set()
 
     def setup(self):
-        self._server = ActionServer(
-            self,
-            RecordEpisode,
-            ACTION_NAME,
-            execute_callback=self._execute,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=self._cbg,
-        )
-        self._cancel_client = self.create_client(
-            CancelGoal,
-            f"{ACTION_NAME}/_action/cancel_goal",
-            callback_group=self._cbg,
-        )
+        self._server = self.create_work_action_server(RecordEpisode, ACTION_NAME, self._execute)
+        self._cancel_client = self.create_client(CancelGoal, f"{ACTION_NAME}/_action/cancel_goal")
 
     def teardown(self):
         if self._server is not None:
@@ -128,11 +114,10 @@ def graph(rclpy_ctx):
     """A spinning two-node graph: the probe server and a client to drive it."""
     node = _ProbeNode()
     client_node = rclpy.create_node("rosetta_cancel_probe_client")
-    # MultiThreadedExecutor, spun on its own thread: the execute callback blocks
-    # for the length of the goal, so a single worker (or spin_once on the test
-    # thread) could never process the cancel that ends it. 4 threads matches
-    # what spin_lifecycle_node runs in production.
-    executor = MultiThreadedExecutor(num_threads=4)
+    # The executor spin_lifecycle_node runs in production, spun on its own
+    # thread. Goals run on their own threads, so its one thread stays free to
+    # process the cancel that ends a goal.
+    executor = EventsExecutor()
     executor.add_node(node)
     executor.add_node(client_node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
@@ -148,8 +133,8 @@ def graph(rclpy_ctx):
     try:
         yield node, client
     finally:
-        # Release the execute callback first: a failed assertion must not leave
-        # it holding an executor worker into the next test.
+        # Release the goal first: a failed assertion must not leave it
+        # running into the next test.
         node.signal_stop(TERMINATION_TIMEOUT)
         client.destroy()
         executor.shutdown(timeout_sec=5.0)

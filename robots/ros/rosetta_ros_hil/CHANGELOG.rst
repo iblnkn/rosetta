@@ -4,6 +4,11 @@ Changelog for package rosetta_ros_hil
 
 Forthcoming
 -----------
+* ``hil_manager_node`` spins on ``EventsExecutor``: about a sixth of the CPU,
+  and policy and teleop commands forward in about 1 ms instead of tens of
+  milliseconds. Breaking: ``CommandForwarder`` drops ``callback_group``.
+* Deactivating mid-episode sends child goals their cancels without waiting
+  for their results, and waits up to 5 s (was 10 s) for the episode to stop.
 * Breaking: ``hil_launch.py`` drops ``reward_classifier_policy_type``. The
   classifier is always a ``reward_classifier``.
 * Renamed from ``rosetta_hil``: a ROS app built on ``rosetta_ros``, named like

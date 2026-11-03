@@ -28,7 +28,8 @@ from typing import Callable
 import rclpy
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import FloatingPointRange, ParameterDescriptor
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException
+from rclpy.experimental import EventsExecutor
 from rclpy.lifecycle import LifecycleNode
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
@@ -226,12 +227,18 @@ def spin_lifecycle_node(node_factory: Callable[[], LifecycleNode], *, args=None)
     down before user code can react, making that transition impossible exactly
     when it matters. Signal handling is disabled and KeyboardInterrupt is the
     shutdown trigger instead.
+
+    The node spins on rclpy's single-threaded ``EventsExecutor``, whose wait
+    and dispatch run in C++. A ``MultiThreadedExecutor`` rebuilds its wait set
+    in Python on every wake, so each incoming message holds the GIL there.
+    That cost several times the CPU and delayed the node's own work threads
+    by tens of milliseconds. One thread means no callback may block. Long work runs
+    on its own thread, through ``RosettaLifecycleNode.create_work_action_server``
+    or ``handle_start_service``.
     """
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = node_factory()
-    # 4 threads: enough for a blocking execute callback + feedback/service
-    # callbacks alongside it. No caller has needed to override it.
-    executor = MultiThreadedExecutor(num_threads=4)
+    executor = EventsExecutor()
     executor.add_node(node)
     try:
         # spin_once loop, not spin(): without rclpy's signal handlers a

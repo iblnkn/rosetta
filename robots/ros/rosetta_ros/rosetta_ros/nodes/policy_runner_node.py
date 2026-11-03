@@ -47,7 +47,6 @@ import traceback
 from action_msgs.srv import CancelGoal
 from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
 from std_srvs.srv import Trigger
 
 from rosetta.contract.schema import load_contract
@@ -163,7 +162,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._cancel_service = None
         self._status_pub = None
         self._result_pub = None
-        self._cbg = ReentrantCallbackGroup()
 
         self.get_logger().info("Node created (unconfigured)")
 
@@ -218,15 +216,7 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._runner = load_policy_runner(framework)
         self._runner.setup(RosParameterHost(self), self._contract)
 
-        self._action_server = ActionServer(
-            self,
-            RunPolicy,
-            "run_policy",
-            execute_callback=self._execute,
-            goal_callback=self.on_goal,
-            cancel_callback=self.on_cancel,
-            callback_group=self._cbg,
-        )
+        self._action_server = self.create_work_action_server(RunPolicy, "run_policy", self._execute)
 
         # Client to this server's own cancel service, so ~/cancel_policy can
         # perform a real cancel. Relative name, so it expands through the same
@@ -234,7 +224,6 @@ class PolicyRunnerNode(RosettaLifecycleNode):
         self._cancel_client = self.create_client(
             CancelGoal,
             "run_policy/_action/cancel_goal",
-            callback_group=self._cbg,
         )
 
         # Service wrappers for callers that can call services but not actions
@@ -244,13 +233,11 @@ class PolicyRunnerNode(RosettaLifecycleNode):
             StartPolicy,
             "~/start_policy",
             self._on_start_service,
-            callback_group=self._cbg,
         )
         self._cancel_service = self.create_service(
             Trigger,
             "~/cancel_policy",
             self._on_cancel_service,
-            callback_group=self._cbg,
         )
         # Feedback and result for every run, including service starts.
         self._status_pub = self.create_publisher(RunPolicyStatus, "~/status", STATUS_QOS)
