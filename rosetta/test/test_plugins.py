@@ -15,13 +15,15 @@
 """Entry-point module plugins (operators, codecs): loaded once per process, failures latched."""
 
 import types
+import typing
 
 import pytest
 
-from rosetta.contract import plugins
-from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.operators import OPERATOR_ENTRY_POINT_GROUP, discover_operators
-from rosetta.frames.codecs import CODEC_ENTRY_POINT_GROUP, discover_codecs
+from rosetta import plugins
+from rosetta.codecs import CODEC_ENTRY_POINT_GROUP
+from rosetta.contract.interfaces import discover_codecs
+from rosetta.errors import ContractValidationError
+from rosetta.operators import OPERATOR_ENTRY_POINT_GROUP, discover_operators
 
 
 class _EP:
@@ -84,3 +86,42 @@ def test_failed_load_is_latched(entry_points):
         discover_operators()
     assert second.value is first.value
     assert loaded == []
+
+
+@typing.runtime_checkable
+class _Layout(typing.Protocol):
+    """A class-plugin protocol with a data member, like rerun_rosetta's RecordingLayout."""
+
+    index: str
+
+    def column(self) -> str: ...
+
+
+def _instantiate(cls):
+    ep = types.SimpleNamespace(name="x", group="g", dist=types.SimpleNamespace(name="d"), load=lambda: cls)
+    return plugins.instantiate_entry_point([ep], "g", "x", _Layout, "layout")
+
+
+def test_data_member_protocol_accepts_a_conforming_class():
+    class Good:
+        index = "t"
+
+        def column(self):
+            return "c"
+
+    assert isinstance(_instantiate(Good), Good)
+
+
+def test_data_member_protocol_names_missing_members():
+    class NoIndex:
+        def column(self):
+            return "c"
+
+    class NoneColumn:
+        index = "t"
+        column = None
+
+    with pytest.raises(TypeError, match=r"missing or non-callable: index$|missing or non-callable: index\)"):
+        _instantiate(NoIndex)
+    with pytest.raises(TypeError, match=r"missing or non-callable: column\)"):
+        _instantiate(NoneColumn)

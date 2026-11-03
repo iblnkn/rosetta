@@ -24,8 +24,14 @@ import importlib
 import pytest
 
 PUBLIC_API = {
-    "rosetta.contract.errors": {"ContractValidationError"},
-    "rosetta.contract.operators": {
+    "rosetta.errors": {"ContractValidationError"},
+    "rosetta.plugins": {
+        "instantiate_entry_point",
+        "load_entry_point_plugins",
+        "protocol_problems",
+        "resolve_entry_point",
+    },
+    "rosetta.operators": {
         "Invertibility",
         "OPERATOR_ENTRY_POINT_GROUP",
         "Operator",
@@ -53,6 +59,13 @@ PUBLIC_API = {
         "owning_key",
         "parse_contract",
     },
+    "rosetta.contract.interfaces": {
+        "ContractInterface",
+        "ROBOT_INTERFACE_GROUP",
+        "available_robot_interfaces",
+        "discover_codecs",
+        "load_interface",
+    },
     "rosetta.contract.sidecar": {
         "CONTRACT_SIDECAR_FILENAME",
         "LEROBOT_CONTRACT_SIDECAR_PATH",
@@ -71,22 +84,24 @@ PUBLIC_API = {
         "iter_teleop_feedback_specs",
         "iter_teleop_input_specs",
     },
-    "rosetta.frames.arrays": {"is_device_array", "take", "to_host"},
-    "rosetta.frames.codecs": {
+    "rosetta.arrays": {"is_device_array", "take", "to_host"},
+    "rosetta.codecs": {
         "CODEC_ENTRY_POINT_GROUP",
         "DecoderFn",
         "EncoderFn",
-        "NonFiniteActionError",
         "SUPPORTED_NUMERIC_DTYPES",
-        "decode_value",
-        "discover_codecs",
-        "encode_value",
-        "host_only_reason",
+        "load_codec_plugins",
         "register_decoder",
         "register_encoder",
     },
+    "rosetta.frames.codecs": {
+        "NonFiniteActionError",
+        "decode_value",
+        "encode_value",
+        "host_only_reason",
+    },
     "rosetta.frames.layout": {"FrameLayout", "KeyLayout", "SpecSlice", "build_feature"},
-    "rosetta.frames.naming": {"IMAGE_KEY_PREFIX", "camera_name", "sanitize_field_name"},
+    "rosetta.contract.naming": {"IMAGE_KEY_PREFIX", "camera_name", "sanitize_field_name"},
     "rosetta.frames.protocols": {"Connection", "FrameIO", "RobotClock"},
     "rosetta.policies": {
         "DatasetWriter",

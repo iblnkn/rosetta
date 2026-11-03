@@ -29,9 +29,9 @@ a float conversion (``rad2deg``).
 
 ``forward`` receives numpy arrays unless the operator sets
 ``device_capable = True``. A device-capable operator may also receive a
-device array (see :mod:`rosetta.frames.arrays`). It must use only what every
+device array (see :mod:`rosetta.arrays`). It must use only what every
 array library offers: ``shape``, ``dtype``, ``reshape``, basic slicing, and
-:func:`rosetta.frames.arrays.take`. It must also produce the same values as
+:func:`rosetta.arrays.take`. It must also produce the same values as
 on numpy.
 """
 

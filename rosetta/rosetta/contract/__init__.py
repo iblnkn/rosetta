@@ -17,12 +17,16 @@ The contract: one YAML file per robot declaring what to translate.
 
 - :mod:`.schema`: ``load_contract`` and the document types (from :mod:`.model`).
 - :mod:`.specs`: the runtime ``StreamSpec`` family and ``iter_*_specs``.
-- :mod:`.operators`, :mod:`.builtin_operators`: the ``apply`` pipeline.
-- :mod:`.plugins`: entry-point loader for operators and codecs.
+- :mod:`.builtin_operators`: the built-in ``apply`` operators, registered on
+  :mod:`rosetta.operators`.
+- :mod:`.interfaces`: the robot interface a contract names, as contract
+  loading sees it, and codec discovery.
+- :mod:`.naming`: frame-key naming helpers.
 - :mod:`.sidecar`: finding a dataset's or checkpoint's contract file.
 
 With :mod:`rosetta.frames`, this is the only code the robot side
 (:mod:`rosetta.robots`) and the policy side (:mod:`rosetta.policies`) share.
-This ``__init__`` imports nothing (an import here would create a cycle with
-the codec registry); import from the modules directly.
+This package imports only core's base modules (:mod:`rosetta.errors`,
+:mod:`rosetta.codecs` and the rest). This ``__init__`` imports nothing;
+import from the modules directly.
 """

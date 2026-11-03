@@ -38,8 +38,8 @@ import rosbag2_py
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
+from rosetta.codecs import has_decoder
 from rosetta.contract.specs import StreamSpec
-from rosetta.frames.codecs import has_decoder
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.resample import StreamBuffer, num_ticks, step_ns
 from rosetta.frames.resample import tick_ns as grid_tick_ns

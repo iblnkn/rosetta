@@ -16,7 +16,7 @@ python3 -c "from rosetta.contract.schema import load_contract; load_contract('ro
 
 For `robot_interface: ros2` the type check imports each message type, so a
 contract loads only where ROS 2 and those message packages are importable.
-Errors raise `rosetta.contract.errors.ContractValidationError`, a subclass of
+Errors raise `rosetta.errors.ContractValidationError`, a subclass of
 `ValueError`. A missing file raises `FileNotFoundError`.
 
 ## Top level

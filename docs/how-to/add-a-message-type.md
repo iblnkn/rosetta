@@ -7,7 +7,7 @@ the type in a channel. The built-in types are listed in
 A contract that names a type with no codec fails to load:
 
 ```text
-rosetta.contract.errors.ContractValidationError: No decoder registered for 'sensor_msgs/msg/BatteryState' in observation 'observation.battery'. Add a decoder in decoders.py, install a 'rosetta.codecs' entry-point plugin that registers one, or set a custom 'decoder:' on the channel.
+rosetta.errors.ContractValidationError: No decoder registered for 'sensor_msgs/msg/BatteryState' in observation 'observation.battery'. Add a decoder in decoders.py, install a 'rosetta.codecs' entry-point plugin that registers one, or set a custom 'decoder:' on the channel.
 ```
 
 You need a Python package installed in the same environment as Rosetta, and
@@ -26,7 +26,7 @@ and a decoder for `geometry_msgs/msg/Point`:
 # my_pkg/codecs.py
 import numpy as np
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder("sensor_msgs/msg/BatteryState", dtype="float32", requires_select=True)
@@ -114,15 +114,15 @@ python3 -c "from rosetta.contract.schema import load_contract; load_contract('ro
 resolves. Problems with the codec show up here, for example:
 
 ```text
-rosetta.contract.errors.ContractValidationError: 'sensor_msgs/msg/BatteryState' in observation 'observation.battery': its decoder gathers values by selected field names; add 'select:' to declare them.
-rosetta.contract.errors.ContractValidationError: Codec function not found for 'my_pkg.codecs:nope' in observations.observation.battery.channel.decoder: module 'my_pkg.codecs' has no attribute 'nope'
+rosetta.errors.ContractValidationError: 'sensor_msgs/msg/BatteryState' in observation 'observation.battery': its decoder gathers values by selected field names; add 'select:' to declare them.
+rosetta.errors.ContractValidationError: Codec function not found for 'my_pkg.codecs:nope' in observations.observation.battery.channel.decoder: module 'my_pkg.codecs' has no attribute 'nope'
 ```
 
 A type that already has a codec can't be registered again, and the failed
 plugin fails every contract load in that environment:
 
 ```text
-rosetta.contract.errors.ContractValidationError: Failed to load codec plugin 'my_pkg' (my_pkg.codecs) from entry-point group 'rosetta.codecs': Decoder already registered for 'sensor_msgs/msg/JointState'. Pass override=True to replace it intentionally.
+rosetta.errors.ContractValidationError: Failed to load codec plugin 'my_pkg' (my_pkg.codecs) from entry-point group 'rosetta.codecs': Decoder already registered for 'sensor_msgs/msg/JointState'. Pass override=True to replace it intentionally.
 ```
 
 To replace a built-in codec on purpose, pass `override=True` to

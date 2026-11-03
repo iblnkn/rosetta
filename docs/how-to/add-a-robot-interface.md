@@ -62,13 +62,13 @@ load with `TypeError`.
 
 Decoders turn a message into an array, and encoders turn an array back into a
 message. Register them with `register_decoder` and `register_encoder` from
-`rosetta.frames.codecs`, in the modules `register_codecs` imports:
+`rosetta.codecs`, in the modules `register_codecs` imports:
 
 ```python
 # rosetta_toy/codecs.py
 import numpy as np
 
-from rosetta.frames.codecs import register_decoder, register_encoder
+from rosetta.codecs import register_decoder, register_encoder
 
 
 @register_decoder("toy/Vector", dtype="float64", requires_select=True)
@@ -90,7 +90,7 @@ interface already registered fails. Only contracts that name the failed
 interface fail to load:
 
 ```text
-rosetta.contract.errors.ContractValidationError: Failed to load robot interface 'toy': Decoder already registered for 'std_msgs/msg/Float64'. Pass override=True to replace it intentionally.
+rosetta.errors.ContractValidationError: Failed to load robot interface 'toy': Decoder already registered for 'std_msgs/msg/Float64'. Pass override=True to replace it intentionally.
 ```
 
 Choose type strings in your middleware's own form, as `toy/Vector` is here.
@@ -139,14 +139,14 @@ It prints `OK` when the interface accepts every channel. A channel the
 interface rejects names the channel and the reason:
 
 ```text
-rosetta.contract.errors.ContractValidationError: observations.observation.state.align: timeline 'header' is not provided by 'toy/Vector'. This channel provides: ['receive']
-rosetta.contract.errors.ContractValidationError: observations.observation.state.qos: Unknown qos key(s) ['qos_level']. Allowed: ['retain']
+rosetta.errors.ContractValidationError: observations.observation.state.align: timeline 'header' is not provided by 'toy/Vector'. This channel provides: ['receive']
+rosetta.errors.ContractValidationError: observations.observation.state.qos: Unknown qos key(s) ['qos_level']. Allowed: ['retain']
 ```
 
 Where the package isn't installed, the contract fails to load:
 
 ```text
-rosetta.contract.errors.ContractValidationError: robot_interface 'toy' is not installed. Installed: ros2
+rosetta.errors.ContractValidationError: robot_interface 'toy' is not installed. Installed: ros2
 ```
 
 ## Connect it to a robot

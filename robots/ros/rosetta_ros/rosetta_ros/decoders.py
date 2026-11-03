@@ -70,9 +70,9 @@ try:
 except ImportError:
     cv2 = None  # type: ignore[assignment]
 
+from rosetta.arrays import take
+from rosetta.codecs import register_decoder
 from rosetta.contract.specs import DECODED_IMAGE_CHANNELS
-from rosetta.frames.arrays import take
-from rosetta.frames.codecs import register_decoder
 from rosetta_ros.buffers import DLPACK_DTYPES, message_bytes, message_tensor
 from rosetta_ros.field_access import (
     JOINT_STATE_FIELDS,
@@ -101,7 +101,7 @@ if TYPE_CHECKING:
     from rosetta.contract.specs import StreamSpec
 
 # This module must stay importable without ROS: codec discovery
-# (rosetta.frames.codecs.discover_codecs) imports it during ROS-less contract
+# (rosetta.contract.interfaces.discover_codecs) imports it during ROS-less contract
 # loading. Decoders are duck-typed on the message instance, so no rclpy,
 # rosidl, or message-class import belongs at module level.
 

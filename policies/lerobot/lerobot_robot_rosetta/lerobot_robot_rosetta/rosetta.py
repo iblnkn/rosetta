@@ -44,7 +44,7 @@ from lerobot.processor import RobotAction, RobotObservation
 from lerobot.robots.robot import Robot
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
-from rosetta.frames.arrays import to_host
+from rosetta.arrays import to_host
 from rosetta.frames.layout import FrameLayout
 from rosetta.frames.protocols import Connection, FrameIO, RobotClock
 from rosetta.robots.registry import load_robot_interface

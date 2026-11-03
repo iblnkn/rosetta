@@ -22,9 +22,9 @@ strings are labels only.
 import numpy as np
 import pytest
 
-from rosetta.contract.errors import ContractValidationError
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ActionStreamSpec, ObservationStreamSpec
+from rosetta.errors import ContractValidationError
 from rosetta.frames.layout import FrameLayout, build_feature
 
 

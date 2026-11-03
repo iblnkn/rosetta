@@ -38,9 +38,9 @@ from lerobot_dataset_rosetta.dataset_writer import build_lerobot_features
 
 from lerobot_robot_rosetta.config_rosetta import RosettaConfig
 from lerobot_robot_rosetta.rosetta import Rosetta, ensure_live_observation_layout
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_action_specs, iter_observation_specs
-from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
 

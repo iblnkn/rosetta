@@ -19,7 +19,7 @@ A *frame* is one synchronized sample of every contract key at a single
 instant: a dict ``{contract_key: array | str}`` covering all modalities
 at once (images, joint state, ...), emitted once per tick of the clock set by
 the contract's ``fps``. Arrays are numpy, except that an image the transport
-delivered in device memory stays there (:mod:`.arrays`). This is
+delivered in device memory stays there (:mod:`rosetta.arrays`). This is
 the LeRobot sense of the word (one row of a ``LeRobotDataset``,
 ``add_frame()``), NOT a ROS/tf coordinate frame
 (``base_link``, ``map``, ...). This package has nothing to do with spatial
@@ -34,18 +34,16 @@ ROS or policy-framework dependencies:
 - :mod:`.resample` (``StreamBuffer``): async messages -> fixed-rate frames.
   Live inference and offline bag conversion share it, so recorded and live
   frames match sample-for-sample by construction.
-- :mod:`.codecs`: the encoder/decoder registry (message <-> array).
-- :mod:`.arrays`: device arrays, images a transport delivered in device
-  memory, read through DLPack.
+- :mod:`.codecs`: running decoders and encoders (message <-> array); the
+  registry itself is :mod:`rosetta.codecs`.
 - :mod:`.protocols` (``FrameIO``, ``Connection``, ``RobotClock``): the
   duck-typed surface a live robot presents to a policy.
-- :mod:`.naming`: shared frame-key naming helpers.
 
 With :mod:`rosetta.contract`, this package is Rosetta's waist. The robot side
 (:mod:`rosetta.robots`) and the policy side (:mod:`rosetta.policies`) import
 only these two packages, never each other. The one bridge is core's robot
 interface registry, which a framework hosting a live run uses to open a
-:class:`~.protocols.Connection` without importing any middleware. Import from the concrete modules.
-This ``__init__`` stays import-free so the schema <-> codec-registry module
-graph stays acyclic.
+:class:`~.protocols.Connection` without importing any middleware.
+
+Import from the concrete modules; this ``__init__`` imports nothing.
 """

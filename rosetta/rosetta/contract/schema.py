@@ -25,7 +25,7 @@ runs three checks:
    empty-but-present sections and codec paths that don't import are errors.
    Top-level ``x-*`` keys are ignored (they hold YAML anchors).
 2. Interface: the contract's ``robot_interface`` is installed (see
-   :mod:`rosetta.robots.registry`), and that interface accepts each
+   :mod:`rosetta.contract.interfaces`), and that interface accepts each
    channel's type, the timeline it chose and its qos.
 3. Resolution: every spec is resolved once (see :mod:`.specs`), which runs
    the registry-backed rules (decodability, encoders, image geometry).
@@ -43,18 +43,11 @@ from typing import Any, Iterable, TypeVar
 
 import yaml
 
-from ..frames.codecs import (
-    SPECIAL_DTYPES,
-    SUPPORTED_NUMERIC_DTYPES,
-    discover_codecs,
-    is_valid_dtype,
-    load_codec,
-)
-from ..frames.naming import IMAGE_KEY_PREFIX
-from ..robots.protocols import RobotInterface
-from ..robots.registry import available_robot_interfaces, load_robot_interface
+from ..codecs import SPECIAL_DTYPES, SUPPORTED_NUMERIC_DTYPES, is_valid_dtype, load_codec
+from ..errors import ContractValidationError
+from ..operators import lookup_operator
 from . import builtin_operators  # noqa: F401 - registers built-in operators
-from .errors import ContractValidationError
+from .interfaces import ContractInterface, available_robot_interfaces, discover_codecs, load_interface
 
 # Re-exported: callers import the document model from here.
 from .model import (
@@ -77,7 +70,8 @@ from .model import (
     TeleopInputSource,
     owning_key,
 )
-from .operators import lookup_operator
+from .naming import IMAGE_KEY_PREFIX
+from .specs import iter_specs, validate_key_groups
 
 __all__ = [
     "FRAME_SECTIONS",
@@ -243,7 +237,7 @@ def _validate_codec_path(path: str | None, context: str) -> str | None:
     return path
 
 
-def _validate_interface(contract: Contract, interface: RobotInterface) -> None:
+def _validate_interface(contract: Contract, interface: ContractInterface) -> None:
     """Check every channel against the contract's robot interface.
 
     Each ``type`` must be a type the interface knows (bare channels included),
@@ -727,12 +721,9 @@ def parse_contract(text: str, *, source: str = "<contract>") -> Contract:
         **sections,
     )
 
-    _validate_interface(contract, load_robot_interface(robot_interface))
-    # Resolve every spec and lay out the frame now, so the registry-backed
-    # rules (decodability, encoders, image geometry, shared keys) fail at load.
-    # Imported here because specs and layout import this module.
-    from ..frames.layout import FrameLayout
-    from .specs import iter_specs
-
-    FrameLayout(list(iter_specs(contract)))
+    _validate_interface(contract, load_interface(robot_interface))
+    # Resolve every spec and check how they share frame keys now, so the
+    # registry-backed rules (decodability, encoders, image geometry, shared
+    # keys) fail at load.
+    validate_key_groups(iter_specs(contract))
     return contract

@@ -21,18 +21,18 @@ import fake_codecs  # noqa: F401  (registered before any scratch_registries snap
 import pytest
 
 import rosetta.contract.schema  # noqa: F401  (registers the built-in operators, likewise)
-from rosetta.contract.operators import OPERATOR_REGISTRY
-from rosetta.frames import codecs
-from rosetta.robots import registry
+from rosetta import codecs
+from rosetta.contract import interfaces
+from rosetta.operators import OPERATOR_REGISTRY
 
 
 @pytest.fixture
 def fake_interface(monkeypatch):
     """Make ``fake`` (fake_interface.py) the only installed robot interface for one test."""
-    ep = ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=registry.ROBOT_INTERFACE_GROUP)
-    monkeypatch.setattr(registry, "_ilm", SimpleNamespace(entry_points=lambda group: [ep]))
-    monkeypatch.setattr(registry, "_instances", {})
-    monkeypatch.setattr(registry, "_codec_state", {"done": False, "failures": {}})
+    ep = ilm.EntryPoint(name="fake", value="fake_interface:FakeInterface", group=interfaces.ROBOT_INTERFACE_GROUP)
+    monkeypatch.setattr(interfaces, "_ilm", SimpleNamespace(entry_points=lambda group: [ep]))
+    monkeypatch.setattr(interfaces, "_instances", {})
+    monkeypatch.setattr(interfaces, "_codec_state", {"done": False, "failures": {}})
 
 
 @pytest.fixture

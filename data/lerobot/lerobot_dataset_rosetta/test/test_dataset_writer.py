@@ -27,8 +27,8 @@ import pytest
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot_dataset_rosetta.dataset_writer import LeRobotDatasetWriter
 
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import load_contract
-from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
 

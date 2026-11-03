@@ -30,6 +30,8 @@ from typing import Any
 
 from .errors import ContractValidationError
 
+__all__ = ["instantiate_entry_point", "load_entry_point_plugins", "protocol_problems", "resolve_entry_point"]
+
 _loaded_groups: set[str] = set()
 _failed_groups: dict[str, ContractValidationError] = {}
 
@@ -109,19 +111,36 @@ def instantiate_entry_point(eps: list[_ilm.EntryPoint], group: str, name: str, p
         )
     obj = cls()
     if not isinstance(obj, protocol):
-        # isinstance is the gate; the sweep names the offenders — absent OR
-        # present-but-non-callable (e.g. a member set to None fails isinstance
-        # yet passes hasattr). __protocol_attrs__ is undocumented but the only
-        # runtime member source before Python 3.13's typing.get_protocol_members;
-        # Rosetta's plugin protocols are all-methods, so callability is the right test.
-        problems = sorted(m for m in protocol.__protocol_attrs__ if not callable(getattr(obj, m, None)))
+        # isinstance is the gate; the sweep names the offenders.
+        problems = protocol_problems(protocol, obj)
         detail = (
             f"missing or non-callable: {', '.join(problems)}"
             if problems
-            else "all members present and callable; structural check failed on a non-method member"
+            else "all members present and callable; structural check failed"
         )
         raise TypeError(
             f"Entry point '{name}' in group '{group}' ({_dist_name(ep)}) does not "
             f"implement {protocol.__name__} ({detail})."
         )
     return obj
+
+
+def protocol_problems(protocol: type, obj: Any) -> list[str]:
+    """The members of runtime-checkable ``protocol`` that ``obj`` lacks, sorted.
+
+    A method must be present and callable (a method set to None fails
+    ``isinstance`` yet passes ``hasattr``); a data member, which the protocol
+    only annotates, must be present. ``__protocol_attrs__`` is undocumented but
+    the only runtime member source before Python 3.13's
+    ``typing.get_protocol_members``.
+    """
+    return sorted(m for m in protocol.__protocol_attrs__ if not _conforms(protocol, obj, m))
+
+
+def _conforms(protocol: type, obj: Any, member: str) -> bool:
+    """Whether ``obj`` provides ``member`` the way ``protocol`` declares it."""
+    if not hasattr(obj, member):
+        return False
+    if callable(getattr(protocol, member, None)):
+        return callable(getattr(obj, member))
+    return True

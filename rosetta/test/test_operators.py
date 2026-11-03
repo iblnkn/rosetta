@@ -12,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the operator-plugin pipeline (rosetta.contract.operators)."""
+"""Unit tests for the operator-plugin pipeline (rosetta.operators)."""
 
 import numpy as np
 import pytest
 
-from rosetta.contract.errors import ContractValidationError
-from rosetta.contract.operators import (
+from rosetta.errors import ContractValidationError
+from rosetta.operators import (
     OPERATOR_REGISTRY,
     Invertibility,
     Operator,

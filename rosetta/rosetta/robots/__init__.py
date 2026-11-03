@@ -24,15 +24,17 @@ rates, ecosystem-specific message types) adapted onto two clean surfaces:
 - recorded: an iterator of the same frame dicts replayed from the
   ecosystem's recording format.
 
-:mod:`.protocols` is what contract loading needs from an interface
-(message types, timelines, qos, built-in codecs), and :mod:`.registry` finds
-the interface a contract names among the installed ``rosetta.robot_interfaces``
-entry points. The ROS2 implementation (topic bridge, rosbag2 replay, nodes,
-message codecs) is the ``rosetta_ros`` package. A future ecosystem (ROS1,
+:mod:`.protocols` is the live interface (:class:`~.protocols.RobotInterface`,
+which adds ``connect`` to what contract loading asks of it, in
+:mod:`rosetta.contract.interfaces`), and :mod:`.registry` finds the interface a
+contract names among the installed ``rosetta.robot_interfaces`` entry points.
+The ROS2 implementation (topic bridge, rosbag2 replay, nodes, message codecs)
+is the ``rosetta_ros`` package. A future ecosystem (ROS1,
 zenoh-native, MQTT, ...) is a sibling package implementing the same
 surfaces; nothing on the policy side changes, because both sides speak only
 frames.
 
-This module imports only :mod:`rosetta.contract`. Interface packages build
-on the rest of core as they need.
+This seam imports only lower layers of core, never :mod:`rosetta.data` or
+:mod:`rosetta.policies`. Interface packages build on the rest of core as
+they need.
 """

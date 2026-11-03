@@ -21,7 +21,9 @@ import sys
 # imported rosetta_ros.{decoders,encoders}, which registers the codecs whether
 # or not entry-point discovery works.
 _PROBE = """
-from rosetta.frames.codecs import has_decoder, has_encoder
+from rosetta.codecs import has_decoder, has_encoder
+from rosetta.contract.interfaces import discover_codecs
+discover_codecs()
 assert has_decoder("sensor_msgs/msg/JointState")
 assert has_encoder("geometry_msgs/msg/Twist")
 assert has_decoder("std_msgs/msg/Bool")  # required by stone.yaml's extended sections
@@ -29,7 +31,8 @@ assert has_decoder("std_msgs/msg/Bool")  # required by stone.yaml's extended sec
 
 
 def test_discovery_registers_builtin_codecs():
-    """Registry checks must not depend on whether rosetta_ros.{decoders,encoders}
-    happened to be imported. The accessors are the API spec resolution uses."""
+    """Discovery must register the codecs whether or not rosetta_ros.{decoders,encoders}
+    happened to be imported. Loading a contract runs it before spec resolution
+    reads the registry."""
     proc = subprocess.run([sys.executable, "-c", _PROBE], capture_output=True, text=True, timeout=60, check=False)
     assert proc.returncode == 0, proc.stderr

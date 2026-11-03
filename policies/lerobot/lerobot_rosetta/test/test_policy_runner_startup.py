@@ -29,8 +29,8 @@ import pytest
 from ament_index_python.packages import get_package_share_directory
 
 from lerobot_rosetta import policy_runner as pr
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import load_contract
-from rosetta.frames.codecs import discover_codecs
 
 discover_codecs()  # register the built-in codecs
 

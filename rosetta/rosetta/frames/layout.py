@@ -58,7 +58,7 @@ to an int dtype here would launder a policy's NaN into INT_MIN, finite garbage
 that sails through the gate onto hardware.
 
 A value the transport delivered in device memory stays a device array (see
-:mod:`.arrays`) when it alone fills its key. Its decoder produced the key's
+:mod:`rosetta.arrays`) when it alone fills its key. Its decoder produced the key's
 dtype, which assembly checks rather than casts. A key that concatenates
 several specs is numpy, as are missing values. No ROS dependency.
 """
@@ -70,14 +70,15 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from ..contract.errors import ContractValidationError
+from ..arrays import is_device_array, to_host
+from ..codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 from ..contract.specs import (
     ActionStreamSpec,
     ObservationStreamSpec,
     StreamSpec,
+    spec_category,
+    validate_key_groups,
 )
-from .arrays import is_device_array, to_host
-from .codecs import SUPPORTED_NUMERIC_DTYPES, width_mismatch_message
 
 __all__ = [
     "FrameLayout",
@@ -140,19 +141,6 @@ def _tensor_part(key: str, sl: "SpecSlice", val: Any, np_dtype: np.dtype) -> Any
             width_mismatch_message("Stream value", key, sl.spec.source.channel.topic, part.size, sl.dim, sl.spec.names)
         )
     return part.reshape(shape)
-
-
-def _spec_category(spec: StreamSpec) -> str:
-    """'image' | 'string' | 'numeric' for layout purposes.
-
-    ``is_image`` and ``dtype`` are base-class fields, so action specs answer
-    ``is_image=False`` honestly rather than by attribute absence.
-    """
-    if spec.is_image:
-        return "image"
-    if spec.dtype == "string":
-        return "string"
-    return "numeric"
 
 
 @dataclass(frozen=True)
@@ -219,8 +207,9 @@ class KeyLayout:
 class FrameLayout:
     """Canonical key -> (spec, offset, dim) layout for an ordered spec list.
 
-    Built once from resolved stream specs (validation happens here, so it fires
-    at bridge configure / writer open / runner setup). All assemble and split
+    Built once from resolved stream specs. Construction runs
+    :func:`~rosetta.contract.specs.validate_key_groups` again, the same check
+    contract loading runs, as a backstop for hand-built specs. All assemble and split
     operations align positionally with ``self.specs``. Specs are unhashable
     (``source`` holds a dict-valued ``qos``), and (key, topic) is not unique
     (one topic may appear in several specs), so position is the identity.
@@ -229,74 +218,10 @@ class FrameLayout:
     def __init__(self, specs: Sequence[StreamSpec]):
         self.specs: tuple[StreamSpec, ...] = tuple(specs)
 
-        by_key: dict[str, list[StreamSpec]] = {}
-        for spec in self.specs:
-            by_key.setdefault(spec.key, []).append(spec)
-
         layouts: dict[str, KeyLayout] = {}
-        for key, group in by_key.items():
-            shared = len(group) > 1
-            # A key must belong to exactly one role: mixing action-shaped and
-            # observation-shaped specs would make the key's routing (state
-            # column vs action column) depend on which slice a consumer
-            # inspects. Base StreamSpec counts as observation-shaped.
-            action_topics = [s.source.channel.topic for s in group if isinstance(s, ActionStreamSpec)]
-            if action_topics and len(action_topics) < len(group):
-                obs_topics = [s.source.channel.topic for s in group if not isinstance(s, ActionStreamSpec)]
-                raise ContractValidationError(
-                    f"Key '{key}' is shared by observation-shaped specs "
-                    f"({obs_topics}) and action-shaped specs ({action_topics}); "
-                    f"a frame key must belong to exactly one role."
-                )
-            categories = {_spec_category(s) for s in group}
-            if shared and categories != {"numeric"}:
-                raise ContractValidationError(
-                    f"Key '{key}' is shared by {len(group)} specs but is not "
-                    f"all-numeric ({sorted(categories)}). Images and strings "
-                    f"cannot be concatenated; give each its own key."
-                )
-            dtypes = {s.dtype for s in group}
-            if len(dtypes) > 1:
-                raise ContractValidationError(
-                    f"Key '{key}' is shared by specs with different dtypes "
-                    f"({sorted(dtypes)}). Specs sharing a key must resolve to "
-                    f"one dtype; set dtype: explicitly to align them."
-                )
-            if shared:
-                nameless = [s.source.channel.topic for s in group if not s.names]
-                if nameless:
-                    raise ContractValidationError(
-                        f"Key '{key}' is shared by multiple specs, but "
-                        f"{nameless} have no select. Concatenation needs "
-                        f"static dims; add select: to every spec of a shared key."
-                    )
-
-            # Rendered feature names must be unique per key: two sources can
-            # legally flatten to the same name via different (namespace, name)
-            # pairs (e.g. namespace None + "b.data" vs namespace "b" + "data"),
-            # which would silently collide in lerobot_features().
-            seen_names: dict[str, str] = {}
-            for s in group:
-                for name in s.namespaced_names:
-                    other = seen_names.get(name)
-                    if other is not None:
-                        raise ContractValidationError(
-                            f"Key '{key}': rendered feature name '{name}' from topic "
-                            f"{s.source.channel.topic} collides with the same name from "
-                            f"topic {other}. Rendered names must be unique within a key."
-                        )
-                    seen_names[name] = s.source.channel.topic
-
-            category = _spec_category(group[0])
-            dtype = next(iter(dtypes))
-            # Backstop for hand-built specs. Contract-resolved dtypes are
-            # already vocabulary-checked at load (schema._validate_dtype).
-            if category == "numeric" and dtype not in SUPPORTED_NUMERIC_DTYPES:
-                raise ContractValidationError(
-                    f"Unsupported dtype '{dtype}' for key '{key}'. "
-                    f"Supported: {', '.join(sorted(SUPPORTED_NUMERIC_DTYPES))}."
-                )
-
+        for key, group in validate_key_groups(self.specs).items():
+            category = spec_category(group[0])
+            dtype = group[0].dtype
             slices = []
             start = 0
             for s in group:
@@ -337,7 +262,7 @@ class FrameLayout:
         order. Missing values zero-fill; with ``fill_missing=False`` a key with
         any missing value is left out. Returns {contract_key: array | str}:
         numpy, or a device array for a single-spec key whose value is one (see
-        :mod:`.arrays`).
+        :mod:`rosetta.arrays`).
         """
         if len(values) != len(self.specs):
             raise ValueError(f"assemble() got {len(values)} values for {len(self.specs)} specs")

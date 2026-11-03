@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from rosetta.frames.codecs import register_encoder
+from rosetta.codecs import register_encoder
 from rosetta_ros.field_access import (
     JOINT_STATE_FIELDS,
     JOINT_TRAJECTORY_FIELDS,
@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from rosetta.contract.specs import ActionStreamSpec
 
 # This module must stay importable without ROS: codec discovery
-# (rosetta.frames.codecs.discover_codecs) imports it during ROS-less contract
+# (rosetta.contract.interfaces.discover_codecs) imports it during ROS-less contract
 # loading. rosidl is a call-time dependency of the encoder bodies only.
 
 # =============================================================================

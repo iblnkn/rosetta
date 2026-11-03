@@ -14,80 +14,32 @@
 
 """Resolving a :class:`~.protocols.RobotInterface` by the name a contract declares.
 
-Robot interface packages register a class under :data:`ROBOT_INTERFACE_GROUP`,
-named after the ``robot_interface`` value contracts use::
-
-    # in the interface package's setup.py / pyproject.toml
-    entry_points={
-        'rosetta.robot_interfaces': [
-            'ros2 = rosetta_ros.interface:Ros2Interface',
-        ],
-    }
-
-Loading follows :mod:`rosetta.policies.registry`: an unknown or ambiguous name
-raises ``ValueError``, a non-class or non-conforming entry point raises
-``TypeError``, and import or constructor failures propagate raw. One instance
-per name is kept for the process.
+Robot interface packages register a class under :data:`ROBOT_INTERFACE_GROUP`
+(see :mod:`rosetta.contract.interfaces`, which finds and caches it for contract
+loading). :func:`load_robot_interface` returns that same instance, checked
+against the full live protocol, ``connect`` included.
 """
 
 from __future__ import annotations
 
-import importlib.metadata as _ilm
-import threading
-
-from ..contract.errors import ContractValidationError
-from ..contract.plugins import instantiate_entry_point
+from ..contract.interfaces import ROBOT_INTERFACE_GROUP, available_robot_interfaces, load_interface
+from ..plugins import protocol_problems
 from .protocols import RobotInterface
 
 __all__ = ["ROBOT_INTERFACE_GROUP", "available_robot_interfaces", "load_robot_interface"]
 
-ROBOT_INTERFACE_GROUP = "rosetta.robot_interfaces"
-"""Entry-point group a robot interface registers its :class:`~.protocols.RobotInterface` under."""
-
-_instances: dict[str, RobotInterface] = {}
-# Codec registration: "done" once every installed interface was tried,
-# "failures" maps each interface that failed to its latched error.
-_codec_state: dict = {"done": False, "failures": {}}
-# RLock: registering codecs imports codec modules, which may look up the registry.
-_lock = threading.RLock()
-
-
-def available_robot_interfaces() -> list[str]:
-    """Robot interface names registered under :data:`ROBOT_INTERFACE_GROUP`."""
-    return sorted({ep.name for ep in _ilm.entry_points(group=ROBOT_INTERFACE_GROUP)})
-
 
 def load_robot_interface(name: str) -> RobotInterface:
-    """The :class:`~.protocols.RobotInterface` registered as ``name``, created once per process."""
-    with _lock:
-        if name not in _instances:
-            eps = list(_ilm.entry_points(group=ROBOT_INTERFACE_GROUP))
-            _instances[name] = instantiate_entry_point(
-                eps, ROBOT_INTERFACE_GROUP, name, RobotInterface, "robot interface"
-            )
-        return _instances[name]
+    """The :class:`~.protocols.RobotInterface` registered as ``name``, created once per process.
 
-
-def register_interface_codecs(required: str | None = None) -> None:
-    """Register every installed robot interface's built-in codecs, once per process.
-
-    Every interface is tried, so one broken package never blocks contracts for
-    the others. Each failure is latched like a failed codec plugin (see
-    :func:`rosetta.contract.plugins.load_entry_point_plugins`): an interface that
-    registered some codecs before failing would trip the duplicate-registration
-    guard on a retry and hide the real error. It is raised, as
-    ContractValidationError, only when ``required`` names that interface.
+    Raises ``TypeError`` if the interface answers contract loading but cannot
+    open a live robot.
     """
-    with _lock:
-        if not _codec_state["done"]:
-            for name in available_robot_interfaces():
-                try:
-                    load_robot_interface(name).register_codecs()
-                except Exception as e:
-                    failure = ContractValidationError(f"Failed to load robot interface '{name}': {e}")
-                    failure.__cause__ = e
-                    _codec_state["failures"][name] = failure
-            _codec_state["done"] = True
-        failure = _codec_state["failures"].get(required)
-    if failure is not None:
-        raise failure
+    interface = load_interface(name)
+    if not isinstance(interface, RobotInterface):
+        problems = protocol_problems(RobotInterface, interface)
+        raise TypeError(
+            f"Robot interface '{name}' ({type(interface).__name__}) does not implement "
+            f"RobotInterface (missing or non-callable: {', '.join(problems)})."
+        )
+    return interface

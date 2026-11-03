@@ -34,19 +34,18 @@ import math
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from ..frames.codecs import (
+from ..codecs import (
+    SUPPORTED_NUMERIC_DTYPES,
     decoder_requires_select,
     encoder_requires_select,
     get_decoder_dtype,
     has_decoder,
     has_encoder,
 )
-from ..frames.naming import IMAGE_KEY_PREFIX
-from .errors import ContractValidationError
-from .operators import Operator, OperatorContext, build_operator
-from .schema import (
+from ..errors import ContractValidationError
+from ..operators import Operator, OperatorContext, build_operator
+from .model import (
     EXTENDED_SECTIONS,
-    SUPPORTED_NUMERIC_DTYPES,
     TELEOP_FEEDBACK_KEY,
     TELEOP_INPUT_KEY,
     Channel,
@@ -55,6 +54,7 @@ from .schema import (
     Source,
     owning_key,
 )
+from .naming import IMAGE_KEY_PREFIX
 
 __all__ = [
     "ActionStreamSpec",
@@ -578,3 +578,98 @@ def iter_teleop_feedback_specs(contract: Contract) -> Iterable[ActionStreamSpec]
             contract,
             context=f"teleop feedback (origin '{tfs.origin}')",
         )
+
+
+def spec_category(spec: StreamSpec) -> str:
+    """'image' | 'string' | 'numeric' for layout purposes.
+
+    ``is_image`` and ``dtype`` are base-class fields, so action specs answer
+    ``is_image=False`` honestly rather than by attribute absence.
+    """
+    if spec.is_image:
+        return "image"
+    if spec.dtype == "string":
+        return "string"
+    return "numeric"
+
+
+def validate_key_groups(specs: Iterable[StreamSpec]) -> dict[str, list[StreamSpec]]:
+    """Group ``specs`` by frame key, checking that each group can share one key.
+
+    Returns the groups in first-occurrence key order, each in declaration
+    order. Contract loading calls this on every resolved spec, and
+    :class:`~rosetta.frames.layout.FrameLayout` calls it again for hand-built
+    specs, so the rules live in one place.
+
+    Raises ContractValidationError for a key shared across roles, a shared
+    key that is not all-numeric, mixed dtypes, a shared key with a select-less
+    spec, two specs rendering the same feature name, or an unsupported
+    numeric dtype.
+    """
+    by_key: dict[str, list[StreamSpec]] = {}
+    for spec in specs:
+        by_key.setdefault(spec.key, []).append(spec)
+
+    for key, group in by_key.items():
+        shared = len(group) > 1
+        # A key must belong to exactly one role: mixing action-shaped and
+        # observation-shaped specs would make the key's routing (state
+        # column vs action column) depend on which slice a consumer
+        # inspects. Base StreamSpec counts as observation-shaped.
+        action_topics = [s.source.channel.topic for s in group if isinstance(s, ActionStreamSpec)]
+        if action_topics and len(action_topics) < len(group):
+            obs_topics = [s.source.channel.topic for s in group if not isinstance(s, ActionStreamSpec)]
+            raise ContractValidationError(
+                f"Key '{key}' is shared by observation-shaped specs "
+                f"({obs_topics}) and action-shaped specs ({action_topics}); "
+                f"a frame key must belong to exactly one role."
+            )
+        categories = {spec_category(s) for s in group}
+        if shared and categories != {"numeric"}:
+            raise ContractValidationError(
+                f"Key '{key}' is shared by {len(group)} specs but is not "
+                f"all-numeric ({sorted(categories)}). Images and strings "
+                f"cannot be concatenated; give each its own key."
+            )
+        dtypes = {s.dtype for s in group}
+        if len(dtypes) > 1:
+            raise ContractValidationError(
+                f"Key '{key}' is shared by specs with different dtypes "
+                f"({sorted(dtypes)}). Specs sharing a key must resolve to "
+                f"one dtype; set dtype: explicitly to align them."
+            )
+        if shared:
+            nameless = [s.source.channel.topic for s in group if not s.names]
+            if nameless:
+                raise ContractValidationError(
+                    f"Key '{key}' is shared by multiple specs, but "
+                    f"{nameless} have no select. Concatenation needs "
+                    f"static dims; add select: to every spec of a shared key."
+                )
+
+        # Rendered feature names must be unique per key: two sources can
+        # legally flatten to the same name via different (namespace, name)
+        # pairs (e.g. namespace None + "b.data" vs namespace "b" + "data"),
+        # which would silently collide in FrameLayout.lerobot_features().
+        seen_names: dict[str, str] = {}
+        for s in group:
+            for name in s.namespaced_names:
+                other = seen_names.get(name)
+                if other is not None:
+                    raise ContractValidationError(
+                        f"Key '{key}': rendered feature name '{name}' from topic "
+                        f"{s.source.channel.topic} collides with the same name from "
+                        f"topic {other}. Rendered names must be unique within a key."
+                    )
+                seen_names[name] = s.source.channel.topic
+
+        # Backstop for hand-built specs. Contract-resolved dtypes are
+        # already vocabulary-checked at load (schema._validate_dtype).
+        dtype = next(iter(dtypes))
+        if spec_category(group[0]) == "numeric" and dtype not in SUPPORTED_NUMERIC_DTYPES:
+            raise ContractValidationError(
+                f"Unsupported dtype '{dtype}' for key '{key}'. "
+                f"Supported: {', '.join(sorted(SUPPORTED_NUMERIC_DTYPES))}."
+            )
+
+    return by_key

@@ -28,7 +28,7 @@ from __future__ import annotations
 import importlib.metadata as _ilm
 from typing import Any
 
-from ..contract.plugins import instantiate_entry_point
+from ..plugins import instantiate_entry_point
 from .protocols import DatasetWriter, PolicyRunner
 
 DATASET_WRITER_GROUP = "rosetta.dataset_writers"

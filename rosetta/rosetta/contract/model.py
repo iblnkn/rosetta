@@ -17,7 +17,7 @@ The contract document model: enums and dataclasses, no parsing.
 
 :mod:`.schema` parses YAML into these types and re-exports them;
 :mod:`.specs` resolves them into runtime stream specs. This module imports
-only :mod:`.errors`, so any layer can import it without cycles.
+only :mod:`rosetta.errors`, so any layer can import it without cycles.
 
 A contract binds channels to frame keys. Every frame-clock entry reads::
 
@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Iterable
 
-from .errors import ContractValidationError
+from ..errors import ContractValidationError
 
 
 class ResamplePolicy(StrEnum):

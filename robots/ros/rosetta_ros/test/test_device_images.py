@@ -28,11 +28,12 @@ import numpy as np
 import pytest
 from bridge_helpers import FakeLogger, bridge_on_graph, spin_until
 
-from rosetta.contract.operators import OperatorContext, build_operator
+from rosetta.arrays import to_host
+from rosetta.codecs import DECODERS
+from rosetta.contract.interfaces import discover_codecs
 from rosetta.contract.schema import Align, Channel, Source
 from rosetta.contract.specs import ObservationStreamSpec
-from rosetta.frames.arrays import to_host
-from rosetta.frames.codecs import DECODERS, discover_codecs
+from rosetta.operators import OperatorContext, build_operator
 from rosetta_ros import decoders, topic_bridge
 from rosetta_ros.buffers import device_memory_unavailable, message_bytes
 from rosetta_ros.decoders import ImageDataMissing

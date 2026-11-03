@@ -29,9 +29,9 @@ import numpy as np
 import pytest
 from codec_helpers import require_message
 
+from rosetta.arrays import to_host
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_observation_specs
-from rosetta.frames.arrays import to_host
 from rosetta.frames.codecs import host_only_reason
 from rosetta_ros import decoders
 from rosetta_ros.decoders import TensorDataMissing, decode_tensor
@@ -325,10 +325,10 @@ observations:
 @pytest.mark.parametrize("dtype", ["float32", "float16", "int16"])
 def test_tensor_on_an_image_key_must_be_uint8(dtype):
     # A normalized float image cast to uint8 would reach the policy as black.
-    from rosetta.contract.operators import OperatorContext, build_operator
     from rosetta.contract.schema import Align, Channel, Source
     from rosetta.contract.specs import ObservationStreamSpec
     from rosetta.frames.codecs import decode_value
+    from rosetta.operators import OperatorContext, build_operator
 
     spec = ObservationStreamSpec(
         key="observation.images.cam",
