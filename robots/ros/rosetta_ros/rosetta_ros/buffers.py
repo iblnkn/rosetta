@@ -33,6 +33,7 @@ that use it stay importable without ROS.
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
@@ -40,14 +41,9 @@ import numpy as np
 _KDL_CUDA = 2
 _CUDA_LEGACY_STREAM = 1
 
-SUPPORTED_BUFFER_BACKENDS = ("cuda",)
-"""rosidl buffer backends whose memory rosetta imports."""
 
-
-def device_memory_unavailable(buffer_backend: str) -> str | None:
-    """Why this process can't import ``buffer_backend`` memory, or None if it can."""
-    if buffer_backend not in SUPPORTED_BUFFER_BACKENDS:
-        return f"buffer backend '{buffer_backend}' is not supported (supported: {list(SUPPORTED_BUFFER_BACKENDS)})"
+def _cuda_unavailable() -> str | None:
+    """What the ``cuda`` backend needs: torch with a CUDA device, cuda_buffer and torch_conversions."""
     if importlib.util.find_spec("torch") is None:
         return "'torch' is not installed"
     import torch
@@ -58,6 +54,22 @@ def device_memory_unavailable(buffer_backend: str) -> str | None:
         if importlib.util.find_spec(module) is None:
             return f"'{module}' is not installed (build it from ros2/rosidl_buffer_backends)"
     return None
+
+
+# Each backend checks its own requirements, so supporting another one adds an
+# entry here rather than changing what the others need.
+_BACKEND_REQUIREMENTS: dict[str, Callable[[], str | None]] = {"cuda": _cuda_unavailable}
+
+SUPPORTED_BUFFER_BACKENDS = tuple(_BACKEND_REQUIREMENTS)
+"""rosidl buffer backends whose memory rosetta imports."""
+
+
+def device_memory_unavailable(buffer_backend: str) -> str | None:
+    """Why this process can't import ``buffer_backend`` memory, or None if it can."""
+    requirements = _BACKEND_REQUIREMENTS.get(buffer_backend)
+    if requirements is None:
+        return f"buffer backend '{buffer_backend}' is not supported (supported: {list(SUPPORTED_BUFFER_BACKENDS)})"
+    return requirements()
 
 
 def message_bytes(data: Any) -> Any:
