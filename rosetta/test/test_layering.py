@@ -37,7 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent / "rosetta"
 
 LAYERS = {
-    "rosetta": 0,
+    "rosetta": 0,  # the package's __init__ only
     "rosetta.errors": 0,
     "rosetta.plugins": 0,
     "rosetta.arrays": 0,
@@ -66,9 +66,15 @@ def _modules() -> dict[str, Path]:
 
 
 def _owner(module: str) -> str | None:
-    """The closest ancestor (or the module itself) named in LAYERS."""
+    """The closest ancestor (or the module itself) named in LAYERS.
+
+    The ``rosetta`` package itself owns only its ``__init__``, so a new
+    top-level module has no layer until LAYERS names it.
+    """
+    if module == "rosetta":
+        return "rosetta"
     parts = module.split(".")
-    for i in range(len(parts), 0, -1):
+    for i in range(len(parts), 1, -1):
         candidate = ".".join(parts[:i])
         if candidate in LAYERS:
             return candidate

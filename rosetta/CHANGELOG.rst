@@ -4,6 +4,21 @@ Changelog for package rosetta
 
 Forthcoming
 -----------
+* **Breaking: core is layered, and some modules moved.** ``rosetta.errors``,
+  ``rosetta.plugins``, ``rosetta.operators`` and ``rosetta.arrays`` were
+  ``rosetta.contract.errors``, ``rosetta.contract.plugins``,
+  ``rosetta.contract.operators`` and ``rosetta.frames.arrays``.
+  ``rosetta.frames.naming`` is ``rosetta.contract.naming``. The codec registry
+  (``register_decoder``, ``register_encoder``, ``CODEC_ENTRY_POINT_GROUP``,
+  ``SUPPORTED_NUMERIC_DTYPES``, ``DecoderFn``, ``EncoderFn`` and the lookups)
+  moved from ``rosetta.frames.codecs`` to ``rosetta.codecs``.
+  ``rosetta.frames.codecs`` keeps ``decode_value``, ``encode_value``,
+  ``host_only_reason`` and ``discover_codecs``.
+* Breaking: the registry lookups (``has_decoder`` and the like) no longer run
+  codec discovery. Load a contract, or call ``discover_codecs()``, first.
+* Contract loading needs only ``rosetta.contract.interfaces.ContractInterface``
+  from a robot interface, so an interface without ``connect`` loads contracts
+  again. ``RobotInterface`` is ``ContractInterface`` plus ``connect``.
 * **Breaking: the ROS 2 code moved to the new ``rosetta_ros`` package.**
   ``rosetta.robots.ros2.X`` is now ``rosetta_ros.X``, and the launch files,
   params, example contracts and the four executables moved with it
