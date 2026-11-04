@@ -56,6 +56,7 @@ from .registry import (
     FRAME_READER_GROUP,
     available_dataset_writers,
     available_frame_readers,
+    frame_reader_class,
     load_dataset_writer,
     load_frame_reader,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "Windows",
     "available_dataset_writers",
     "available_frame_readers",
+    "frame_reader_class",
     "load_dataset_writer",
     "load_frame_reader",
 ]

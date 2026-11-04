@@ -504,6 +504,26 @@ def test_rerun_reader_refuses_task_topics(tmp_path):
         RerunReader(catalog_url="rerun+http://127.0.0.1:1", dataset="x", contract=contract)
 
 
+def test_rerun_reader_takes_segments_as_a_comma_separated_string(contract_path, monkeypatch):
+    """--rosetta.segments=a,b arrives as one string, and the catalog is asked for segments a and b."""
+    from rerun_rosetta import reader as reader_module
+
+    asked = []
+
+    def observation_starts(entry, contract, segments=None):
+        asked.append(segments)
+        raise RuntimeError("stop before the catalog")
+
+    monkeypatch.setattr(reader_module, "observation_starts", observation_starts)
+    monkeypatch.setattr(reader_module.RerunReader, "_entry", lambda self: None)
+    reader = reader_module.RerunReader(
+        catalog_url="rerun+http://127.0.0.1:1", dataset="x", contract=contract_path, segments="a,b"
+    )
+    with pytest.raises(RuntimeError, match="stop before the catalog"):
+        reader.prepare({"action": range(2)})
+    assert asked == [["a", "b"]]
+
+
 def test_rerun_reader_shuffle_options_parse_from_strings():
     from rerun.experimental.dataloader import BlockShuffle, NoShuffle, SampleShuffle
     from rerun_rosetta.reader import _shuffle_strategy

@@ -16,10 +16,12 @@
 
 :class:`~lerobot_dataset_rosetta.dataset_writer.LeRobotDatasetWriter` copies
 the contract to :data:`LEROBOT_CONTRACT_SIDECAR_PATH` in each dataset.
-:func:`find_contract_for_pretrained` follows a LeRobot checkpoint back to that
-file. These helpers find files in a local directory or an HF Hub repo
-(``huggingface_hub`` is optional). Failures go to the ``warn`` callback so ROS
-callers can route them to their own logger.
+:func:`find_contract_for_pretrained` finds the contract a LeRobot checkpoint was
+trained with: in the checkpoint itself (``rosetta-lerobot-train`` puts it
+there), or by following the checkpoint back to that file. These helpers find
+files in a local directory or an HF Hub repo (``huggingface_hub`` is
+optional). Failures go to the ``warn`` callback so ROS callers can route them
+to their own logger.
 
 ``HF_HUB_OFFLINE=1`` keeps Hub probes off the network; cached files still
 resolve.
@@ -34,10 +36,23 @@ from typing import Callable, Literal
 
 from rosetta.contract.sidecar import CONTRACT_SIDECAR_FILENAME
 
-__all__ = ["LEROBOT_CONTRACT_SIDECAR_PATH", "find_contract_for_pretrained", "resolve_repo_file"]
+__all__ = [
+    "LEROBOT_CONTRACT_SIDECAR_PATH",
+    "READER_DATASET_NAMESPACE",
+    "find_contract_for_pretrained",
+    "resolve_repo_file",
+]
 
 LEROBOT_CONTRACT_SIDECAR_PATH = f"meta/{CONTRACT_SIDECAR_FILENAME}"
 """Repo-relative sidecar path in the LeRobot dataset layout (extra file under ``meta/``)."""
+
+READER_DATASET_NAMESPACE = "rosetta-lerobot-train"
+"""Namespace of the placeholder ``--dataset.repo_id`` that ``rosetta-lerobot-train`` sets.
+
+No dataset holds the contract of a checkpoint trained from a frame reader, so
+:func:`find_contract_for_pretrained` never looks a repo in this namespace up
+on the Hub.
+"""
 
 _HUB_ETAG_TIMEOUT_S = 5.0  # best-effort probe; don't let a slow Hub stall lifecycle configure
 
@@ -96,12 +111,22 @@ def find_contract_for_pretrained(
     *,
     warn: Callable[[str], None] = logging.warning,
 ) -> Path | None:
-    """Chase a pretrained checkpoint -> train_config.json -> dataset -> its contract sidecar.
+    """The contract ``pretrained`` was trained with, or ``None``.
 
-    Never raises: any missing link returns ``None`` after a warning naming it.
+    First the checkpoint's own ``rosetta_contract.yaml``, which
+    ``rosetta-lerobot-train`` writes next to the weights. Then the chase a
+    ported dataset needs: checkpoint -> ``train_config.json`` -> dataset -> its
+    contract sidecar. Never raises: any missing link returns ``None`` after a
+    warning naming it.
     """
     if not pretrained:
         return None
+
+    # Most checkpoints trained on a ported dataset don't have it, so a miss
+    # here is quiet; the chase below warns about what it can't find.
+    own = resolve_repo_file(pretrained, CONTRACT_SIDECAR_FILENAME, repo_type="model", warn=lambda _: None)
+    if own is not None:
+        return own
 
     train_config_path = resolve_repo_file(pretrained, "train_config.json", repo_type="model", warn=warn)
     if train_config_path is None:
@@ -114,14 +139,21 @@ def find_contract_for_pretrained(
         warn(f"Failed to read dataset reference from {train_config_path}: {e}")
         return None
     dataset_refs = list(dict.fromkeys(ref for ref in dataset_refs if isinstance(ref, str) and ref))
+    placeholders = [ref for ref in dataset_refs if ref.startswith(f"{READER_DATASET_NAMESPACE}/")]
+    for ref in placeholders:
+        warn(
+            f"{pretrained} was trained from a frame reader ({ref}) and holds no {CONTRACT_SIDECAR_FILENAME}, "
+            "as a model pushed to the Hub doesn't. Pass contract_path."
+        )
+    dataset_refs = [ref for ref in dataset_refs if ref not in placeholders]
     if not dataset_refs:
-        warn(f"{train_config_path}: dataset has neither a usable 'root' nor 'repo_id'")
+        if not placeholders:
+            warn(f"{train_config_path}: dataset has neither a usable 'root' nor 'repo_id'")
         return None
 
     # root first, then repo_id: a root recorded on the training machine is
     # usually missing on the robot, while the Hub copy carries the sidecar too.
-    for ref in dataset_refs:
-        found = resolve_repo_file(ref, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=warn)
-        if found is not None:
-            return found
-    return None
+    found = (
+        resolve_repo_file(ref, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=warn) for ref in dataset_refs
+    )
+    return next((path for path in found if path is not None), None)
