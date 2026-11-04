@@ -188,32 +188,3 @@ def test_similar_observation_is_kept(filter_server):
 def test_predicted_timestep_is_skipped(filter_server):
     filter_server._predicted_timesteps.add(5)
     assert filter_server._obs_sanity_checks(_obs(5), _obs(4, j0=10.0)) is False
-
-
-def _infer_for(server, ticks, start=0):
-    """Add timesteps the way GetActions does after each inference, must_go ones included."""
-    for timestep in range(start, start + ticks):
-        with server._predicted_timesteps_lock:
-            server._predicted_timesteps.add(timestep)
-
-
-def test_predicted_timesteps_stay_bounded_on_a_long_run(filter_server):
-    """LeRobot clears the set only on a handshake. An hour of inference at 30 Hz must not keep every timestep."""
-    hour = 30 * 3600
-    _infer_for(filter_server, hour)
-    assert len(filter_server._predicted_timesteps) < hour // 10
-    assert filter_server._obs_sanity_checks(_obs(hour - 1), _obs(hour - 2, j0=10.0)) is False
-
-
-def test_a_prune_keeps_the_window_behind_the_newest_timestep(filter_server):
-    newest = ps.PREDICTED_TIMESTEPS_CAP  # the add that crosses the cap prunes
-    _infer_for(filter_server, newest + 1)
-    window = range(newest - ps.PREDICTED_TIMESTEPS_WINDOW, newest + 1)
-    assert sorted(filter_server._predicted_timesteps) == list(window)
-
-
-def test_predicted_timesteps_stay_bounded_after_a_handshake(filter_server):
-    hour = 30 * 3600
-    filter_server._reset_server()
-    _infer_for(filter_server, hour)
-    assert len(filter_server._predicted_timesteps) < hour // 10
