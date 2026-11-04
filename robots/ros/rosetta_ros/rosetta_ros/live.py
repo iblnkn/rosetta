@@ -23,6 +23,7 @@ the contract's teleop events.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -44,6 +45,8 @@ __all__ = [
     "RosConnection",
     "read_events",
 ]
+
+_logger = logging.getLogger(__name__)
 
 
 def read_events(state: Mapping[str, bool], msg: Any, select: Mapping[str, str]) -> dict[str, bool]:
@@ -138,8 +141,13 @@ class RosConnection:
             # trigger_* returns the transition's result rather than raising.
             require_transition_success(node.trigger_configure(), "configure")
             require_transition_success(node.trigger_activate(), "activate")
-        except Exception:
-            self.close()
+        except Exception as e:
+            # The start's error is the one to raise. A cleanup that fails too
+            # (a spin thread that won't join) rides along as a note.
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                e.add_note(f"Closing after the failed start also failed: {cleanup_error!r}")
             raise
         self._clock = _LiveClock(self)
 
@@ -190,12 +198,29 @@ class RosConnection:
         node, self._node = self._node, None
         try:
             if node is not None:
-                if node.is_active:
-                    node.trigger_deactivate()
-                if node.is_configured:
-                    node.trigger_cleanup()
+                was_active = node.is_active
+                try:
+                    if self._host.context_ok:
+                        if node.is_active:
+                            node.trigger_deactivate()
+                        if node.is_configured:
+                            node.trigger_cleanup()
+                    elif was_active:
+                        _warn_no_safety_action()
+                except Exception:
+                    # The context can go down between the check and the publish.
+                    if self._host.context_ok:
+                        raise
+                    if was_active:
+                        _warn_no_safety_action()
         finally:
             self._host.stop()
+
+
+def _warn_no_safety_action() -> None:
+    # Shut down from outside (rclpy.shutdown, or rclpy's signal handler where a
+    # process installs it): nothing can be published any more.
+    _logger.warning("RosConnection closed after its ROS context was shut down; the safety action could not be sent")
 
 
 class _LiveClock:

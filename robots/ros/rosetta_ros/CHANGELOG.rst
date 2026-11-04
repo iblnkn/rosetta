@@ -4,6 +4,13 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* A live connection whose ROS context is shut down outside ``close()`` (by
+  ``rclpy.shutdown()`` on it, or by rclpy's signal handler in a process that
+  installs one) raises on its next call instead of serving its last frames
+  and a stopped clock. Its ``close()`` then logs that the safety action could
+  not be sent.
+* A live connection that fails to start raises its own error when closing it
+  afterwards fails too. The close error is attached as a note.
 * The recorder hands the prompt, contract and goal id to rosbag2 as
   ``custom_data`` when it opens a bag, not only after it closes, so a storage
   plugin that keeps the metadata inside the recording (``rosbag2_storage_rrd``)
