@@ -14,6 +14,7 @@
 
 """Ros2Interface.connect: the live robot a framework opens, against a real ROS graph."""
 
+import logging
 import time
 from types import SimpleNamespace
 
@@ -167,6 +168,66 @@ def test_a_connection_whose_spin_thread_died_raises_instead_of_serving_stale_fra
         with pytest.raises(RuntimeError, match="spin thread died"):
             call()
     conn.close()
+
+
+def test_a_connection_whose_context_was_shut_down_raises_instead_of_serving_stale_frames(contract, caplog, monkeypatch):
+    """rclpy.shutdown on the context, or rclpy's signal handler where a process installs it, outside close()."""
+    # launch_testing's pytest plugin installs launch's Logger class, which stops
+    # every new logger propagating to the root, where caplog listens.
+    monkeypatch.setattr(logging.getLogger("rosetta_ros.live"), "propagate", True)
+    conn = _connect(contract)
+    rclpy.shutdown(context=conn._host._context)
+    conn._host._spin_thread.join(timeout=5.0)
+    assert not conn._host._spin_thread.is_alive()
+    with pytest.raises(RuntimeError, match="context was shut down"):
+        conn.sample_frame()
+    with pytest.raises(RuntimeError, match="context was shut down"):
+        conn.clock.now_ns()
+    with caplog.at_level(logging.WARNING, logger="rosetta_ros.live"):
+        conn.close()
+    assert "the safety action could not be sent" in caplog.text
+    assert conn._host.node is None
+
+
+def test_a_context_shut_down_during_a_callback_still_stops_the_connection(contract):
+    """rclpy's spin() returns without raising when the context goes down while a callback runs."""
+    import threading
+
+    conn = _connect(contract)
+    inside, release = threading.Event(), threading.Event()
+
+    def blocking_callback():
+        inside.set()
+        release.wait(5.0)
+
+    conn._host.node.create_timer(0.01, blocking_callback)
+    assert inside.wait(5.0)
+    rclpy.shutdown(context=conn._host._context)
+    release.set()
+    conn._host._spin_thread.join(timeout=5.0)
+    assert not conn._host._spin_thread.is_alive()
+    with pytest.raises(RuntimeError, match="context was shut down"):
+        conn.sample_frame()
+    conn.close()  # the shutdown destroyed the timer with the node's other entities
+
+
+def test_a_failed_start_raises_its_own_error_when_cleanup_fails_too(contract, monkeypatch):
+    from rosetta_ros import live
+
+    def refuse(result, transition):
+        raise RuntimeError(f"{transition} refused")
+
+    close = live.RosConnection.close
+
+    def close_then_fail(self):
+        close(self)
+        raise RuntimeError("spin thread did not exit")
+
+    monkeypatch.setattr(live, "require_transition_success", refuse)
+    monkeypatch.setattr(live.RosConnection, "close", close_then_fail)
+    with pytest.raises(RuntimeError, match="configure refused") as excinfo:
+        _connect(contract)
+    assert any("spin thread did not exit" in note for note in excinfo.value.__notes__)
 
 
 @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")  # the crash is the point

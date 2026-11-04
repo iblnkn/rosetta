@@ -58,9 +58,20 @@ class NodeHost:
         have all silently stopped, so serving the node as if it were healthy
         would let callers keep reading ever-staler data.
         """
+        if self._context is not None and not self._context.ok():
+            # Shut down outside stop(): rclpy.shutdown, or rclpy's signal
+            # handler where a process installs one. Checked here rather than
+            # in _spin, because spin() returns without raising when the
+            # context goes down while a callback runs.
+            raise RuntimeError("NodeHost's ROS context was shut down outside stop(); node is not being spun")
         if self._spin_exc is not None:
             raise RuntimeError("NodeHost spin thread died; node is not being spun") from self._spin_exc
         return self._node
+
+    @property
+    def context_ok(self) -> bool:
+        """True while the host's ROS context is up: started, and not shut down by stop() or from outside."""
+        return self._context is not None and self._context.ok()
 
     def start(self, make_node: Callable[[Context], Node]) -> Node:
         """Create the node and start spinning it (idempotent).
@@ -98,7 +109,7 @@ class NodeHost:
         try:
             executor.spin()  # blocks until stop() shuts the executor down
         except ExternalShutdownException:
-            pass  # context torn down out from under the executor
+            pass  # context torn down out from under the executor; node checks the context
         except BaseException as e:
             # A callback raised. Poison the host so the next node access
             # fails loudly, then re-raise for the thread excepthook.

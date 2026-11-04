@@ -4,6 +4,10 @@ Changelog for package lerobot_rosetta
 
 Forthcoming
 -----------
+* The policy server keeps its set of inferred timesteps bounded. LeRobot
+  clears it only on a handshake, so a long run grew it by one entry per
+  inference, up to about 100,000 an hour when it infers every frame at
+  30 Hz.
 * ``LeRobotPolicyRunner.find_contract`` follows a checkpoint to its training
   dataset's contract, which ``policy_runner_node`` uses when
   ``contract_path`` is empty. ``lerobot_rosetta`` now depends on

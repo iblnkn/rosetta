@@ -74,6 +74,28 @@ from lerobot.transport import (
 
 from lerobot_rosetta.device import resolve_policy_device
 
+# LeRobot adds every inferred timestep to _predicted_timesteps and clears the
+# set only on a handshake, so a long run grows it by one entry per inference:
+# up to about 100,000 an hour when it infers every frame at 30 Hz. Past the
+# cap, timesteps more than the window behind the newest are dropped. A
+# client's timesteps only increase within a session.
+PREDICTED_TIMESTEPS_CAP = 10_000
+PREDICTED_TIMESTEPS_WINDOW = 1_000
+
+
+class _RecentTimesteps(set):
+    """The timesteps a server has inferred, the recent ones only once there are many.
+
+    LeRobot calls ``add`` from ``GetActions`` for every inference, ``must_go``
+    observations included, so the bound holds on every path.
+    """
+
+    def add(self, timestep) -> None:
+        super().add(timestep)
+        if len(self) > PREDICTED_TIMESTEPS_CAP:
+            oldest = max(self) - PREDICTED_TIMESTEPS_WINDOW
+            self.difference_update([t for t in self if t < oldest])
+
 
 class RosettaPolicyServer(PolicyServer):
     """PolicyServer that loads the policy once and reuses it across handshakes."""
@@ -82,6 +104,13 @@ class RosettaPolicyServer(PolicyServer):
         super().__init__(config)
         # (pretrained_name_or_path, device) of the loaded policy.
         self._loaded_key: tuple[str, str] | None = None
+        self._predicted_timesteps = _RecentTimesteps()
+
+    def _reset_server(self) -> None:
+        """LeRobot's reset on a client's Ready, keeping the timestep set bounded."""
+        super()._reset_server()
+        with self._predicted_timesteps_lock:
+            self._predicted_timesteps = _RecentTimesteps()
 
     # LeRobot 0.6.1's version also skips an observation whose joint state is
     # within L2 1.0 of the last one inferred (see the module docstring). This
