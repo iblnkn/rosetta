@@ -42,7 +42,7 @@ from rerun.experimental.dataloader import Field, FixedRateSampling
 from rosetta.contract.schema import ResamplePolicy
 from rosetta.contract.specs import iter_observation_specs, iter_policy_specs
 
-from .decoders import ContractDecoder
+from .decoders import ContractDecoder, PositionDecoder
 
 if TYPE_CHECKING:
     from rosetta.contract.schema import Contract
@@ -68,6 +68,10 @@ class CompiledQuery:
     windows: dict[str, tuple[int, int]]  # contract key -> inclusive (start, end) grid offsets
 
 
+POSITION_FIELD = "position"
+"""The field holding each sample's ``(segment_id, index_ns)``, when asked for."""
+
+
 def field_key(position: int) -> str:
     return f"f{position}"
 
@@ -78,6 +82,7 @@ def compile_contract(
     layout: RecordingLayout,
     *,
     windows: dict[str, tuple[int, int]] | None = None,
+    positions: bool = False,
 ) -> CompiledQuery:
     """Project ``contract`` onto a dataset whose schema has ``columns``. Raises on unsupported contracts.
 
@@ -88,6 +93,9 @@ def compile_contract(
     steps, e.g. ``{"action": (0, 49)}`` for a 50-step action chunk. A windowed
     key's frame value stacks one value per offset. The dataloader trims each
     episode so that every window lies inside it, so nothing is ever padded.
+
+    With ``positions``, a field named :data:`POSITION_FIELD` reports each
+    sample's ``(segment_id, index_ns)``.
 
     Each stream reads the column the layout names. A missing observation topic
     raises, since its frames would be all zeros; any other missing topic warns
@@ -124,6 +132,7 @@ def compile_contract(
 
     columns = set(columns)
     observation_keys = {s.key for s in iter_observation_specs(contract)}
+    step_ns = round(1e9 / contract.fps)  # FixedRateSampling's step at this rate
     fields: dict[str, Field] = {}
     required: list[str] = []
     missing: list[str] = []
@@ -139,10 +148,18 @@ def compile_contract(
 
         key = field_key(position)
         window = windows.get(spec.key)
+        # Offsets in seconds on Rerun's own step, round(1e9 / fps), not k / fps.
+        # The dataloader rounds them to nanoseconds for its trim and lookups,
+        # and only whole steps keep every sample on its tick: at 15 fps, 2 / fps
+        # rounds to a nanosecond short of two steps.
+        offsets = tuple(k * step_ns / 1e9 for k in range(window[0], window[1] + 1)) if window else None
+        # The dataloader's own seconds-to-index conversion (_window_deltas), so
+        # the decoder's cache keys are the points each sample queried.
+        window_ns = tuple(round(float(o) * 1e9) for o in offsets) if offsets else (0,)
         fields[key] = Field(
             path=path,
-            decode=ContractDecoder(spec, layout.message),
-            window=tuple(step / contract.fps for step in range(window[0], window[1] + 1)) if window else None,
+            decode=ContractDecoder(spec, layout.message, window_ns=window_ns, step_ns=step_ns),
+            window=offsets,
         )
         if spec.key in observation_keys:
             required.append(key)
@@ -152,6 +169,18 @@ def compile_contract(
             f"Observation topics missing from the recordings: {missing}. Check the contract's topic names and "
             f"types against what was recorded."
         )
+
+    if positions:
+        # On a required column, so every sample has it, or on any column when
+        # the contract has no observation stream. A non-image one keeps the
+        # extra fetch small.
+        candidates = required or list(fields)
+        if not candidates:
+            raise ValueError(
+                "The recordings hold none of the contract's streams, so there is no column to number samples on."
+            )
+        by_size = sorted(candidates, key=lambda k: specs[int(k[1:])].is_image)
+        fields[POSITION_FIELD] = Field(path=fields[by_size[0]].path, decode=PositionDecoder())
 
     return CompiledQuery(
         specs=specs,

@@ -12,26 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Stats from sufficient statistics equal stats computed on every value."""
+"""Stats loaded from a stats layer."""
 
 import numpy as np
 import pytest
 
 pytest.importorskip("rerun")
 
-from rerun_rosetta.stats import (
-    QUANTILES,
-    _sufficient_statistics,
-    _write_layer,
-    histogram_stats,
-    load_stats,
-    quantile_name,
-    stats_layer_name,
-    value_stats,
-)
+from rerun_rosetta.stats import _write_layer, load_stats, stats_layer_name
 
 from rosetta.contract.schema import load_contract
 from rosetta.contract.specs import iter_policy_specs
+from rosetta.data.stats import sufficient_statistics, value_stats
 from rosetta.frames.layout import FrameLayout
 
 CONTRACT = """\
@@ -51,45 +43,6 @@ actions:
 """
 
 
-def _numpy_stats(values):
-    return {
-        "mean": values.mean(axis=0),
-        "std": values.std(axis=0),
-        "min": values.min(axis=0),
-        "max": values.max(axis=0),
-        **{quantile_name(q): v for q, v in zip(QUANTILES, np.quantile(values, QUANTILES, axis=0), strict=True)},
-    }
-
-
-@pytest.mark.parametrize("seed", range(5))
-@pytest.mark.parametrize("pixels_per_frame", [1, 2, 7, 480 * 480])
-def test_histogram_stats_equal_stats_over_every_pixel(seed, pixels_per_frame):
-    rng = np.random.default_rng(seed)
-    frames = [rng.integers(0, 256, size=(pixels_per_frame, 3), dtype=np.uint8) for _ in range(3)]
-    if seed % 2:  # concentrated values, so quantiles land between equal and unequal neighbours
-        frames = [np.minimum(f, 40) for f in frames]
-    histograms = np.zeros((3, 256), dtype=np.int64)
-    for f in frames:
-        for c in range(3):
-            histograms[c] += np.bincount(f[:, c], minlength=256)
-
-    got = histogram_stats(histograms, frames=len(frames))
-    want = _numpy_stats(np.concatenate(frames).astype(np.float64))
-    assert got["count"].tolist() == [3]
-    for name, value in want.items():
-        np.testing.assert_allclose(got[name], value, rtol=0, atol=1e-9, err_msg=name)
-
-
-def test_value_stats_of_concatenated_episodes_equal_stats_of_all_values():
-    rng = np.random.default_rng(0)
-    episodes = [rng.normal(size=(n, 4)) for n in (5, 1, 17)]
-    got = value_stats(np.concatenate(episodes))
-    want = _numpy_stats(np.concatenate(episodes))
-    assert got["count"].tolist() == [23]
-    for name, value in want.items():
-        np.testing.assert_array_equal(got[name], value, err_msg=name)
-
-
 def test_a_segment_with_no_samples_adds_nothing_to_the_stats(catalog_url, tmp_path):
     # A short episode, or one whose camera never published, has no tick to
     # sample. Its layer records 0 frames, and training still gets stats from
@@ -102,12 +55,14 @@ def test_a_segment_with_no_samples_adds_nothing_to_the_stats(catalog_url, tmp_pa
     rng = np.random.default_rng(0)
     frames = [{"observation.state": rng.normal(size=2), "action": rng.normal(size=2)} for _ in range(6)]
     name = stats_layer_name(CONTRACT)
-    _write_layer(tmp_path / "full.rrd", "full", name, *_sufficient_statistics(frames, layout), CONTRACT)
+    _write_layer(tmp_path / "full.rrd", "full", name, *sufficient_statistics(frames, layout), CONTRACT)
     _write_layer(tmp_path / "empty.rrd", "empty", name, 0, {}, CONTRACT)
     dataset = CatalogClient(catalog_url).create_dataset("stats_with_an_empty_segment")
     dataset.register([(tmp_path / f).as_uri() for f in ("full.rrd", "empty.rrd")], layer_name=name).wait()
 
-    stats = load_stats(dataset, contract_path)
+    # These segments hold only stats layers, so name them: by default
+    # load_stats takes the segments with data for every observation stream.
+    stats = load_stats(dataset, contract_path, segments=["full", "empty"])
 
     want = value_stats(np.stack([f["observation.state"] for f in frames]))
     assert stats["observation.state"]["count"].tolist() == [6]

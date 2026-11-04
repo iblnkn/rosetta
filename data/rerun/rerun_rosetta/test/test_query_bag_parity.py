@@ -118,13 +118,15 @@ TOPIC_TYPES = {
 }
 
 
-def _write_rrd_bag(bag_dir, representation: str, events=EVENTS) -> None:
+def _write_rrd_bag(bag_dir, representation: str, events=EVENTS, custom_data=None) -> None:
     config = bag_dir.parent / f"{representation}.yaml"
     config.write_text(f"representations: [{representation}]\n")
     writer = rosbag2_py.SequentialWriter()
     try:
         writer.open(
-            rosbag2_py.StorageOptions(uri=str(bag_dir), storage_id="rrd", storage_config_uri=str(config)),
+            rosbag2_py.StorageOptions(
+                uri=str(bag_dir), storage_id="rrd", storage_config_uri=str(config), custom_data=dict(custom_data or {})
+            ),
             rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
         )
     except RuntimeError as e:
@@ -295,7 +297,8 @@ def test_saved_manifest_for_other_windows_raises(dataset_name, contract, catalog
 def test_stats_layer_matches_porter_frames(bag_dir, dataset_name, contract, contract_path, catalog_url, tmp_path):
     """Stats loaded from the layer equal numpy's over every porter frame, and a second write is a no-op."""
     from rerun_rosetta import load_stats, write_stats_layer
-    from rerun_rosetta.stats import QUANTILES, quantile_name
+
+    from rosetta.data.stats import QUANTILES, quantile_name
 
     entry = CatalogClient(catalog_url).get_dataset(dataset_name)
     assert write_stats_layer(entry, contract_path, tmp_path) == entry.segment_ids()
@@ -418,3 +421,213 @@ def test_persistent_workers_reshuffle_each_epoch(ticking_dataset, contract, cata
     assert len(set(epochs[0])) == len(epochs[0])
     assert epochs[0] != epochs[1]
     assert epochs == [_epoch_ticks(fresh, fresh_loader, e) for e in range(2)]
+
+
+# ---- RerunReader: the FrameReader over the catalog, checked against the porter ----
+
+
+@pytest.fixture(scope="module")
+def prompted_dataset(tmp_path_factory, catalog_url):
+    """Two episodes recorded with operator prompts, as the recorder hands them to rosbag2 at open."""
+    root = tmp_path_factory.mktemp("bags_prompted")
+    for episode in range(2):
+        _write_rrd_bag(
+            root / f"episode_{episode}", "reflected", custom_data={"lerobot.operator_prompt": f"stack {episode}"}
+        )
+    return root, _register(catalog_url, "prompted", root)
+
+
+def test_rerun_reader_matches_porter_frames_inside_episodes(prompted_dataset, contract, contract_path, catalog_url):
+    """Each sample is the porter's frame at its frame_index, with the porter's next actions as its chunk.
+
+    Rerun trims each episode so a chunk never runs past its end, so an
+    episode serves its porter frame count less ``chunk - 1`` samples.
+    """
+    from rerun_rosetta.reader import RerunReader
+
+    root, name = prompted_dataset
+    chunk = 3
+    reader = RerunReader(catalog_url=catalog_url, dataset=name, contract=contract_path)
+    reader.prepare({"action": range(chunk)})
+    samples = _read_all(reader)
+
+    info = reader.info()
+    assert (info.pads, info.num_episodes, info.num_frames) == (False, 2, len(samples))
+    assert sorted(info.tasks) == ["stack 0", "stack 1"]
+    for episode in range(2):
+        task = f"stack {episode}"
+        expected = _porter_frames(root / f"episode_{episode}", contract)
+        have = sorted((s for s in samples if s["task"] == task), key=lambda s: s["frame_index"])
+        assert [s["frame_index"] for s in have] == list(range(len(expected) - (chunk - 1)))
+        for sample in have:
+            i = sample["frame_index"]
+            where = f"{task} frame {i}"
+            assert not sample["action_is_pad"].any()
+            assert sample["task_index"] == info.tasks.index(task)
+            assert sample["timestamp"] == pytest.approx(i / FPS)
+            for key in ("observation.state", "observation.images.cam"):
+                assert sample[key].dtype == expected[i][key].dtype, f"{where} {key}"
+                np.testing.assert_array_equal(sample[key], expected[i][key], err_msg=f"{where} {key}")
+            want_actions = np.stack([expected[i + p]["action"] for p in range(chunk)])
+            assert sample["action"].dtype == want_actions.dtype, where
+            np.testing.assert_array_equal(sample["action"], want_actions, err_msg=f"{where} action")
+
+
+def _read_all(reader):
+    return reader.read(range(reader.info().num_frames))
+
+
+def test_rerun_reader_streams_the_samples_it_reads(prompted_dataset, contract_path, catalog_url):
+    """read() (Rerun's map-style dataset) and stream() (its iterable one) serve the same samples, numbered alike."""
+    from rerun_rosetta.reader import RerunReader
+
+    _, name = prompted_dataset
+    reader = RerunReader(catalog_url=catalog_url, dataset=name, contract=contract_path, shuffle="none")
+    reader.prepare({"action": range(3)})
+    read = _read_all(reader)
+    streamed = {s["index"]: s for s in reader.stream(seed=0, epoch=0, worker=(0, 1))}
+    assert [s["index"] for s in read] == list(range(reader.info().num_frames)) == sorted(streamed)
+    assert [s["episode_index"] for s in read] == sorted(s["episode_index"] for s in read)  # episode by episode
+    for sample in read:
+        other = streamed[sample["index"]]
+        assert (sample["episode_index"], sample["frame_index"]) == (other["episode_index"], other["frame_index"])
+        for key in ("observation.state", "observation.images.cam", "action"):
+            np.testing.assert_array_equal(sample[key], other[key], err_msg=f"{sample['index']} {key}")
+
+
+def test_rerun_reader_refuses_task_topics(tmp_path):
+    from rerun_rosetta.reader import RerunReader
+
+    contract = tmp_path / "tasks.yaml"
+    contract.write_text(CONTRACT_YAML + "\ntasks:\n  task:\n    channel: {topic: /task, type: std_msgs/msg/String}\n")
+    with pytest.raises(ValueError, match="task topics"):
+        RerunReader(catalog_url="rerun+http://127.0.0.1:1", dataset="x", contract=contract)
+
+
+def test_rerun_reader_shuffle_options_parse_from_strings():
+    from rerun.experimental.dataloader import BlockShuffle, NoShuffle, SampleShuffle
+    from rerun_rosetta.reader import _shuffle_strategy
+
+    assert isinstance(_shuffle_strategy("sample", 256), SampleShuffle)
+    block = _shuffle_strategy("block", 64)
+    assert isinstance(block, BlockShuffle) and block.buffer_size == 64
+    assert isinstance(_shuffle_strategy("none", 256), NoShuffle)
+    with pytest.raises(ValueError, match="shuffle must be one of"):
+        _shuffle_strategy("random", 256)
+
+
+@pytest.fixture(scope="module")
+def partial_dataset(tmp_path_factory, catalog_url):
+    """Two complete episodes and one recorded without its camera, as early real recordings were."""
+    root = tmp_path_factory.mktemp("bags_partial")
+    for episode in range(2):
+        _write_rrd_bag(root / f"episode_{episode}", "reflected", custom_data={"lerobot.operator_prompt": "stack"})
+    no_camera = [event for event in EVENTS if event[0] != "/cam/compressed"]
+    _write_rrd_bag(root / "episode_no_camera", "reflected", events=no_camera)
+    return root, _register(catalog_url, "partial", root)
+
+
+def test_segments_missing_an_observation_stream_are_skipped(
+    partial_dataset, contract_path, catalog_url, caplog, tmp_path
+):
+    """The porter skips an episode missing an observation topic; the stats layer and the reader skip it too.
+
+    Rerun's own manifest scan fails on such a segment, so they check first.
+    """
+    from rerun_rosetta import write_stats_layer
+    from rerun_rosetta.reader import RerunReader
+
+    _, name = partial_dataset
+    dataset = CatalogClient(catalog_url).get_dataset(name)
+    assert len(write_stats_layer(dataset, contract_path, tmp_path)) == 2
+    reader = RerunReader(catalog_url=catalog_url, dataset=name, contract=contract_path)
+    reader.prepare({"action": range(2)})
+    assert reader.info().num_episodes == 2
+    assert "no data for observation streams ['observation.images.cam (/cam/compressed)']" in caplog.text
+    samples = _read_all(reader)
+    assert len(samples) == reader.info().num_frames > 0
+    assert {s["task"] for s in samples} == {"stack"}
+    assert set(reader.stats()) >= {"observation.state", "observation.images.cam"}
+
+
+# ---- RerunReader at 15 fps, where 1e9 / fps isn't a whole number of nanoseconds ----
+
+STEP_15 = 1_000_000_000 / 15
+
+
+def _events_15fps(ticks: int) -> list:
+    """A recording at 15 fps: actions from the start, then camera and state, every message mid-tick."""
+    events = [("/js_cmd", T0, _js(0.0, 0.0))]
+    for t in range(ticks):
+        at = T0 + int(t * STEP_15 + STEP_15 / 2)
+        events.append(("/js_cmd", at, _js(10.0 + t, -t)))
+        if t >= 1:
+            events.append(("/cam/compressed", at + 1_000_000, _jpeg(t)))
+            events.append(("/js_obs", at + 2_000_000, _js(0.5 * t, t * t)))
+    return events
+
+
+@pytest.fixture(scope="module")
+def contract_15fps(tmp_path_factory):
+    path = tmp_path_factory.mktemp("contract_15fps") / "parity_15fps.yaml"
+    path.write_text(CONTRACT_YAML.replace("fps: 10", "fps: 15"))
+    return path
+
+
+@pytest.fixture(scope="module")
+def dataset_15fps(tmp_path_factory, catalog_url):
+    """Two full episodes at 15 fps, and one shorter than a 3-tick action chunk after warmup."""
+    root = tmp_path_factory.mktemp("bags_15fps")
+    for episode in range(2):
+        _write_rrd_bag(
+            root / f"episode_{episode}",
+            "reflected",
+            events=_events_15fps(14),
+            custom_data={"lerobot.operator_prompt": f"stack {episode}"},
+        )
+    _write_rrd_bag(
+        root / "episode_short", "reflected", events=_events_15fps(3), custom_data={"lerobot.operator_prompt": "short"}
+    )
+    return root, _register(catalog_url, "fps15", root)
+
+
+def test_rerun_reader_numbers_an_observation_history_like_the_porter_at_15_fps(
+    dataset_15fps, contract_15fps, catalog_url
+):
+    """With a 2-tick state history, sample frame_index i holds porter frames i-2..i of state and i..i+2 of action."""
+    from rerun_rosetta.reader import RerunReader
+
+    root, name = dataset_15fps
+    contract = load_contract(contract_15fps)
+    reader = RerunReader(catalog_url=catalog_url, dataset=name, contract=contract_15fps)
+    reader.prepare({"observation.state": range(-2, 1), "action": range(3)})
+    samples = _read_all(reader)
+    for episode in range(2):
+        task = f"stack {episode}"
+        expected = _porter_frames(root / f"episode_{episode}", contract)
+        have = sorted((s for s in samples if s["task"] == task), key=lambda s: s["frame_index"])
+        assert [s["frame_index"] for s in have] == list(range(2, len(expected) - 2))
+        for sample in have:
+            i = sample["frame_index"]
+            assert sample["timestamp"] == pytest.approx(i / 15)
+            want_state = np.stack([expected[i + p]["observation.state"] for p in (-2, -1, 0)])
+            want_action = np.stack([expected[i + p]["action"] for p in range(3)])
+            np.testing.assert_array_equal(sample["observation.state"], want_state, err_msg=f"{task} {i} state")
+            np.testing.assert_array_equal(sample["action"], want_action, err_msg=f"{task} {i} action")
+            np.testing.assert_array_equal(sample["observation.images.cam"], expected[i]["observation.images.cam"])
+
+
+def test_a_recording_with_no_sample_start_is_not_an_episode(dataset_15fps, contract_15fps, catalog_url):
+    """A recording shorter than the action chunk after warmup has no samples, so LeRobot never sees an empty episode."""
+    from rerun_rosetta.reader import RerunReader
+
+    _, name = dataset_15fps
+    reader = RerunReader(catalog_url=catalog_url, dataset=name, contract=contract_15fps)
+    reader.prepare({"action": range(3)})
+    info = reader.info()
+    assert info.num_episodes == 2
+    assert 0 not in info.episode_lengths
+    assert sorted(info.tasks) == ["stack 0", "stack 1"]
+    episodes = [s["episode_index"] for s in _read_all(reader)]
+    assert [episodes.count(e) for e in range(info.num_episodes)] == list(info.episode_lengths)
+    assert set(episodes) == {0, 1}

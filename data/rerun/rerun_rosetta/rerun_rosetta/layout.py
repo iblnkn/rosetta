@@ -27,16 +27,19 @@ named after the contract's ``robot_interface``::
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from rosetta.contract.specs import iter_observation_specs
 from rosetta.plugins import instantiate_entry_point
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from rerun.catalog import DatasetEntry
 
-    from rosetta.contract.schema import Channel
+    from rosetta.contract.schema import Channel, Contract
 
 LAYOUT_GROUP = "rerun_rosetta.layouts"
 
@@ -79,3 +82,51 @@ def load_layout(robot_interface: str) -> RecordingLayout:
     """
     eps = list(entry_points(group=LAYOUT_GROUP))
     return instantiate_entry_point(eps, LAYOUT_GROUP, robot_interface, RecordingLayout, "Rerun recording layout")
+
+
+def observation_starts(entry: DatasetEntry, contract: Contract, segments: list[str] | None = None) -> dict[str, int]:
+    """Each segment holding every observation stream, with the index value at which the last of them starts.
+
+    That is where the porter's warmup ends: its first frame is the first tick
+    at or after it. The porter skips an episode missing an observation topic,
+    and so does this reader, warning about each one left out. Rerun's manifest
+    scan would instead fail on it outright, so the segments are checked first:
+    one query per stream's entity, for each segment's first index value with
+    any of its rows. A missing action stream is left to zero-fill, as the
+    porter does.
+    """
+    import pyarrow as pa
+    from datafusion import col
+    from datafusion import functions as f
+
+    layout = load_layout(contract.robot_interface)
+    columns = entry.schema().column_names()
+    candidates = sorted(segments if segments is not None else entry.segment_ids())
+    entities: dict[str, str] = {}
+    for spec in iter_observation_specs(contract):
+        try:
+            column = layout.column(spec.source.channel, columns)
+        except ValueError:
+            continue  # compile_contract reports a stream recorded in a form the layout can't read
+        if column is not None:
+            entities[f"{spec.key} ({spec.source.channel.topic})"] = column.split(":", 1)[0]
+    first: dict[str, dict[str, int]] = {}
+    for entity in set(entities.values()):
+        table = (
+            entry.filter_contents([f"{entity}/**"])
+            .reader(index=layout.index)
+            .aggregate([col("rerun_segment_id")], [f.min(col(layout.index)).alias("first")])
+            .to_arrow_table()
+        )
+        segment_ids = table.column("rerun_segment_id").to_pylist()
+        first[entity] = dict(zip(segment_ids, table.column("first").cast(pa.int64()).to_pylist(), strict=True))
+    starts = {}
+    for segment in candidates:
+        missing = sorted(stream for stream, entity in entities.items() if segment not in first[entity])
+        if missing:
+            logging.warning("Skipping segment %s: no data for observation streams %s", segment, missing)
+        else:
+            starts[segment] = max((first[entity][segment] for entity in set(entities.values())), default=None)
+    if not starts:
+        raise ValueError("No segment of this dataset has data for every observation stream in the contract")
+    return starts

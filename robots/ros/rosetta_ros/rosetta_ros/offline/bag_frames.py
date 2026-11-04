@@ -364,7 +364,9 @@ def iter_bag_frames(
 
     try:
         while reader.has_next():
-            topic, data, bag_ns = reader.read_next()
+            # read_next() is deprecated on Lyrical and warns once per message. The send
+            # timestamp read_next_ext() also returns isn't used.
+            topic, data, bag_ns, _ = reader.read_next_ext()
 
             # Emit ticks strictly before this message's receive time. The strict
             # comparison keeps a message received exactly at tick t in frame t

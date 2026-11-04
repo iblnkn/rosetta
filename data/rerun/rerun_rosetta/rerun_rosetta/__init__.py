@@ -35,12 +35,14 @@ Registration is Rerun's own catalog API::
 from .dataset import ContractFrames, contract_dataset
 from .layout import RecordingLayout, load_layout
 from .query import CompiledQuery, compile_contract
+from .reader import RerunReader
 from .stats import load_stats, stats_layer_name, write_stats_layer
 
 __all__ = [
     "CompiledQuery",
     "ContractFrames",
     "RecordingLayout",
+    "RerunReader",
     "compile_contract",
     "contract_dataset",
     "load_layout",
