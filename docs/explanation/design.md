@@ -88,6 +88,15 @@ LeRobot's async inference supports, read from the checkpoint it loads.
 The same three names organize the code and the repository:
 `rosetta.robots` and `robots/<middleware>/`, `rosetta.data` and
 `data/<format>/`, `rosetta.policies` and `policies/<framework>/`.
+`robots/<middleware>/` holds a middleware's robot interface and the
+packages that come with it, such as the ROS 2 nodes and message
+definitions. `policies/<framework>/` holds everything for running that
+framework live on a Rosetta robot: its policy runner, and the plugins its
+own tools load to drive the robot. So `policies/lerobot/` also holds
+LeRobot's `Robot` and `Teleoperator` plugins. Neither provides a robot
+interface. They expose a Rosetta robot to LeRobot's command-line tools, its
+async inference client and its teleoperation tools, and the LeRobot policy
+runner is built on the `Robot` plugin.
 
 A robot interface such as `rosetta_ros` registers under
 `rosetta.robot_interfaces`, named after the `robot_interface` value contracts
@@ -97,9 +106,7 @@ interface that isn't installed fails to load. A dataset writer registers
 under `rosetta.dataset_writers` and a policy runner under
 `rosetta.policy_runners`. Under ROS 2, `rosetta_port` hands frames to a
 writer offline and `policy_runner_node` hands them to a runner live, each
-looking it up by name. A dataset reader such as `rerun_rosetta` registers
-nothing with core: it hands frames straight to a training loop, so nothing
-in Rosetta needs to find one by name.
+looking it up by name.
 
 The packages stay apart. `rosetta_ros` never imports a framework, and no
 data or policy package imports ROS. When a framework hosts the run itself, as
@@ -121,7 +128,8 @@ one that points up a layer, crosses between the three, or closes a cycle.
 
 Entry points extend this. `rosetta.robot_interfaces` adds a middleware,
 `rosetta.codecs` adds message types, `rosetta.operators` adds value
-transforms, `rosetta.dataset_writers` adds a dataset format and
+transforms, `rosetta.dataset_writers` adds a dataset format,
+`rosetta.frame_readers` adds a recording format to train from, and
 `rosetta.policy_runners` adds a policy framework. A contract names its robot
 interface, message types and operators but never a dataset format or a
 framework.
@@ -137,6 +145,42 @@ moving data to the model's device always was. LeRobot's observations are
 numpy, so its runner copies each contract-sized image to the host once per
 frame, and it has no way to declare a tensor. A runner for a framework that
 takes device arrays would hand either one over where it is.
+
+## Port first, or read while training
+
+Training data can take the contract at two times. A dataset writer applies
+it once, at port time: `rosetta_port` decodes, selects, transforms and
+resamples every bag and writes the result, and LeRobot's `lerobot-train`
+reads finished files. By the time training runs, every contract decision is
+baked into them, and Rosetta isn't in the training process at all. A
+dataset reader applies it at training time instead: it reads the
+recordings and serves contract frames as the trainer asks for them. Change
+the contract and the next run sees it, with nothing to port again.
+
+Training itself stays the framework's either way. The optimizer, the loss,
+normalization and checkpoints belong to LeRobot, and a contract stops at the
+data ([Where the contract stops](#where-the-contract-stops)). What changes is how the framework meets
+Rosetta. With a writer they meet at a file format. With a reader they meet
+inside the training process, at the framework's dataset API: for LeRobot,
+the windows each policy's config asks for, `<key>_is_pad` at episode edges,
+the task string and the dataset metadata.
+
+That meeting is split in two so it scales. A reader (`rosetta.data.FrameReader`)
+knows its storage and no framework: `rerun_rosetta`'s `RerunReader` reads a
+Rerun catalog. A view knows one framework's dataset API and no
+storage: `lerobot_dataset_rosetta.view.LeRobotView` serves any reader to
+LeRobot, and `rosetta-lerobot-train` hands it to `lerobot-train`. A new
+storage needs one reader and a new framework one view, not one of each per
+pair. Readers register under `rosetta.frame_readers` and take options (where
+the recordings are), so `rosetta-lerobot-train --rosetta.reader=rerun` picks
+one by name.
+
+Not every framework needs a view. StarVLA, for one, trains from
+LeRobot-format datasets through its own loaders and has no hook for another
+dataset class, so it fits a writer, early binding, better than a view. A
+checkpoint trained through a reader has no dataset to point back to, so
+`rosetta-lerobot-train` stores the contract in the checkpoint itself, where
+the LeRobot policy runner looks first.
 
 ## One numeric key on the live path
 

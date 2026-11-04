@@ -35,11 +35,11 @@ All nine are at version 0.2.0.
 | [`rosetta_ros`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros) | `robots/ros/rosetta_ros/` | `ament_python` | The ROS 2 robot interface, registered as `ros2`: message codecs, `TopicBridge`, the node toolkit, the executables `episode_recorder_node`, `episode_keyboard_node`, `policy_runner_node` and `rosetta_port`, and the `contracts/`, `params/` and `launch/` files. |
 | [`rosetta_interfaces`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_interfaces) | `robots/ros/rosetta_interfaces/` | `ament_cmake` | The actions `RecordEpisode`, `RunPolicy` and `ManageEpisode`, the services `StartRecording`, `StartPolicy` and `StartHILEpisode`, and the six `~/status` and `~/result` messages. |
 | [`rosetta_ros_hil`](https://github.com/iblnkn/rosetta/tree/main/robots/ros/rosetta_ros_hil) | `robots/ros/rosetta_ros_hil/` | `ament_python` | The human-in-the-loop manager, `hil_manager_node`, built on the recorder, the policy runner and the node toolkit. |
-| [`lerobot_dataset_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/lerobot/lerobot_dataset_rosetta) | `data/lerobot/lerobot_dataset_rosetta/` | `ament_python` | The LeRobot dataset writer, registered as `lerobot`. It copies the contract into each dataset as `meta/rosetta_contract.yaml`. |
+| [`lerobot_dataset_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/lerobot/lerobot_dataset_rosetta) | `data/lerobot/lerobot_dataset_rosetta/` | `ament_python` | The LeRobot dataset writer, registered as `lerobot`. It copies the contract into each dataset as `meta/rosetta_contract.yaml`. Also `LeRobotView`, any frame reader as a LeRobot training dataset, and the console script `rosetta-lerobot-train`. |
 | [`lerobot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_rosetta) | `policies/lerobot/lerobot_rosetta/` | `ament_python` | The LeRobot policy runner, registered as `lerobot`. Also installs `rosetta_policy_server` and `rosetta_classifier_server` as plain console scripts, not `ros2 run` executables. |
 | [`lerobot_robot_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_robot_rosetta) | `policies/lerobot/lerobot_robot_rosetta/` | `ament_python` | A LeRobot `Robot` plugin, `--robot.type=rosetta` in LeRobot's own command-line tools. |
 | [`lerobot_teleoperator_rosetta`](https://github.com/iblnkn/rosetta/tree/main/policies/lerobot/lerobot_teleoperator_rosetta) | `policies/lerobot/lerobot_teleoperator_rosetta/` | `ament_python` | A LeRobot `Teleoperator` plugin, `--teleop.type=rosetta_teleop`. Experimental. |
-| [`rerun_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/rerun/rerun_rosetta) | `data/rerun/rerun_rosetta/` | `ament_python` | Torch datasets of contract frames, read from `.rrd` bags on a Rerun catalog server through Rerun's dataloader. A library with no entry points of its own. It reads the recording layout each robot interface registers under `rerun_rosetta.layouts`. Experimental. |
+| [`rerun_rosetta`](https://github.com/iblnkn/rosetta/tree/main/data/rerun/rerun_rosetta) | `data/rerun/rerun_rosetta/` | `ament_python` | The frame reader `rerun`: contract frames from `.rrd` bags on a Rerun catalog server, through Rerun's dataloader. It reads the recording layout each robot interface registers under `rerun_rosetta.layouts`. Experimental. |
 
 The two LeRobot plugin packages are named for LeRobot's plugin discovery,
 which imports installed packages whose names start with `lerobot_robot_` or
@@ -64,10 +64,12 @@ register the same entry points. Nothing in Rosetta changes.
 | `rosetta.codecs` | A module that calls `register_decoder` and `register_encoder` | Contract load | None |
 | `rosetta.operators` | A module that calls `register_operator` | Contract load | None |
 | `rosetta.dataset_writers` | A class implementing `DatasetWriter` | `rosetta_port --format` | `lerobot` by `lerobot_dataset_rosetta` |
+| `rosetta.frame_readers` | A class implementing `FrameReader`, built with keyword options | `rosetta-lerobot-train --rosetta.reader` | `rerun` by `rerun_rosetta` |
 | `rosetta.policy_runners` | A class implementing `PolicyRunner` | `policy_runner_node` parameter `framework` | `lerobot` by `lerobot_rosetta` |
-| `rerun_rosetta.layouts` | A class implementing `RecordingLayout`, named after a contract's `robot_interface` value | `rerun_rosetta.contract_dataset` | `ros2` by `rosetta_ros` |
+| `rerun_rosetta.layouts` | A class implementing `RecordingLayout`, named after a contract's `robot_interface` value | `rerun_rosetta.contract_dataset`, the `rerun` frame reader | `ros2` by `rosetta_ros` |
 
-Each class is instantiated with no arguments. A codec plugin that fails to
+Each class is instantiated with no arguments, except a frame reader, which
+takes keyword options. A codec plugin that fails to
 import fails every contract load in that environment. An operator plugin that
 fails to import fails every contract with an `apply` step. A robot interface
 that fails to register its codecs fails only the contracts that name it.
@@ -82,7 +84,7 @@ All interfaces share one codec registry keyed by type string. Two robot
 interfaces that register the same type string conflict, and the one later in
 name order fails to load.
 
-`lerobot_dataset_rosetta` needs `lerobot[dataset]<0.6.2` and `rosetta`.
+`lerobot_dataset_rosetta` needs `lerobot[training]<0.6.2`, `torch` and `rosetta`.
 `lerobot_rosetta` needs `lerobot<0.6.2`, `torch`, `grpcio`,
 `lerobot_dataset_rosetta` and `lerobot_robot_rosetta`. LeRobot 0.6.2 removes
 `async_inference`, which the LeRobot policy runner uses. `lerobot_robot_rosetta` and
