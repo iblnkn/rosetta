@@ -81,7 +81,9 @@ for epoch in range(10):
         ...
 ```
 
-Start a server with `rerun server` (ships with `rerun-sdk`). `file://` needs the
+Start a server with `rerun server --host 127.0.0.1` (ships with `rerun-sdk`).
+Without `--host` it listens on `0.0.0.0`, which serves the registered
+recordings to the network. `file://` needs the
 server on the same filesystem as the bags. With `num_workers > 0`, pass the
 same `num_workers` to `contract_dataset` and `multiprocessing_context="spawn"`
 to the `DataLoader`. `persistent_workers=True` works: call `set_epoch` before

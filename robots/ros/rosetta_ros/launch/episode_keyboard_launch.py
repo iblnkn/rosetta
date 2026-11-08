@@ -15,9 +15,9 @@
 """
 Launch file for episode_keyboard_node - keyboard controller for the episode recorder.
 
-Run this in a dedicated terminal alongside the episode recorder. It connects to
-the recorder's service interface (start_recording, cancel_recording, delete_last_bag)
-and lets you control recording with simple key presses.
+Run this in a dedicated terminal alongside the episode recorder. It drives the
+recorder's record_episode action and calls its delete_last_bag service, and
+lets you control recording with simple key presses.
 
 Keys:
   r / →        Start recording
@@ -28,11 +28,12 @@ Keys:
   q            Quit
 
 Usage:
-    # Default — connects to /episode_recorder/* (the recorder's node-private services)
+    # Default — /record_episode and /episode_recorder/delete_last_bag
     ros2 launch rosetta_ros episode_keyboard_launch.py
 
-    # Custom recorder namespace
-    ros2 launch rosetta_ros episode_keyboard_launch.py recorder_ns:=/my_recorder
+    # A recorder launched under a namespace
+    ros2 launch rosetta_ros episode_keyboard_launch.py \
+        recorder_ns:=/my_robot/episode_recorder recorder_action_name:=/my_robot/record_episode
 
     # Pre-set task prompt
     ros2 launch rosetta_ros episode_keyboard_launch.py default_prompt:="pick up the cube"
@@ -50,7 +51,12 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "recorder_ns",
                 default_value="/episode_recorder",
-                description="Namespace of the episode recorder node (services are resolved under it)",
+                description="The episode recorder node's full name; delete_last_bag is resolved under it",
+            ),
+            DeclareLaunchArgument(
+                "recorder_action_name",
+                default_value="/record_episode",
+                description="The recorder's RecordEpisode action",
             ),
             DeclareLaunchArgument(
                 "default_prompt",
@@ -66,6 +72,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "recorder_ns": LaunchConfiguration("recorder_ns"),
+                        "recorder_action_name": LaunchConfiguration("recorder_action_name"),
                         "default_prompt": LaunchConfiguration("default_prompt"),
                     }
                 ],

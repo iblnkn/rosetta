@@ -141,6 +141,11 @@ subscriber gets the last one.
 - A contract topic with no messages is marked `(!)` in the per-topic summary
   logged when a recording ends. Nothing stops a recording from starting
   without it.
+- When an observation or action topic has no messages, the summary is logged
+  as a warning and the result's `message` names the topics, as
+  `no messages on: /joint_states`. The termination reason and the goal state
+  are unchanged, and the bag is kept. A recording that ends in an error, or
+  whose bag was deleted, reports its error or nothing instead.
 - With `record_all`, topics on the graph that are not contract topics are
   discovered at each recording start. `/rosout` and `/parameter_events` are
   skipped unless `include_topics` matches them. A topic whose type does not import is skipped with a
@@ -170,29 +175,40 @@ subscriber gets the last one.
 
 ## episode_keyboard_node
 
-Drives the recorder's services from a terminal. Node name `episode_keyboard`.
+Drives the recorder's `RecordEpisode` action from a terminal. Node name
+`episode_keyboard`.
 Launch file `episode_keyboard_launch.py`. It needs an interactive terminal.
 Without one it exits with `Failed to enable raw terminal mode. Are you running
 in an interactive terminal?`
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
-| `recorder_ns` | string | `/episode_recorder` | Prefix of the recorder's services. The keyboard calls `<recorder_ns>/start_recording`, `<recorder_ns>/cancel_recording` and `<recorder_ns>/delete_last_bag`. |
+| `recorder_action_name` | string | `/record_episode` | The recorder's `RecordEpisode` action. Same default as `rosetta_ros_hil`'s parameter of that name. |
+| `recorder_ns` | string | `/episode_recorder` | The recorder node's full name. The keyboard calls `<recorder_ns>/delete_last_bag`. |
 | `default_prompt` | string | `""` | Initial prompt for recordings. The `t` key changes it. |
 
-Launch arguments: `recorder_ns`, `default_prompt`.
+Launch arguments: `recorder_action_name`, `recorder_ns`, `default_prompt`.
 
 | Key | Action |
 |---|---|
-| `r`, right arrow | Call `start_recording` with the current prompt. |
-| `s`, left arrow | Call `cancel_recording`. The bag is kept, and the recording ends with `termination_reason: cancelled`. |
-| `d`, Backspace | Call `cancel_recording` if recording, then `delete_last_bag`. |
+| `r`, right arrow | Send a goal with the current prompt and `max_duration_s` 0, so the recorder's `default_max_duration_s` applies. |
+| `s`, left arrow | Cancel the goal. The bag is kept, and the recording ends with `termination_reason: cancelled`. A refused cancel prints `Stop failed` and the keyboard stays recording. |
+| `d`, Backspace | Call `delete_last_bag`. Before the goal's result arrives, that marks the recording's bag for deletion when it ends, and the goal is then cancelled if it is recording. |
 | `t` | Edit the prompt. Enter applies, Esc cancels. |
 | `h`, `?` | Print the key help. |
 | `q` | Quit. |
 
+When a goal's result arrives, the keyboard prints the message count and bag
+path, or the error. A recording that ends on its time limit adds `(time
+limit)`, one ended by a deactivate adds `(recorder deactivated)`, and one
+the recorder stopped for no named reason adds `(stopped by the recorder)`. A
+non-empty `message` on a kept bag is printed with a reminder that `d` deletes
+it. A recording `d` deletes prints only the deletion, unless it ended in an
+error. Recordings other clients start are not reported.
+
 Letter keys also work in upper case. Beyond the topics and services every
-rclpy node has, the node has only the three service clients.
+rclpy node has, the node has one action client, for `recorder_action_name`,
+and one service client, for `delete_last_bag`.
 
 ## policy_runner_node
 
@@ -258,9 +274,12 @@ runner follows the checkpoint to its `train_config.json`, then to the
 training dataset's `root`, then to `meta/rosetta_contract.yaml` there. When
 `root` has no contract, as on a robot that isn't the training machine, it
 tries the dataset's `repo_id` instead.
-A link that names an existing local directory is read from it. Any other
-link is fetched from the Hub. Each missing link logs a warning naming it, and
-configure fails when no contract is found. Each inline `decoder:` or
+`root` is a local directory. A relative `root` resolves against the current
+directory, as it was typed at training, and `root` is never fetched from the
+Hub. A `repo_id` that names an existing local directory is read from it, and
+is fetched from the Hub otherwise. When no link finds a contract, one warning
+lists each attempt, such as `dataset.root 'lerobot/gz_reach' (relative) is not
+a directory under <cwd>`, and configure fails. Each inline `decoder:` or
 `encoder:` in a contract found this way logs a warning before the contract
 loads, because loading it imports that code. A non-empty `contract_path` is
 used as given and never compared with the checkpoint's contract.
@@ -290,10 +309,15 @@ without `select`. LeRobot's live path merges all numeric values into one
 `observation.state` and one `action`, and names them from `select`.
 
 The local server runs `lerobot_rosetta.policy_server`, or
-`lerobot_rosetta.classifier_server` with `is_classifier`. Its output goes to a
-`rosetta_policy_server_*.log` file in the system temp directory, and a server
-that exits during startup fails configure with the end of that log. A server
-that died is started again at the next run. Cleanup and shutdown stop it.
+`lerobot_rosetta.classifier_server` with `is_classifier`. It writes to the
+node's own stdout and stderr. `policy_runner_launch.py` starts the node with
+`output: both`, so the server's output shows in the terminal and is kept in
+the launch's log directory (`~/.ros/log/<run>/launch.log` by default). A
+server that exits during startup fails configure, with its output just before
+the error. A server
+that died is started again at the next run. Cleanup and shutdown stop it. A
+run that cannot reach the server ends with `Failed to connect to policy
+server at <server_address>`.
 
 ## Nodes inside the LeRobot plugins
 

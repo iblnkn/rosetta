@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 import yaml
 
 from rosetta.contract.schema import load_contract
-from rosetta.contract.specs import iter_observation_specs, iter_specs
+from rosetta.contract.specs import iter_action_specs, iter_observation_specs, iter_specs
 from rosetta.data import available_dataset_writers, load_dataset_writer
 from rosetta_ros.offline.bag_frames import find_bag_dirs, iter_bag_frames, read_bag_contract_text
 
@@ -81,7 +82,7 @@ def write_dataset(
     contract_path: Path | None = None,
     embed_contract: bool = True,
     writer_opts: dict[str, Any] | None = None,
-) -> None:
+) -> list[str]:
     """Drive a DatasetWriter over ``(episode_name, frames)`` pairs.
 
     Split from the bag and entry-point wiring in :func:`port` so this loop
@@ -89,6 +90,10 @@ def write_dataset(
     per-episode failure isolation (a failed episode is discarded so its
     buffered frames never leak into the next one), then finalizes. If every
     episode fails, raises ``RuntimeError`` and never finalizes.
+
+    Returns:
+        The names of the episodes that failed, in order. Empty when all ported.
+
     """
     writer.open(
         contract=contract,
@@ -143,6 +148,7 @@ def write_dataset(
         raise RuntimeError(f"All {num_episodes} bags failed to convert")
 
     writer.finalize()
+    return [name for name, _ in failed]
 
 
 def port(
@@ -156,35 +162,45 @@ def port(
     shard_index: int | None = None,
     embed_contract: bool = True,
     writer_opts: dict[str, Any] | None = None,
-) -> None:
+) -> list[str]:
     """Port rosbag2 recordings to a dataset.
 
     The wiring shell: loads the contract, discovers bags, resolves the
     ``--format`` writer from the entry-point registry, and delegates the
     actual writing to :func:`write_dataset`.
+
+    Returns:
+        The names of the bags that failed to port. The dataset holds the rest.
+
     """
     contract = load_contract(contract_path)
     specs = list(iter_specs(contract))
     # Only observation streams gate warmup: actions and extended sections
     # (rewards/signals/info) may legitimately start late or publish sparsely.
     warmup_keys = {s.key for s in iter_observation_specs(contract)}
+    action_keys = {s.key for s in iter_action_specs(contract)}
     # Per-frame task labels: task topics win over the recorded prompt.
     task_topics = {t.channel.topic: t.channel.type for t in contract.tasks}
 
     bag_dirs = find_bag_dirs(raw_dir, num_shards=num_shards, shard_index=shard_index)
     if not bag_dirs:
         logging.warning("No bags to process in this shard")
-        return
+        return []
 
     # First bag as a representative sample: all bags in a run are normally
     # recorded by one recorder config, so one comparison suffices.
     warn_if_contract_mismatch(contract_path, read_bag_contract_text(bag_dirs[0]))
 
     episodes = (
-        (bag_dir.name, iter_bag_frames(bag_dir, specs, warmup_keys=warmup_keys, task_topics=task_topics))
+        (
+            bag_dir.name,
+            iter_bag_frames(
+                bag_dir, specs, warmup_keys=warmup_keys, task_topics=task_topics, warn_empty_keys=action_keys
+            ),
+        )
         for bag_dir in bag_dirs
     )
-    write_dataset(
+    return write_dataset(
         load_dataset_writer(dataset_format),
         episodes,
         contract=contract,
@@ -201,12 +217,13 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     parser = argparse.ArgumentParser(description="Port ROS2 bags to a dataset")
+    writers = available_dataset_writers()
     parser.add_argument(
         "--format",
         dest="dataset_format",
         default="lerobot",
-        help="Dataset writer to write with (default: lerobot). Installed: "
-        + (", ".join(available_dataset_writers()) or "(none)"),
+        choices=writers or None,
+        help="Dataset writer to write with (default: lerobot). Installed: " + (", ".join(writers) or "(none)"),
     )
     parser.add_argument("--raw-dir", type=Path, required=True, help="Directory of bag subdirs")
     parser.add_argument("--repo-id", type=str, default=None, help="Dataset repo ID (default: raw-dir name)")
@@ -250,6 +267,14 @@ def main():
     parser.add_argument("--samples-per-shard", type=int, default=None, help="[writer-specific] samples per tar shard")
 
     args = parser.parse_args()
+    if not args.contract.is_file():
+        parser.error(f"--contract {args.contract} is not a file")
+    if not args.raw_dir.is_dir():
+        parser.error(f"--raw-dir {args.raw_dir} is not a directory")
+    if (args.num_shards is None) != (args.shard_index is None) or (
+        args.num_shards is not None and not 0 <= args.shard_index < args.num_shards
+    ):
+        parser.error("--num-shards and --shard-index go together, with --shard-index from 0 to num_shards - 1")
     repo_id = args.repo_id or args.raw_dir.name
 
     writer_opts: dict[str, Any] = {
@@ -270,10 +295,9 @@ def main():
         writer_opts["samples_per_shard"] = args.samples_per_shard
 
     # No try/except here: a failure (or Ctrl-C) must exit non-zero with its
-    # traceback. convert_bags_parallel.sh reads shard exit codes under
-    # pipefail, so a swallowed interrupt would report a half-ported shard as
-    # success.
-    port(
+    # traceback. A partial port exits non-zero too, so a script porting shards
+    # in parallel can tell it from a complete one.
+    failed = port(
         raw_dir=args.raw_dir,
         repo_id=repo_id,
         contract_path=args.contract,
@@ -284,6 +308,10 @@ def main():
         embed_contract=args.embed_contract,
         writer_opts=writer_opts,
     )
+    if failed:
+        names = ", ".join(failed[:5]) + (f", and {len(failed) - 5} more" if len(failed) > 5 else "")
+        bags = "bag" if len(failed) == 1 else "bags"
+        sys.exit(f"rosetta_port: {len(failed)} {bags} failed to port: {names}. The dataset holds the rest.")
 
 
 if __name__ == "__main__":

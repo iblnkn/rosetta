@@ -38,6 +38,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile
 from std_srvs.srv import Trigger
 
+from rosetta.contract.schema import parse_contract
 from rosetta_ros.bag_metadata import (
     BAG_CONTRACT_KEY,
     BAG_CUSTOM_DATA_KEY,
@@ -45,6 +46,7 @@ from rosetta_ros.bag_metadata import (
     BAG_METADATA_KEY,
     BAG_PROMPT_KEY,
 )
+from rosetta_ros.bag_topics import policy_topics
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
     TERMINATION_ERROR,
@@ -54,21 +56,40 @@ from rosetta_ros.node_utils import (
 )
 from rosetta_ros.nodes.episode_recorder_node import EpisodeRecorderNode
 
+_CONTRACT = """
+robot_type: test
+robot_interface: ros2
+fps: 30
+observations:
+  observation.state:
+    channel: {topic: /joint_states, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+actions:
+  action:
+    channel: {topic: /commands, type: sensor_msgs/msg/JointState}
+    align: {strategy: hold, timeline: receive}
+    select: [position.j1]
+"""
+
 
 class _Recorder(EpisodeRecorderNode):
     """The real node, its rosbag2 writer replaced by a directory.
 
-    The stub writer "writes" 7 messages, and on close writes the metadata.yaml
-    rosbag2 would (unless ``metadata_error``), so provenance has a file to land in.
+    The stub writer "writes" 7 messages, one or more on every contract topic
+    but those in ``silent``, and on close writes the metadata.yaml rosbag2
+    would (unless ``metadata_error``), so provenance has a file to land in.
     """
 
-    def __init__(self, bag_dir, *, open_error=None, metadata_error=False, **params):
+    def __init__(self, bag_dir, *, open_error=None, metadata_error=False, silent=(), **params):
         params.setdefault("feedback_rate_hz", 50.0)
         super().__init__(parameter_overrides=[Parameter(k, value=v) for k, v in params.items()])
         self._status_pub, self._result_pub = FakePublisher(), FakePublisher()
         self.bag_dir = bag_dir
         self._open_error = open_error
         self._metadata_error = metadata_error
+        self._silent = silent
+        self._policy_topics = policy_topics(parse_contract(_CONTRACT, source="test"))
         self.close_calls = 0
 
     def _create_bag_dir(self):
@@ -80,6 +101,7 @@ class _Recorder(EpisodeRecorderNode):
             raise self._open_error
         bag_dir.mkdir(parents=True)
         self._messages_written = 7
+        self._topic_msg_counts = {t: 1 for t in ("/joint_states", "/commands") if t not in self._silent}
         return []
 
     def _close_writer(self):
@@ -169,6 +191,45 @@ def test_timeout_reports_timeout_and_succeeds(make_recorder, node_default, goal_
     assert handle.calls == ["succeed"]
     assert result.termination_reason == TERMINATION_TIMEOUT
     _assert_reconciled(rec)
+
+
+@pytest.mark.parametrize(
+    ("silent", "message"),
+    [
+        # The F3 stall: everything from the sim's process stopped arriving.
+        (("/joint_states",), "no messages on: /joint_states"),
+        # A teleop node that was never started.
+        (("/commands",), "no messages on: /commands"),
+        (("/joint_states", "/commands"), "no messages on: /joint_states, /commands"),
+    ],
+    ids=["observation", "action", "both"],
+)
+def test_a_policy_topic_that_recorded_nothing_is_named_and_the_bag_kept(make_recorder, silent, message):
+    rec = make_recorder(running=True, default_max_duration_s=0.01, silent=silent)
+    handle = FakeGoalHandle()
+    result = rec._record("p", handle)
+    assert handle.calls == ["succeed"]
+    assert result.termination_reason == TERMINATION_TIMEOUT
+    assert result.message == message
+    assert rec.bag_dir.exists()
+    # Service starts get no action result, so ~/result must carry it too.
+    assert rec._result_pub.published[-1].message == message
+
+
+def test_a_silent_recording_after_a_clean_one_still_finishes(make_recorder):
+    # Both summaries log from one node, the first at info and the second at
+    # warning. rclpy raises if one call site changes severity, which killed the
+    # record thread and left the goal unfinished.
+    rec = make_recorder(running=True, default_max_duration_s=0.01)
+    assert rec._record("p", FakeGoalHandle()).message == ""
+    claim(rec)
+    rec.bag_dir = rec.bag_dir.with_name("ep2")
+    rec._silent = ("/joint_states",)
+    handle = FakeGoalHandle()
+    result = rec._record("p", handle)
+    assert handle.calls == ["succeed"]
+    assert result.message == "no messages on: /joint_states"
+    assert not rec.busy
 
 
 def test_open_writer_failure_aborts_without_metadata(make_recorder):

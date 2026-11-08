@@ -81,8 +81,23 @@ It needs an interactive terminal. Without one it exits with
 | `h` or `?` | Show the keys. |
 | `q` | Quit. |
 
-If the recorder runs under a namespace, pass it with
-`--ros-args -p recorder_ns:=/<namespace>/episode_recorder`.
+After each episode the keyboard prints how it ended and where the bag is,
+including an episode that hit its time limit.
+
+When an observation or action topic recorded nothing, the recorder logs its
+per-topic summary as a warning, in the recorder's terminal, and the
+recording's result `message` (the action result and `~/result`) says
+`no messages on:` with the topic names. That bag can't train a policy, so
+delete it (`d`, or `~/delete_last_bag`) and check that the topics are
+publishing before recording again.
+
+If the recorder runs under a namespace, pass both its action and its node name:
+
+```bash
+ros2 run rosetta_ros episode_keyboard_node --ros-args \
+    -p recorder_action_name:=/<namespace>/record_episode \
+    -p recorder_ns:=/<namespace>/episode_recorder
+```
 
 ## Drive it from a script
 

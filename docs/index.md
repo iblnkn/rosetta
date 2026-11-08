@@ -62,7 +62,7 @@ tutorials/first-policy
 
 How-to guides cover one task each: recording, writing a contract, preparing
 a dataset, training from a ported dataset or straight from recordings,
-deploying, routing commands through a mux,
+training on several backends, deploying, routing commands through a mux,
 human-in-the-loop episodes, and extending
 Rosetta with a message type, a dataset writer, a policy runner or a robot
 interface.
@@ -76,6 +76,7 @@ how-to/write-a-contract
 how-to/prepare-a-dataset
 how-to/train
 how-to/train-without-porting
+how-to/train-across-backends
 how-to/deploy-a-policy
 how-to/route-commands
 how-to/human-in-the-loop

@@ -118,6 +118,11 @@ def find_contract_for_pretrained(
     ported dataset needs: checkpoint -> ``train_config.json`` -> dataset -> its
     contract sidecar. Never raises: any missing link returns ``None`` after a
     warning naming it.
+
+    The dataset's ``root`` is a local directory, resolved against the current
+    directory when relative, and never fetched from the Hub. ``repo_id`` is
+    tried as a local directory, then on the Hub. When neither finds the
+    contract, one warning lists every attempt.
     """
     if not pretrained:
         return None
@@ -151,9 +156,41 @@ def find_contract_for_pretrained(
             warn(f"{train_config_path}: dataset has neither a usable 'root' nor 'repo_id'")
         return None
 
-    # root first, then repo_id: a root recorded on the training machine is
-    # usually missing on the robot, while the Hub copy carries the sidecar too.
-    found = (
-        resolve_repo_file(ref, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=warn) for ref in dataset_refs
+    root, repo_id = dataset.get("root"), dataset.get("repo_id")
+    return _dataset_contract(
+        pretrained,
+        root if root in dataset_refs else None,
+        repo_id if repo_id in dataset_refs else None,
+        warn,
     )
-    return next((path for path in found if path is not None), None)
+
+
+def _dataset_contract(
+    pretrained: str, root: str | None, repo_id: str | None, warn: Callable[[str], None]
+) -> Path | None:
+    """The dataset's contract sidecar from its local ``root``, then from ``repo_id``.
+
+    root first: a root recorded on the training machine is usually missing on
+    the robot, while the Hub copy carries the sidecar too. Misses are reported
+    in one warning, and only when neither finds the contract.
+    """
+    misses: list[str] = []
+    relative_root_missing = False
+    if root:
+        if Path(root).is_dir():
+            path = resolve_repo_file(root, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=misses.append)
+            if path is not None:
+                return path
+        elif Path(root).is_absolute():
+            misses.append(f"dataset.root {root!r} is not a directory")
+        else:
+            relative_root_missing = True
+            misses.append(f"dataset.root {root!r} (relative) is not a directory under {Path.cwd()}")
+    # A repo_id equal to a root that is a local directory names the same place.
+    if repo_id and not (repo_id == root and Path(root).is_dir()):
+        path = resolve_repo_file(repo_id, LEROBOT_CONTRACT_SIDECAR_PATH, repo_type="dataset", warn=misses.append)
+        if path is not None:
+            return path
+    hint = " Deploy from the directory training ran in, or pass contract_path." if relative_root_missing else ""
+    warn(f"No contract found for {pretrained}: " + "; ".join(m.rstrip(".") for m in misses) + "." + hint)
+    return None

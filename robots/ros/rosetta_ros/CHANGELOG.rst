@@ -4,6 +4,32 @@ Changelog for package rosetta_ros
 
 Forthcoming
 -----------
+* ``episode_recorder_node`` names the observation and action topics that
+  recorded nothing in the result's ``message`` (``no messages on: <topics>``)
+  and logs its per-topic summary as a warning. The bag is kept and the goal
+  still ends with its usual state. Before, a recording that lost its joint
+  states ended ``SUCCEEDED`` with an empty ``message``.
+* ``episode_keyboard_node`` drives the recorder's ``RecordEpisode`` action
+  (``recorder_action_name``, default ``/record_episode``) instead of its
+  ``start_recording`` and ``cancel_recording`` services, and prints each
+  goal's result. A recording that hit its time limit used to print nothing
+  and leave the keyboard showing REC. ``d`` pressed before a recording's
+  result arrives deletes that recording's bag and doesn't report it saved.
+  ``delete_last_bag`` is still a service call. A refused stop leaves the
+  keyboard recording, so ``s`` can be pressed again. After ``d``, the bag is
+  deleted even if the stop is refused, and a second ``d`` is ignored.
+* Breaking: ``rosetta_port`` exits 1 when some bags failed, after writing the rest, and
+  names the failed bags. It exited 0, so a script couldn't tell a partial
+  port from a complete one.
+* ``rosetta_port`` warns when an action topic is in a bag but has no
+  messages, since every action in that episode is zero. ``iter_bag_frames``
+  takes ``warn_empty_keys`` for this. Its "not in bag" warning names the bag.
+* ``rosetta_port`` checks its arguments up front: a ``--contract`` that is not
+  a file, a ``--raw-dir`` that is not a directory, an unknown ``--format`` and
+  a bad shard are usage errors.
+* ``policy_runner_launch.py`` starts the runner with ``output="both"``, so
+  its output, and the policy server's, are kept in the launch's log directory
+  as well as shown.
 * A live connection whose ROS context is shut down outside ``close()`` (by
   ``rclpy.shutdown()`` on it, or by rclpy's signal handler in a process that
   installs one) raises on its next call instead of serving its last frames

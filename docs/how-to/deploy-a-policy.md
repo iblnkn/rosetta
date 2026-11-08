@@ -66,8 +66,16 @@ checkpoint:` with the path it found. If it finds none, configure fails with `con
 required`. [Contract fallback](../reference/nodes.md#contract-fallback) lists
 each link it follows.
 
+A relative `--dataset.root` from training is looked for under the directory
+you deploy from. Deploy from the directory training ran in, or pass
+`contract_path`. If no contract is found, one warning lists where the runner
+looked, such as `dataset.root 'lerobot/gz_reach' (relative) is not a
+directory under <cwd>`.
+
 A `contract_path` you pass is used as given and isn't compared with the
-checkpoint's dataset.
+checkpoint's dataset. LeRobot's policy server resizes each image to the size
+the policy was trained on, so a contract that resizes to another size runs at
+that resolution, upscaled or downscaled to the trained size.
 
 ## Run inference on another machine
 
@@ -79,7 +87,7 @@ on `PYTHONPATH`. On the GPU machine:
 
 ```bash
 PYTHONPATH=rosetta/policies/lerobot/lerobot_rosetta python3 -m lerobot_rosetta.policy_server \
-    --host=0.0.0.0 --port=8080 \
+    --host=<gpu_ip> --port=8080 \
     --pretrained-name-or-path=<checkpoint> \
     --policy-device=cuda
 ```
@@ -101,7 +109,7 @@ ros2 launch rosetta_ros policy_runner_launch.py \
     contract_path:=robot.yaml \
     pretrained_name_or_path:=<checkpoint> \
     launch_local_server:=false \
-    server_address:=<gpu_host>:8080
+    server_address:=<gpu_ip>:8080
 ```
 
 At the start of each run the runner sends its own
@@ -114,8 +122,12 @@ with, such as `act`. The server
 resolves `policy_device` on its own machine, so a robot without CUDA can still
 ask for `cuda`.
 
-The server listens on an unencrypted gRPC port and unpickles what clients send.
-Only expose it on a network you trust.
+The server listens on an unencrypted gRPC port and unpickles what clients send,
+so anyone who can reach the port can run code on the GPU machine. Only run it
+on a network you trust. `--host` picks the address it listens on: give it the
+GPU machine's IP address on the network it shares with the robot. A host
+name can resolve to a loopback address on its own machine, and `0.0.0.0`
+listens on every network the machine is on.
 
 ## Tune the chunking
 

@@ -114,14 +114,21 @@ class _FakeClassifier:
         return iter(())
 
 
-def _patch_factories(monkeypatch):
+def _config_recorded_on_cuda(path, **_kw):
+    """A checkpoint config trained on a GPU ("cuda")."""
+    return SimpleNamespace(device="cuda")
+
+
+def _patch_factories(monkeypatch, load_devices=None):
     loads = []
 
     def _fake_factory(route):
         def factory(policy_type):
             class _Cls:
                 @staticmethod
-                def from_pretrained(path):
+                def from_pretrained(path, config):
+                    if load_devices is not None:
+                        load_devices.append(config.device)
                     loads.append((route, policy_type, path))
                     return _FakeClassifier()
 
@@ -130,7 +137,18 @@ def _patch_factories(monkeypatch):
         return factory
 
     monkeypatch.setattr(cs, "get_reward_model_class", _fake_factory("reward"))
+    # A checkpoint trained on a GPU records device "cuda".
+    monkeypatch.setattr(cs, "RewardModelConfig", SimpleNamespace(from_pretrained=_config_recorded_on_cuda))
     return loads
+
+
+def test_weights_load_straight_onto_the_requested_device(monkeypatch):
+    # LeRobot loads onto config.device. Left at the checkpoint's "cuda", a cpu
+    # classifier server would create a CUDA context and hold GPU memory.
+    load_devices = []
+    _patch_factories(monkeypatch, load_devices)
+    cs.ClassifierServer().preload("user/repo", "cpu")
+    assert load_devices == ["cpu"]
 
 
 def _handshake(server, path="user/repo", device="cpu"):

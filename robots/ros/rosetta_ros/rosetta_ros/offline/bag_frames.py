@@ -95,6 +95,7 @@ def _get_topic_types(reader: rosbag2_py.SequentialReader) -> dict[str, str]:
 def _build_buffers(
     specs: list[StreamSpec],
     topic_types: dict[str, str],
+    bag_name: str = "",
 ) -> tuple[list[tuple[StreamSpec, StreamBuffer]], dict[str, list[int]]]:
     """
     Create per-spec StreamBuffers plus a topic routing table.
@@ -123,7 +124,9 @@ def _build_buffers(
         entries.append((spec, StreamBuffer.from_spec(spec)))
 
         if spec.source.channel.topic not in topic_types:
-            logging.warning("Topic %s not in bag, %s will be zero-filled", spec.source.channel.topic, spec.key)
+            logging.warning(
+                "%s: topic %s not in bag, %s will be zero-filled", bag_name, spec.source.channel.topic, spec.key
+            )
             continue
         found_any = True
         routing.setdefault(spec.source.channel.topic, []).append(i)
@@ -222,7 +225,7 @@ def _open_and_validate(bag_dir: Path, specs: list[StreamSpec], warmup_keys: set[
     )
     try:
         topic_types = _get_topic_types(reader)
-        entries, routing = _build_buffers(specs, topic_types)
+        entries, routing = _build_buffers(specs, topic_types, bag_dir.name)
 
         # Encode-only channel types are valid for live serving (actions are
         # never decoded there), but porting *records* every spec, so an
@@ -281,6 +284,7 @@ def iter_bag_frames(
     *,
     warmup_keys: set[str],
     task_topics: dict[str, str] | None = None,
+    warn_empty_keys: set[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """
     Yield resampled frame dicts from a single bag.
@@ -307,9 +311,19 @@ def iter_bag_frames(
     the bag entirely (fail-fast: a wrong topic name in the contract would
     otherwise train on 100% fabricated zeros) or if warmup never completes
     (a present topic produced no samples).
+
+    A stream in ``warn_empty_keys`` whose topic is in the bag but delivered no
+    message is warned about once the bag has been read: every frame carries
+    zeros for it. The porter passes the action keys, because a port with an
+    all-zero action trains a policy that does nothing.
     """
     plan = _open_and_validate(bag_dir, specs, warmup_keys)
     reader, entries, routing, layout = plan.reader, plan.entries, plan.routing, plan.layout
+    # Messages routed to each entry, for warn_empty_keys. A buffer's last_ts
+    # can't stand in: a clock reset clears it, and a dropped message never sets it.
+    received = [0] * len(entries)
+    routed = {i for idxs in routing.values() for i in idxs}
+    warn_empty = [i for i in sorted(routed) if entries[i][0].key in (warn_empty_keys or ())]
     warmup_idxs, prompt, fps = plan.warmup_idxs, plan.prompt, plan.fps
     step, start_ns, n_ticks = plan.step, plan.start_ns, plan.n_ticks
 
@@ -397,6 +411,7 @@ def iter_bag_frames(
             if topic in routing:
                 msg = None
                 for i in routing[topic]:
+                    received[i] += 1
                     spec, buffer = entries[i]
                     if msg is None:
                         msg = deserialize_message(data, get_message(spec.source.channel.type))
@@ -415,6 +430,12 @@ def iter_bag_frames(
             raise RuntimeError(
                 f"{bag_dir.name}: no frames emitted; observation streams never produced a sample: {stale}"
             )
+        for i in warn_empty:
+            if received[i] == 0:
+                spec = entries[i][0]
+                logging.warning(
+                    "%s: %s has no messages, %s is all zeros", bag_dir.name, spec.source.channel.topic, spec.key
+                )
     finally:
         # Generator: this runs on normal completion, on an exception, and on
         # GeneratorExit when a consumer abandons the iteration early. The

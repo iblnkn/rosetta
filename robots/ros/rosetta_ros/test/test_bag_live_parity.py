@@ -36,6 +36,8 @@ Pinned behaviors:
   stamped one recovers, same as the live ingest guard.
 """
 
+import dataclasses
+import logging
 from fractions import Fraction
 from math import floor
 
@@ -204,15 +206,45 @@ def test_observation_topic_absent_from_bag_raises(tmp_path):
         list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
 
 
-def test_absent_action_topic_still_ports(tmp_path):
+def test_absent_action_topic_still_ports(tmp_path, caplog):
     # Non-warmup streams (actions) may legitimately be absent: warn + zero-fill.
     events = [e for e in EVENTS if e[0] != "/cmd"]
     d = tmp_path / "bag_no_cmd"
     write_bag(d, events)
-    ported = list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
+    with caplog.at_level(logging.WARNING):
+        ported = list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS))
+    # Named, so the bag can be found among a thousand.
+    assert "bag_no_cmd: topic /cmd not in bag, action will be zero-filled" in caplog.messages
     assert ported
     for frame in ported:
         np.testing.assert_array_equal(frame["action"], [0.0])
+
+
+def test_an_action_topic_with_no_messages_is_warned_about(tmp_path, caplog):
+    # Recorded but never published, as when the teleop node wasn't running.
+    # The port still succeeds, but every action is zero, which trains a
+    # policy that does nothing. The porter passes the action keys.
+    events = [e for e in EVENTS if e[0] != "/cmd"]
+    d = tmp_path / "bag_silent_cmd"
+    write_bag(d, events, extra_topics={"/cmd": "sensor_msgs/msg/JointState"})
+    with caplog.at_level(logging.WARNING):
+        assert list(iter_bag_frames(d, SPECS, warmup_keys=WARMUP_KEYS, warn_empty_keys={"action"}))
+    assert "bag_silent_cmd: /cmd has no messages, action is all zeros" in caplog.messages
+
+
+def test_action_messages_that_were_all_dropped_are_not_reported_as_missing(tmp_path, caplog):
+    # Unstamped messages on a header-aligned action are dropped by the ingest,
+    # which warns about that itself. The topic did have messages.
+    header_action = act_spec("action", ["position.a1"], "/cmd", fps=FPS)
+    header_action = dataclasses.replace(
+        header_action, source=dataclasses.replace(header_action.source, align=Align("hold", "header"))
+    )
+    specs = [s for s in SPECS if s.key != "action"] + [header_action]
+    d = tmp_path / "bag_unstamped_cmd"
+    write_bag(d, EVENTS)  # /cmd messages carry no header stamp
+    with caplog.at_level(logging.WARNING):
+        list(iter_bag_frames(d, specs, warmup_keys=WARMUP_KEYS, warn_empty_keys={"action"}))
+    assert not [m for m in caplog.messages if "has no messages" in m]
 
 
 def test_undecodable_spec_fails_fast(bag_dir):

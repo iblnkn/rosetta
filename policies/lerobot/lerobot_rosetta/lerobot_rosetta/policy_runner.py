@@ -31,7 +31,6 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -65,8 +64,6 @@ class LeRobotPolicyRunner:
         self._contract: Optional[Contract] = None
         self._client: Optional[RobotClient] = None
         self._server_process: Optional[subprocess.Popen] = None
-        self._server_log = None  # file handle for the server subprocess output
-        self._server_log_path: str = ""
         self._policy_type: str = ""  # sent in LeRobot's handshake; see _resolve_policy_type
 
     # -------------------- Lifecycle --------------------
@@ -163,7 +160,7 @@ class LeRobotPolicyRunner:
 
         if not client.start():
             self._client = None
-            return RunnerResult(False, "Failed to connect to policy server")
+            return RunnerResult(False, f"Failed to connect to policy server at {self._host.get('server_address')}")
 
         receiver = threading.Thread(target=client.receive_actions, daemon=True)
         receiver.start()
@@ -311,23 +308,18 @@ class LeRobotPolicyRunner:
             )
         timeout = cfg.get("server_startup_timeout_sec")
 
-        # Capture stdout+stderr to a log file so startup failures are visible
-        # (a pipe could deadlock if nobody drains it while the server runs).
-        log = tempfile.NamedTemporaryFile(prefix="rosetta_policy_server_", suffix=".log", delete=False)
-        self._server_log = log
-        self._server_log_path = log.name
-        cfg.logger.info(
-            f"Launching {module} on {host}:{port} "
-            f"(preload={pretrained or 'none'}, timeout={timeout}s, log: {log.name})..."
-        )
-        self._server_process = subprocess.Popen(cmd, env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT)
+        # The server writes to this node's stdout and stderr, so its output
+        # lands wherever the node's does: the terminal and, under
+        # policy_runner_launch.py (output="both"), the launch's log directory.
+        cfg.logger.info(f"Launching {module} on {host}:{port} (preload={pretrained or 'none'}, timeout={timeout}s)...")
+        self._server_process = subprocess.Popen(cmd, env=os.environ.copy())
 
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self._server_process.poll() is not None:
                 raise RuntimeError(
-                    f"Policy server exited with code {self._server_process.returncode}. "
-                    f"Last output:\n{self._read_log_tail()}"
+                    f"Policy server exited with code {self._server_process.returncode} during startup. "
+                    "Its output is in this node's output, just before this message."
                 )
             try:
                 with socket.create_connection((host, int(port)), timeout=1.0):
@@ -336,23 +328,15 @@ class LeRobotPolicyRunner:
             except (ConnectionRefusedError, socket.timeout, OSError):
                 time.sleep(SERVER_STARTUP_POLL_SEC)
 
-        raise RuntimeError(f"Policy server failed to start within {timeout}s. Last output:\n{self._read_log_tail()}")
-
-    def _read_log_tail(self, max_bytes: int = 4000) -> str:
-        """Tail of the server log, for diagnostics."""
-        try:
-            with open(self._server_log_path, "rb") as f:
-                f.seek(0, os.SEEK_END)
-                f.seek(max(0, f.tell() - max_bytes))
-                return f.read().decode("utf-8", "replace")
-        except OSError:
-            return "(no server log available)"
+        raise RuntimeError(
+            f"Policy server failed to start within {timeout}s. Its output is in this node's output, just before "
+            "this message."
+        )
 
     def _stop_policy_server(self) -> None:
         """Terminate the policy server process if running."""
         proc = self._server_process
         if proc is None or proc.poll() is not None:
-            self._close_server_log()
             self._server_process = None
             return
         if self._host is not None:
@@ -367,13 +351,4 @@ class LeRobotPolicyRunner:
             except subprocess.TimeoutExpired:
                 if self._host is not None:
                     self._host.logger.error("Policy server did not exit after kill().")
-        self._close_server_log()
         self._server_process = None
-
-    def _close_server_log(self) -> None:
-        if self._server_log is not None:
-            try:
-                self._server_log.close()
-            except OSError:
-                pass
-            self._server_log = None

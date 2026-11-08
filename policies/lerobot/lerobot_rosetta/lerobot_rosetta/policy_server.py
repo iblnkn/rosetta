@@ -118,6 +118,9 @@ class RosettaPolicyServer(PolicyServer):
         self._loaded_key = None
         start = time.perf_counter()
         config = PreTrainedConfig.from_pretrained(pretrained_name_or_path)
+        # LeRobot loads the weights onto config.device. Set, not parsed, so a
+        # device LeRobot doesn't name still reaches torch.
+        config.device = device
         policy_type = config.type
         if policy_type not in SUPPORTED_POLICIES:
             raise ValueError(

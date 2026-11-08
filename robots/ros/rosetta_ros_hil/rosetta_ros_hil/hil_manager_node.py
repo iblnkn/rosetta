@@ -766,11 +766,14 @@ class HilManagerNode(RosettaLifecycleNode):
             fields["termination_reason"] = reason
             fields["outcome"] = outcome
             fields["final_reward"] = final_reward
-            # message stays empty: termination_reason and outcome already say
-            # what happened.
+            # termination_reason and outcome say what happened. message carries
+            # the recorder's own, such as policy topics that recorded nothing.
             if recorder_result is not None:
                 fields["bag_path"] = recorder_result.bag_path
                 fields["messages_written"] = recorder_result.messages_written
+                if recorder_result.message:
+                    # Prefixed: it is the recording's detail, next to HIL's own termination_reason.
+                    fields["message"] = f"recorder: {recorder_result.message}"
 
         except Exception as e:
             self.get_logger().error(f"Episode error: {e}")

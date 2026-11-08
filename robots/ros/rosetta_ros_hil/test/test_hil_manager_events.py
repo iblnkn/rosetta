@@ -28,6 +28,7 @@ import pytest
 from rclpy.parameter import Parameter
 from std_srvs.srv import SetBool
 
+from rosetta_interfaces.action import RecordEpisode
 from rosetta_interfaces.msg import ManageEpisodeResult
 from rosetta_ros.node_utils import (
     TERMINATION_CANCELLED,
@@ -201,6 +202,20 @@ def test_manage_policy_lifecycle_decides_whether_the_policy_is_sent_and_cancelle
         drives_policy,
     )
     assert ("send", "Episode recorder") in calls  # unaffected: enable_recording defaults true
+
+
+def test_the_recorders_message_reaches_the_episode_result(node, monkeypatch):
+    # A recording that missed a policy topic says so, and a HIL episode must
+    # pass that on rather than report a clean episode.
+    monkeypatch.setattr(node, "_send_child_goal", lambda *a, **k: SimpleNamespace(accepted=True))
+    monkeypatch.setattr(node, "_feedback_loop", lambda *a, **k: TERMINATION_STOPPED)
+    monkeypatch.setattr(node, "_cancel_child", lambda *a, **k: None)
+    recorded = RecordEpisode.Result(message="no messages on: /joint_states", bag_path="bags/1", messages_written=3)
+    monkeypatch.setattr(node, "_stop_recorder", lambda: recorded)
+
+    fields = node._run_episode("t", 0.0, 0.0, threading.Event())
+
+    assert (fields["message"], fields["bag_path"]) == ("recorder: no messages on: /joint_states", "bags/1")
 
 
 # -------------------- Termination reason: reported, not guessed --------------------

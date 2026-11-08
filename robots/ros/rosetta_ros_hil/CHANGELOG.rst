@@ -4,6 +4,9 @@ Changelog for package rosetta_ros_hil
 
 Forthcoming
 -----------
+* ``hil_manager_node`` passes the recorder's ``message`` on as
+  ``recorder: <message>`` in the episode's result, so a recording that missed
+  an observation or action topic says so in ``ManageEpisode`` too.
 * ``hil_manager_node`` spins on ``EventsExecutor``: about a sixth of the CPU,
   and policy and teleop commands forward in about 1 ms instead of tens of
   milliseconds. Breaking: ``CommandForwarder`` drops ``callback_group``.

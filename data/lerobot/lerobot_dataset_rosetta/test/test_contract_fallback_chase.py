@@ -40,13 +40,22 @@ def _make_dataset(tmp_path):
     return dataset_root, sidecar
 
 
+class _Hub(dict):
+    """{(repo_id, filename, repo_type): local path}, plus the repo ids asked for, in order."""
+
+    def __init__(self):
+        super().__init__()
+        self.requested: list[str] = []
+
+
 @pytest.fixture
 def hub(monkeypatch):
     """Serve hf_hub_download from a {(repo_id, filename, repo_type): local path} dict; anything else 404s."""
     hf_hub = pytest.importorskip("huggingface_hub")
-    files = {}
+    files = _Hub()
 
     def _download(*, repo_id, filename, repo_type, **_kw):
+        files.requested.append(repo_id)
         try:
             return str(files[(repo_id, filename, repo_type)])
         except KeyError:
@@ -109,7 +118,48 @@ def test_repo_id_is_tried_when_root_has_no_contract(hub, tmp_path, root_exists):
         root.mkdir()
     pretrained = _make_checkpoint(tmp_path, {"repo_id": "org/my_data", "root": str(root)})
 
+    warnings = []
+    assert find_contract_for_pretrained(pretrained, warn=warnings.append) == sidecar
+    assert warnings == []  # the usual robot deploy: nothing went wrong
+
+
+def test_a_root_equal_to_its_repo_id_is_tried_once(hub, tmp_path, monkeypatch):
+    # LeRobot records repo_id as root when no --dataset.root is given.
+    (tmp_path / "data" / "my_ds").mkdir(parents=True)
+    pretrained = _make_checkpoint(tmp_path, {"repo_id": "data/my_ds", "root": "data/my_ds"})
+    monkeypatch.chdir(tmp_path)
+
+    warnings = []
+    assert find_contract_for_pretrained(pretrained, warn=warnings.append) is None
+    (warning,) = warnings
+    assert warning.count("meta/rosetta_contract.yaml not found") == 1
+
+
+def test_a_relative_root_is_never_looked_up_on_the_hub(hub, tmp_path, monkeypatch):
+    # The stress-test case: dataset.root is "lerobot/gz_reach" as typed at
+    # training. Sent to the Hub, it asked the real "lerobot" org for the
+    # dataset and blamed the connection when offline.
+    _, sidecar = _make_dataset(tmp_path)
+    hub[("gz_reach", "meta/rosetta_contract.yaml", "dataset")] = sidecar
+    pretrained = _make_checkpoint(tmp_path, {"repo_id": "gz_reach", "root": "lerobot/gz_reach"})
+    monkeypatch.chdir(tmp_path)
+
     assert find_contract_for_pretrained(pretrained, warn=lambda _w: None) == sidecar
+    assert hub.requested == ["gz_reach"]
+
+
+def test_when_nothing_finds_the_contract_one_warning_says_why_and_what_to_do(hub, tmp_path, monkeypatch):
+    pretrained = _make_checkpoint(tmp_path, {"repo_id": "gz_reach", "root": "lerobot/gz_reach"})
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    warnings = []
+    assert find_contract_for_pretrained(pretrained, warn=warnings.append) is None
+    (warning,) = warnings
+    assert f"dataset.root 'lerobot/gz_reach' (relative) is not a directory under {elsewhere}" in warning
+    assert "from 'gz_reach'" in warning  # the repo_id attempt is listed too
+    assert warning.endswith("Deploy from the directory training ran in, or pass contract_path.")
 
 
 @pytest.mark.parametrize(
