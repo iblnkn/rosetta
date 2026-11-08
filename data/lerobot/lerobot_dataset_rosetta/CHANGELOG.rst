@@ -4,6 +4,11 @@ Changelog for package lerobot_dataset_rosetta
 
 Forthcoming
 -----------
+* ``find_contract_for_pretrained`` never fetches the dataset's ``root`` from
+  the Hub. A relative root such as ``lerobot/gz_reach`` was sent to the Hub as
+  a repo id and warned about the connection. When no link finds the contract,
+  one warning lists each attempt, and a link that does find it leaves no
+  warning from earlier misses.
 * ``LeRobotView`` serves any ``rosetta.data.FrameReader`` as a LeRobot
   training dataset: each policy's windows, ``<key>_is_pad``, task and index
   columns, and metadata with the reader's stats. It is read by index, as a

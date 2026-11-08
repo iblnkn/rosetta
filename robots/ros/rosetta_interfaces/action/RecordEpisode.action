@@ -13,7 +13,7 @@ string TERMINATION_NODE_DEACTIVATED="node_deactivated"
 string TERMINATION_ERROR="error"
 
 string termination_reason        # Why recording ended (one of the constants above)
-string message                   # Detail when something went wrong; empty otherwise
+string message                   # Detail when something went wrong, or the observation and action topics that recorded nothing; empty otherwise
 string bag_path                  # Path to the recorded rosbag (set on every path)
 int32 messages_written           # Total messages captured
 ---

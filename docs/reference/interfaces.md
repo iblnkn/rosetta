@@ -46,7 +46,7 @@ Server: `episode_recorder_node`, as `/record_episode` by default.
 | Result | Type | Meaning |
 |---|---|---|
 | `termination_reason` | string | `stopped`, `timeout`, `cancelled`, `node_deactivated`, `error` |
-| `message` | string | Detail when something went wrong. Empty otherwise. |
+| `message` | string | Detail when something went wrong, then `no messages on: <topics>` when observation or action topics recorded nothing. Empty otherwise. |
 | `bag_path` | string | Bag directory. Set on every path, including errors. |
 | `messages_written` | int32 | Messages written to the bag. |
 
@@ -88,7 +88,7 @@ Server: `hil_manager_node`, as `/manage_episode` by default.
 |---|---|---|
 | `termination_reason` | string | `stopped`, `timeout`, `reward_threshold`, `cancelled`, `node_deactivated`, `error` |
 | `outcome` | string | `success`, `failure`, `unlabeled` |
-| `message` | string | Detail when something went wrong. Empty otherwise. |
+| `message` | string | Detail when something went wrong. The recording's own `message`, when it has one, as `recorder: <message>`. Empty otherwise. |
 | `bag_path` | string | Bag directory of the episode's recording. Empty when the manager does not record. |
 | `final_reward` | float64 | Last reward value at episode end. |
 | `messages_written` | int32 | Messages written to the bag. |

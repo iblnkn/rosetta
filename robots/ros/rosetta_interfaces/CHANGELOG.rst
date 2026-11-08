@@ -4,6 +4,10 @@ Changelog for package rosetta_interfaces
 
 Forthcoming
 -----------
+* ``RecordEpisode``, ``RecordEpisodeResult``, ``ManageEpisode`` and
+  ``ManageEpisodeResult`` document what else ``message`` carries: the
+  observation and action topics that recorded nothing, and for an episode,
+  the recording's message as ``recorder: ...``.
 * **Added ``RecordEpisodeStatus``/``RecordEpisodeResult`` and
   ``RunPolicyStatus``/``RunPolicyResult``** for the recorder's and policy
   runner's ``~/status`` and ``~/result`` topics: the action feedback and

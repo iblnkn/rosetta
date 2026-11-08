@@ -57,6 +57,7 @@ from rosetta_ros.bag_topics import (
     contract_topics,
     image_transport_auto_skips,
     latched_sub_depth,
+    policy_topics,
     qos_to_rosbag2,
 )
 from rosetta_ros.node_utils import (
@@ -189,6 +190,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._bag_base: Path | None = None
         self._storage_id: str | None = None
         self._topics: list[Topic] = []  # (topic, type, qos)
+        self._policy_topics: list[str] = []  # observation and action topics, checked at the end of a recording
         self._exclude_regex: re.Pattern | None = None
         self._include_regex: re.Pattern | None = None
         self._subs: dict[str, Any] = {}  # persistent subs (non-latched contract topics)
@@ -250,6 +252,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
 
         # use_sim_time is auto-declared on every rclpy node, so the read cannot fail.
         self._topics = contract_topics(self._contract, use_sim_time=self.get_parameter("use_sim_time").value)
+        self._policy_topics = policy_topics(self._contract)
 
         # Latched contract topics subscribe per episode instead (see the class docstring).
         for topic, type_str, qos in self._topics:
@@ -328,6 +331,7 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
         self._contract = None
         self._contract_text = ""
         self._topics = []
+        self._policy_topics = []
 
     # -------------------- Topic and subscription management --------------------
 
@@ -596,8 +600,9 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             # tick as a timeout still reports as an error rather than a clean
             # finish.
             # ``message`` carries only what no other field does: the detail of
-            # something going wrong. It stays empty on a clean end rather than
-            # restating messages_written back at the caller.
+            # something going wrong, or the policy streams that recorded
+            # nothing. It stays empty on a clean end rather than restating
+            # messages_written back at the caller.
             signalled, detail = self.stop_reason, self.stop_detail
             if error is not None:
                 result.termination_reason = TERMINATION_ERROR
@@ -609,7 +614,16 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 result.termination_reason = loop_reason or TERMINATION_STOPPED
 
             if result.termination_reason != TERMINATION_ERROR:
-                self._log_topic_summary(bag_dir, discovered, time.monotonic() - start)
+                # A kept bag missing a policy stream can't train anything, and
+                # the recorder log may be in a terminal nobody is watching. Say
+                # so in the result too.
+                silent = [t for t in self._policy_topics if not self._topic_msg_counts.get(t)]
+                if silent and not discard:
+                    note = f"no messages on: {', '.join(silent)}"
+                    result.message = f"{result.message}; {note}" if result.message else note
+                self._log_topic_summary(
+                    bag_dir, discovered, time.monotonic() - start, warn=bool(silent) and not discard
+                )
 
             # Terminal goal state. This thread owns the goal handle and is the
             # only place that transitions it; finish_goal uses only rcl-legal
@@ -619,8 +633,11 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
                 finish_goal(goal_handle, result)
             return result
 
-    def _log_topic_summary(self, bag_dir: Path, discovered_topics, elapsed: float) -> None:
-        """Log per-topic counts so issues are visible without ros2 bag info."""
+    def _log_topic_summary(self, bag_dir: Path, discovered_topics, elapsed: float, *, warn: bool) -> None:
+        """Log per-topic counts so issues are visible without ros2 bag info.
+
+        At warning level when a policy stream recorded nothing.
+        """
         lines = []
         for topic_name, _, _ in self._topics:
             count = self._topic_msg_counts.get(topic_name, 0)
@@ -630,9 +647,12 @@ class EpisodeRecorderNode(RosettaLifecycleNode):
             count = self._topic_msg_counts.get(topic_name, 0)
             if count > 0:
                 lines.append(f"  {topic_name}: {count}")
-        self.get_logger().info(
-            f"Recorded {self._messages_written} messages to {bag_dir} ({elapsed:.1f}s)\n" + "\n".join(lines)
-        )
+        text = f"Recorded {self._messages_written} messages to {bag_dir} ({elapsed:.1f}s)\n" + "\n".join(lines)
+        # Two call sites: rclpy refuses a second severity from one.
+        if warn:
+            self.get_logger().warning(text)
+        else:
+            self.get_logger().info(text)
 
     # ---------- rosbag2 helpers ----------
 

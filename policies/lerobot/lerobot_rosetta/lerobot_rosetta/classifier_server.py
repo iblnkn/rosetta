@@ -52,6 +52,7 @@ from lerobot.async_inference.helpers import (
     get_logger,
     raw_observation_to_observation,
 )
+from lerobot.configs.rewards import RewardModelConfig
 from lerobot.configs.types import FeatureType
 from lerobot.rewards.factory import get_reward_model_class
 from lerobot.transport import (
@@ -154,7 +155,11 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         logger.info(f"Loading classifier: path={pretrained_name_or_path}, device={device}")
 
         start = time.perf_counter()
-        self.classifier = get_reward_model_class(REWARD_CLASSIFIER_TYPE).from_pretrained(pretrained_name_or_path)
+        config = RewardModelConfig.from_pretrained(pretrained_name_or_path)
+        config.device = device  # as in the policy server
+        self.classifier = get_reward_model_class(REWARD_CLASSIFIER_TYPE).from_pretrained(
+            pretrained_name_or_path, config=config
+        )
         self.classifier.to(device)
         self.classifier.eval()
         self._image_size = self._detect_image_size()

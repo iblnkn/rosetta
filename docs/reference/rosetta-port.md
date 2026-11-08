@@ -45,6 +45,9 @@ Writer-specific options, passed to the writer only when given:
   order.
 - No bag directory under `--raw-dir` is an error:
   `RuntimeError: No bag directories found in <raw-dir>`.
+- A `--contract` that is not a file, a `--raw-dir` that is not a directory, a
+  `--format` that is not installed, and a `--shard-index` missing or outside
+  `0` to `--num-shards - 1` are usage errors: argparse's message and exit 2.
 - The bag's `storage_identifier` picks the rosbag2 storage plugin, `mcap`
   when the metadata names none.
 - Shard `i` of `n` takes every nth bag in sorted order, starting at bag `i`.
@@ -66,13 +69,19 @@ Writer-specific options, passed to the writer only when given:
   topics missing from bag`. A present observation topic that never yields a
   sample fails it with `no frames emitted`.
 - A bag missing an action, reward, signal, info or teleop topic ports with
-  that key zero-filled and a warning: `Topic <topic> not in bag, <key> will be
-  zero-filled`.
+  that key zero-filled and a warning: `<bag>: topic <topic> not in bag, <key>
+  will be zero-filled`.
+- A bag whose action topic is recorded but has no messages ports with that
+  key zero-filled and a warning: `<bag>: <topic> has no messages, <key> is all
+  zeros`.
 - A source whose type has no decoder fails every episode at open. A topic the
   contract declares with two different types fails every episode too.
 - A failed episode is discarded, logged, and the run continues. The run ends
   with a `Completed: <ok>/<total> episodes (<failed> failed) in <seconds>s` line and one
   warning per failed episode.
+- If some episodes fail, the dataset is written with the rest and the run
+  exits 1 with `rosetta_port: <n> bags failed to port: <bags>. The dataset
+  holds the rest.`, naming the first five failed bags.
 - If every episode fails, the run exits non-zero with `RuntimeError: All <n>
   bags failed to convert`. The dataset directory and its `meta/` already exist
   by then.

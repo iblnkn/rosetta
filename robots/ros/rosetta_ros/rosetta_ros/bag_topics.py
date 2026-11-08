@@ -36,7 +36,7 @@ from rosbag2_py._storage import (
     rmw_qos_reliability_policy_t,
 )
 
-from rosetta.contract.specs import iter_specs
+from rosetta.contract.specs import iter_policy_specs, iter_specs
 from rosetta_ros.rclpy_utils import qos_profile_from_dict
 
 Topic = tuple[str, str, QoSProfile]
@@ -66,6 +66,14 @@ def contract_topics(contract, *, use_sim_time: bool) -> list[Topic]:
     if use_sim_time:
         topics.append(("/clock", "rosgraph_msgs/msg/Clock", qos_profile_from_dict(None)))
     return dedup_topics(topics)
+
+
+def policy_topics(contract) -> list[str]:
+    """Topics of the streams a policy trains on, observations then actions, each once.
+
+    A recording missing one of these can't be ported into a usable episode.
+    """
+    return list(dict.fromkeys(spec.source.channel.topic for spec in iter_policy_specs(contract)))
 
 
 def dedup_topics(topics: list[Topic]) -> list[Topic]:

@@ -95,13 +95,20 @@ it.
 1. Port each shard to its own repo ID:
 
    ```bash
+   pids=()
    for i in 0 1 2 3; do
      ros2 run rosetta_ros rosetta_port --raw-dir datasets/bags --contract robot.yaml \
          --repo-id my_org/my_dataset_shard_$i --root datasets/shards \
          --num-shards 4 --shard-index $i &
+     pids+=($!)
    done
-   wait
+   failed=0
+   for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+   [ "$failed" = 0 ] || echo "a shard failed, see its log before merging"
    ```
+
+   A bare `wait` returns 0 whatever the shards did. Waiting on each pid catches
+   a shard that exited non-zero, which a shard with any failed bag does.
 
 2. Merge the shards:
 
@@ -152,10 +159,16 @@ moves on. These fail an episode:
 - A contract type with no decoder.
 
 A missing action, reward or signal topic doesn't fail the episode. The key is
-zero-filled and the porter logs `Topic <topic> not in bag, <key> will be
-zero-filled`. Check the bag with `ros2 bag info <bag_dir>` against the topic
+zero-filled and the porter logs `<bag>: topic <topic> not in bag, <key> will
+be zero-filled`. An action topic that was recorded with no messages, for
+example because the teleop node wasn't running, is zero-filled too, with
+`<bag>: <topic> has no messages, <key> is all zeros`. A policy trained on that
+episode learns to do nothing. Delete the bag and the dataset directory, then
+port again. Check the bag with `ros2 bag info <bag_dir>` against the topic
 names in the contract.
 
+When some episodes fail, the port still writes the others, then exits 1 with
+`rosetta_port: <n> bags failed to port: <bags>. The dataset holds the rest.`
 If every episode fails, the port exits non-zero with
 `RuntimeError: All <n> bags failed to convert`. The dataset directory it
 created is left behind, so delete it before you port again.

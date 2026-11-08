@@ -46,14 +46,15 @@ tasks:
 """
 
 
-def test_port_passes_task_topics_and_warmup_keys(tmp_path, monkeypatch):
+def test_port_passes_task_topics_warmup_and_action_keys(tmp_path, monkeypatch):
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text(CONTRACT)
     seen = {}
 
-    def _fake_iter(bag_dir, specs, *, warmup_keys, task_topics=None):
+    def _fake_iter(bag_dir, specs, *, warmup_keys, task_topics=None, warn_empty_keys=None):
         seen["warmup_keys"] = warmup_keys
         seen["task_topics"] = task_topics
+        seen["warn_empty_keys"] = warn_empty_keys
         return iter([])
 
     monkeypatch.setattr(port_mod, "find_bag_dirs", lambda raw_dir, **_kw: [Path("ep1")])
@@ -64,3 +65,4 @@ def test_port_passes_task_topics_and_warmup_keys(tmp_path, monkeypatch):
 
     assert seen["task_topics"] == {"/task_prompt": "std_msgs/msg/String"}
     assert seen["warmup_keys"] == {"observation.state"}
+    assert seen["warn_empty_keys"] == {"action"}

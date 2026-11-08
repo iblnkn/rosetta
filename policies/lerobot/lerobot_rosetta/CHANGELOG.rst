@@ -4,6 +4,17 @@ Changelog for package lerobot_rosetta
 
 Forthcoming
 -----------
+* The local policy server writes to the runner node's own output instead of
+  a ``rosetta_policy_server_*.log`` temp file. ``policy_runner_launch.py``
+  starts the node with ``output="both"``, so the server's output also lands
+  in the launch's log directory with every other node's.
+* ``rosetta_policy_server --policy-device=cpu`` and
+  ``rosetta_classifier_server`` load the weights straight onto the requested
+  device, set on the checkpoint config. LeRobot loads onto the config's
+  device, the checkpoint's own (usually ``cuda``) before, so a CPU server held
+  about 344 MiB of GPU memory.
+* A run that can't reach the policy server names the address it tried:
+  ``Failed to connect to policy server at <server_address>``.
 * ``LeRobotPolicyRunner.find_contract`` follows a checkpoint to its training
   dataset's contract, which ``policy_runner_node`` uses when
   ``contract_path`` is empty. ``lerobot_rosetta`` now depends on

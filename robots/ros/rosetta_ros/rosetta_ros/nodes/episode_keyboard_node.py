@@ -19,14 +19,13 @@ EpisodeKeyboardNode: Keyboard controller for the Rosetta episode recorder.
 Inspired by teleop_episode_keyboard.cpp from legalaspro/so101-ros-physical-ai:
   https://github.com/legalaspro/so101-ros-physical-ai/blob/main/episode_recorder/src/teleop_episode_keyboard.cpp
 
-Drives the recorder's service interface without requiring ros2 action send_goal.
-Run this in the same terminal after launching the episode recorder.
+Drives the recorder's RecordEpisode action, so each recording's result comes
+back to the goal that started it, including a recording that ends on its time
+limit. Run this in its own terminal after launching the episode recorder.
 
-Services used (on recorder_ns, default /episode_recorder — the recorder
-declares them node-private, so they live under its node name):
-  ~/start_recording   (rosetta_interfaces/srv/StartRecording)
-  ~/cancel_recording  (std_srvs/srv/Trigger)
-  ~/delete_last_bag   (std_srvs/srv/Trigger)
+Interfaces used:
+  recorder_action_name  (rosetta_interfaces/action/RecordEpisode), default /record_episode
+  <recorder_ns>/delete_last_bag  (std_srvs/srv/Trigger), default /episode_recorder
 
 Keys:
   r / →        Start recording
@@ -38,7 +37,8 @@ Keys:
 
 Usage:
     ros2 run rosetta_ros episode_keyboard_node
-    ros2 run rosetta_ros episode_keyboard_node --ros-args -p recorder_ns:=/my_recorder
+    ros2 run rosetta_ros episode_keyboard_node --ros-args -p recorder_ns:=/my_robot/episode_recorder \
+        -p recorder_action_name:=/my_robot/record_episode
     ros2 run rosetta_ros episode_keyboard_node --ros-args -p default_prompt:="pick cube"
 """
 
@@ -50,11 +50,26 @@ import termios
 import time
 
 import rclpy
+from action_msgs.srv import CancelGoal
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from rosetta_interfaces.srv import StartRecording
+from rosetta_interfaces.action import RecordEpisode
+from rosetta_ros.node_utils import (
+    TERMINATION_ERROR,
+    TERMINATION_NODE_DEACTIVATED,
+    TERMINATION_STOPPED,
+    TERMINATION_TIMEOUT,
+)
 from rosetta_ros.nodes.episode_keys import KeyDecoder, PromptEditor
+
+# A stop the operator asked for needs no reason on the outcome line. These weren't asked for.
+_UNASKED_REASONS = {
+    TERMINATION_TIMEOUT: " (time limit)",
+    TERMINATION_NODE_DEACTIVATED: " (recorder deactivated)",
+    TERMINATION_STOPPED: " (stopped by the recorder)",
+}
 
 
 class RawTerminal:
@@ -108,7 +123,7 @@ class RawTerminal:
 
 
 class EpisodeKeyboardNode(Node):
-    """Keyboard controller that drives the Rosetta episode recorder via services."""
+    """Keyboard controller that drives the Rosetta episode recorder through its action."""
 
     def __init__(self, terminal: RawTerminal) -> None:
         super().__init__("episode_keyboard")
@@ -116,17 +131,19 @@ class EpisodeKeyboardNode(Node):
 
         # Parameters
         recorder_ns = self.declare_parameter("recorder_ns", "/episode_recorder").value
+        action_name = self.declare_parameter("recorder_action_name", "/record_episode").value
         self._current_prompt: str = self.declare_parameter("default_prompt", "").value
 
-        # Service clients
-        self._start_client = self.create_client(StartRecording, f"{recorder_ns}/start_recording")
-        self._cancel_client = self.create_client(Trigger, f"{recorder_ns}/cancel_recording")
+        self._action_client = ActionClient(self, RecordEpisode, action_name)
         self._delete_client = self.create_client(Trigger, f"{recorder_ns}/delete_last_bag")
 
-        # State
-        self._recording: bool = False
-        self._has_last_bag: bool = False  # True after a recording starts; cleared on delete
-        self._service_pending: bool = False
+        # State. One goal at a time: from send until its result arrives.
+        self._goal_pending: bool = False  # send_goal sent, no response yet
+        self._goal_handle = None  # accepted goal whose result hasn't arrived
+        self._recording: bool = False  # accepted and not yet stopped by s or d
+        self._discard_goal: bool = False  # d asked the recorder to delete this goal's bag
+        self._has_last_bag: bool = False  # a finished recording left a bag; cleared on delete
+        self._delete_pending: bool = False
         self._rec_start: float | None = None
 
         self._keys = KeyDecoder()
@@ -197,9 +214,15 @@ class EpisodeKeyboardNode(Node):
         if command is not None:
             self._commands[command]()
 
+    def _busy(self) -> bool:
+        """Report and return True while a start or a delete is in flight."""
+        if self._goal_pending or self._delete_pending:
+            self._msg("⏳ Request in progress, please wait...")
+            return True
+        return False
+
     def _begin_task_edit(self) -> None:
-        if self._service_pending:
-            self._msg("⏳ Service call in progress, please wait...")
+        if self._busy():
             return
         self._editor.begin(self._current_prompt)
         self._msg("📝 Edit task prompt (Enter=apply, Esc=cancel):")
@@ -219,124 +242,148 @@ class EpisodeKeyboardNode(Node):
         sys.stdout.write(f"\r\033[KTask> {self._editor.text}")
         sys.stdout.flush()
 
+    # -------------------- r: start --------------------
+
     def _handle_start(self) -> None:
-        if self._service_pending:
-            self._msg("⏳ Service call in progress, please wait...")
+        if self._busy():
             return
-        if self._recording:
-            self._msg("⚠  Already recording — stop or discard first")
+        if self._goal_handle is not None:
+            self._msg("⚠  The last recording hasn't finished — stop or discard first")
             return
-        if not self._start_client.service_is_ready():
-            self._msg("✗  start_recording service not available — is the recorder running?")
+        if not self._action_client.server_is_ready():
+            self._msg("✗  record_episode action not available — is the recorder running and active?")
             return
         prompt = self._current_prompt
         self._msg(f'▶  Starting recording... (prompt: "{prompt}")')
-        self._service_pending = True
-        req = StartRecording.Request()
-        req.prompt = prompt
-        future = self._start_client.call_async(req)
-        future.add_done_callback(self._on_start_done)
+        self._goal_pending = True
+        future = self._action_client.send_goal_async(RecordEpisode.Goal(prompt=prompt))
+        future.add_done_callback(self._on_goal_response)
 
-    def _on_start_done(self, future) -> None:
-        self._service_pending = False
+    def _on_goal_response(self, future) -> None:
+        self._goal_pending = False
         try:
-            resp = future.result()
-            if resp.accepted:
-                self._recording = True
-                self._has_last_bag = True
-                self._rec_start = time.monotonic()
-                self._msg("▶  Recording started")
-            else:
-                self._msg(f"✗  Start failed: {resp.message}")
+            goal_handle = future.result()
         except Exception as e:
             self._msg(f"✗  Start exception: {e}")
+            return
+        if not goal_handle.accepted:
+            self._msg("✗  Start rejected: the recorder is busy or not active")
+            return
+        self._goal_handle = goal_handle
+        self._recording = True
+        self._has_last_bag = False  # the recorder's last bag is this recording's now
+        self._rec_start = time.monotonic()
+        self._msg("▶  Recording started")
+        goal_handle.get_result_async().add_done_callback(self._on_result)
+
+    # -------------------- s: stop --------------------
 
     def _handle_stop(self) -> None:
-        if self._service_pending:
-            self._msg("⏳ Service call in progress, please wait...")
-            return
         if not self._recording:
             self._msg("⚠  Not recording — nothing to stop")
             return
-        if not self._cancel_client.service_is_ready():
-            self._msg("✗  cancel_recording service not available")
-            return
         self._msg("⏹  Stopping recording...")
-        self._service_pending = True
-        future = self._cancel_client.call_async(Trigger.Request())
-        future.add_done_callback(self._on_stop_done)
+        self._cancel()
 
-    def _on_stop_done(self, future) -> None:
-        self._service_pending = False
+    def _cancel(self) -> None:
+        """Cancel the goal. The outcome arrives with its result (_on_result)."""
+        self._recording = False
+        self._goal_handle.cancel_goal_async().add_done_callback(self._on_cancel_done)
+
+    def _on_cancel_done(self, future) -> None:
+        # A cancel that came too late (the time limit hit first) is fine: the
+        # result is on its way. A refused or failed one leaves the recording
+        # running, so show it as recording again and let s be pressed again.
         try:
-            resp = future.result()
-            if resp.success:
-                # Only clear on success: on failure the recorder is still
-                # recording, and clearing here would desync the UI from it
-                # (next start would get "Already recording" while we say idle).
-                self._recording = False
-                self._msg("⏹  Saved")
-            else:
-                self._msg(f"✗  Stop failed: {resp.message}")
+            response = future.result()
         except Exception as e:
-            self._msg(f"✗  Stop exception: {e}")
+            detail = str(e)
+        else:
+            # rclpy answers a rejected cancel with ERROR_NONE and no goals, so
+            # the goal being listed is what says it is stopping.
+            if response.goals_canceling or response.return_code == CancelGoal.Response.ERROR_GOAL_TERMINATED:
+                return
+            detail = f"the recorder refused it, return code {response.return_code}"
+        if self._goal_handle is not None:
+            self._recording = True
+            # A delete the recorder accepted still holds when the recording ends.
+            after = ", and its bag is deleted when it ends" if self._discard_goal else ""
+            self._msg(f"✗  Stop failed ({detail}). Still recording{after}")
+
+    # -------------------- the goal's result --------------------
+
+    def _on_result(self, future) -> None:
+        """Report how the goal's recording ended. A bag d deleted is reported by the delete."""
+        self._goal_handle = None
+        self._recording = False
+        try:
+            result = future.result().result
+        except Exception as e:
+            self._discard_goal = False
+            self._msg(f"✗  Result exception: {e}")
+            return
+        discarded, self._discard_goal = self._discard_goal, False
+        self._has_last_bag = bool(result.bag_path) and not discarded
+        if result.termination_reason == TERMINATION_ERROR:
+            self._msg(f"✗  Recording failed: {result.message}")
+            return
+        if discarded:
+            return
+        reason = _UNASKED_REASONS.get(result.termination_reason, "")
+        self._msg(f"⏹  Saved {result.messages_written} messages{reason}: {result.bag_path}")
+        if result.message:
+            self._msg(f"⚠  {result.message}. Press d to discard this episode.")
+
+    # -------------------- d: discard --------------------
 
     def _handle_discard(self) -> None:
-        if self._service_pending:
-            self._msg("⏳ Service call in progress, please wait...")
+        if self._busy():
             return
-        if not self._recording and not self._has_last_bag:
+        if self._goal_handle is not None:
+            # Recording, or stopped with its result still on the way. The
+            # recorder's delete_last_bag deletes a recording in progress when
+            # it ends, so ask now, before anything else can claim the recorder.
+            # Ask once: after the recording ends, a second ask finds no bag.
+            if self._discard_goal:
+                self._msg("⚠  Already discarding this episode")
+                return
+            if not self._delete_client.service_is_ready():
+                self._msg("✗  delete_last_bag service not available")
+                return
+            self._msg("🗑  Discarding episode...")
+            self._discard_goal = True
+            self._delete_last_bag()
+            if self._recording:
+                self._cancel()
+            return
+        if not self._has_last_bag:
             self._msg("⚠  No episode to discard")
             return
         self._msg("🗑  Discarding episode...")
-        self._service_pending = True
-        if self._recording:
-            # Still recording: cancel first, then delete
-            if not self._cancel_client.service_is_ready():
-                self._service_pending = False
-                self._msg("✗  cancel_recording service not available")
-                return
-            future = self._cancel_client.call_async(Trigger.Request())
-            future.add_done_callback(self._on_discard_cancel_done)
-        else:
-            # Already stopped: go straight to delete
-            self._do_delete_last_bag()
+        self._delete_last_bag()
 
-    def _on_discard_cancel_done(self, future) -> None:
-        try:
-            resp = future.result()
-            if not resp.success:
-                self._service_pending = False
-                self._msg(f"✗  Cancel failed: {resp.message}")
-                return
-            self._recording = False
-        except Exception as e:
-            self._service_pending = False
-            self._msg(f"✗  Cancel exception: {e}")
-            return
-
-        # Cancel confirmed — now delete the bag
-        self._do_delete_last_bag()
-
-    def _do_delete_last_bag(self) -> None:
+    def _delete_last_bag(self) -> None:
         if not self._delete_client.service_is_ready():
-            self._service_pending = False
             self._msg("✗  delete_last_bag service not available")
             return
-        del_future = self._delete_client.call_async(Trigger.Request())
-        del_future.add_done_callback(self._on_discard_delete_done)
+        self._delete_pending = True
+        self._delete_client.call_async(Trigger.Request()).add_done_callback(self._on_delete_done)
 
-    def _on_discard_delete_done(self, future) -> None:
-        self._service_pending = False
+    def _on_delete_done(self, future) -> None:
+        self._delete_pending = False
         try:
             resp = future.result()
-            if resp.success:
-                self._has_last_bag = False
-                self._msg(f"🗑  Discarded: {resp.message}")
-            else:
-                self._msg(f"✗  Delete failed: {resp.message}")
         except Exception as e:
+            self._discard_goal = False
             self._msg(f"✗  Delete exception: {e}")
+            return
+        if resp.success:
+            self._has_last_bag = False
+            self._msg(f"🗑  Discarded: {resp.message}")
+        else:
+            # The bag stays, so its result reports it saved and d can delete it.
+            self._discard_goal = False
+            self._msg(f"✗  Delete failed: {resp.message}")
 
     def _handle_quit(self) -> None:
         self._msg("\n👋 Shutting down keyboard controller...\n")

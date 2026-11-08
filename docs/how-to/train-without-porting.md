@@ -24,9 +24,16 @@ Record with the `rrd` storage plugin
 ros2 launch rosetta_ros episode_recorder_launch.py contract_path:=robot.yaml storage_id:=rrd
 ```
 
-Start a catalog server with `rerun server` in its own terminal. It prints the
-address it listens on. Register the recordings, and compute the
-normalization stats once per contract:
+Start a catalog server in its own terminal:
+
+```bash
+rerun server --host 127.0.0.1
+```
+
+It prints the address it listens on. Without `--host` it listens on
+`0.0.0.0`, which serves your registered recordings to every machine on the
+network. Register the recordings, and compute the normalization stats once
+per contract:
 
 ```python
 from rerun.catalog import CatalogClient
@@ -103,7 +110,8 @@ frame numbering. Any LeRobot policy trains on them. A few things differ:
   `--policy.chunk_size=100`, the last 99 ticks of each episode are never
   sample starts. With an observation history, the first ticks are skipped
   too. `<key>_is_pad` is always false.
-- Every stream must use `align: {strategy: hold, timeline: receive}`.
+- Every stream must use `align: {strategy: hold, timeline: receive}`. See
+  [Use a receive-aligned contract](#use-a-receive-aligned-contract).
 - Each episode's task is the prompt the recorder stored in the recording. A
   contract with a `tasks` section is refused.
 - `--rosetta.shuffle=block` runs in one training process only. Rerun builds
@@ -117,6 +125,35 @@ frame numbering. Any LeRobot policy trains on them. A few things differ:
 The `rerun_rosetta`
 [README](https://github.com/iblnkn/rosetta/tree/main/data/rerun/rerun_rosetta)
 lists the rest of its limits.
+
+## Use a receive-aligned contract
+
+The reader takes only streams aligned on `receive`, the time each message
+reached the recorder. A contract that aligns a stream on `header` fails at
+the first step that reads the catalog with it, `write_stats_layer`. With the
+bundled `so_101.yaml`:
+
+```text
+Rerun-backed training supports only 'receive' alignment; streams aligned otherwise: ['action (header)', 'observation.images.right (header)', 'observation.images.top (header)', 'observation.images.wrist.right (header)', 'observation.state (header)']. Change the contract or use the offline porter for this dataset.
+```
+
+Rerun's dataloader places samples on the recording's receive timeline, so a
+stream aligned on any other timeline would land on different ticks than the
+porter gives it. To train from a catalog with a contract you already use for
+porting, make a copy and change each stream's `timeline` to `receive`. A
+stream aligned with `asof` or `drop` needs `strategy: hold` too, or it fails
+with a second error, `Rerun-backed training supports only 'hold' alignment`:
+
+```diff
+-    align: {strategy: hold, timeline: header}
++    align: {strategy: hold, timeline: receive}
+```
+
+Use the copy for `write_stats_layer`, `--rosetta.contract` and deployment.
+Aligning on `receive` uses arrival time instead of the time in the message.
+A message counts at a tick only from when it arrived, so a stream with
+transport delay gives each tick data that is older by that delay than with
+`header` (see [`align`](../reference/contract.md#align)).
 
 ## Deploy the checkpoint
 

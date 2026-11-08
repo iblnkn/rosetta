@@ -27,6 +27,8 @@ from types import SimpleNamespace
 import pytest
 from lerobot.async_inference.configs import PolicyServerConfig
 from lerobot.async_inference.helpers import RemotePolicyConfig, TimedObservation
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.policies.act.configuration_act import ACTConfig
 
 from lerobot_rosetta import policy_server as ps
 
@@ -49,6 +51,7 @@ class _Recorder:
         self.processor_builds: list[dict] = []
         self.fail_paths: set[str] = set()
         self.types: dict[str, str] = {}  # checkpoint path -> recorded type; "act" if absent
+        self.load_devices: list[str] = []  # config.device when the weights were loaded
 
     def get_policy_class(self, policy_type):
         recorder = self
@@ -60,6 +63,7 @@ class _Recorder:
                 if path in recorder.fail_paths:
                     raise OSError(f"no such repo: {path}")
                 recorder.loads.append((policy_type, path))
+                recorder.load_devices.append(config.device)
                 return _FakePolicy()
 
         return _Cls
@@ -74,7 +78,12 @@ def recorder(monkeypatch):
     rec = _Recorder()
     monkeypatch.setattr(ps, "get_policy_class", rec.get_policy_class)
     monkeypatch.setattr(ps, "make_pre_post_processors", rec.make_pre_post_processors)
-    fake_config = SimpleNamespace(from_pretrained=lambda path: SimpleNamespace(type=rec.types.get(path, "act")))
+
+    # A checkpoint trained on a GPU records device "cuda".
+    def from_pretrained(path, **_kw):
+        return SimpleNamespace(type=rec.types.get(path, "act"), device="cuda")
+
+    fake_config = SimpleNamespace(from_pretrained=from_pretrained)
     monkeypatch.setattr(ps, "PreTrainedConfig", fake_config)
     return rec
 
@@ -188,3 +197,21 @@ def test_similar_observation_is_kept(filter_server):
 def test_predicted_timestep_is_skipped(filter_server):
     filter_server._predicted_timesteps.add(5)
     assert filter_server._obs_sanity_checks(_obs(5), _obs(4, j0=10.0)) is False
+
+
+def test_weights_load_straight_onto_the_requested_device(recorder, server):
+    # LeRobot loads onto config.device. Left at the checkpoint's "cuda", a cpu
+    # server created a CUDA context and held GPU memory (344 MiB measured).
+    server.preload("user/repo", "cpu")
+    assert recorder.load_devices == ["cpu"]
+
+
+@pytest.mark.parametrize("device", ["npu", "xpu:1"])
+def test_a_device_lerobot_does_not_name_still_reaches_torch(recorder, server, monkeypatch, tmp_path, device):
+    # resolve_policy_device passes these through for torch to accept or
+    # reject. LeRobot's config parser refuses them, so the device must not go
+    # through it.
+    ACTConfig().save_pretrained(tmp_path)
+    monkeypatch.setattr(ps, "PreTrainedConfig", PreTrainedConfig)
+    server.preload(str(tmp_path), device)
+    assert recorder.load_devices == [device]

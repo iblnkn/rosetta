@@ -103,7 +103,9 @@ def launch_setup(context, *args, **kwargs):
         executable="policy_runner_node",
         name="policy_runner",
         namespace="",
-        output="screen",
+        # "both": the terminal and the launch log, which also catch the policy
+        # server the LeRobot runner starts as a child process.
+        output="both",
         emulate_tty=True,
         # Loaded as dicts, not a file path: a params file's top-level node key
         # matches only the root-namespace node, so a path would be inert when

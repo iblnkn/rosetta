@@ -79,8 +79,6 @@ class _FakeProc:
 @pytest.fixture
 def spawned(monkeypatch, tmp_path):
     """Neutralize subprocess and socket; record spawns."""
-    # Each spawn opens a server log with delete=False; keep them in tmp_path.
-    monkeypatch.setattr(pr.tempfile, "tempdir", str(tmp_path))
     procs: list[_FakeProc] = []
 
     def fake_popen(cmd, **kwargs):
@@ -301,3 +299,18 @@ def test_a_stopped_run_succeeds_like_a_completed_one(spawned, monkeypatch, stop_
 
     result = runner.run(_frames(), task="t", stop_event=stop)
     assert (result.success, result.message) == (True, message)
+
+
+def test_a_failed_connect_names_the_server_address(spawned, monkeypatch):
+    runner, _host = _setup_runner({"pretrained_name_or_path": "user/repo", "server_address": "10.0.0.7:8080"})
+
+    class _Unreachable:
+        def __init__(self, config):
+            self.shutdown_event = threading.Event()
+
+        def start(self):
+            return False
+
+    monkeypatch.setattr(pr, "RobotClient", _Unreachable)
+    result = runner.run(_frames(), task="t", stop_event=threading.Event())
+    assert (result.success, result.message) == (False, "Failed to connect to policy server at 10.0.0.7:8080")
