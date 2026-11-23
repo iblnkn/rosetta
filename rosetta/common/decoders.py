@@ -98,7 +98,7 @@ def _nearest_resize(img: np.ndarray, rh: int, rw: int) -> np.ndarray:
     y = np.linspace(0, H - 1, rh).astype(np.int64)
     x = np.linspace(0, W - 1, rw).astype(np.int64)
     # Works for both 2D (HxW) and 3D (HxWxC) arrays
-    return img[y][:, x]
+    return np.take(np.take(img, y, axis=0), x, axis=1)
 
 
 def _mono_to_rgb(arr: np.ndarray) -> np.ndarray:

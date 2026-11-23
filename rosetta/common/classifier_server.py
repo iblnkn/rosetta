@@ -24,6 +24,7 @@ Usage:
 """
 
 import argparse
+import gc
 import logging
 import pickle  # nosec
 import threading
@@ -120,6 +121,8 @@ class ClassifierServer(services_pb2_grpc.AsyncInferenceServicer):
         self.classifier.to(self.device)
         self.classifier.eval()
         self._image_size = self._detect_image_size()
+        gc.collect()
+        gc.freeze()
         elapsed = time.perf_counter() - start
 
         logger.info(
