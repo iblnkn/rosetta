@@ -206,6 +206,27 @@ def generate_launch_description():
             default_value=str(hil_cfg['human_reward_negative']),
             description='Reward value for human negative override'
         ),
+        DeclareLaunchArgument(
+            'use_recorder_services',
+            default_value=str(hil_cfg.get('use_recorder_services', False)).lower(),
+            description='Use StartRecording/Trigger services instead of RecordEpisode action'
+        ),
+        DeclareLaunchArgument(
+            'recorder_start_service_name',
+            default_value=hil_cfg.get(
+                'recorder_start_service_name',
+                '/episode_recorder/start_recording',
+            ),
+            description='Service name to start recording when use_recorder_services is true'
+        ),
+        DeclareLaunchArgument(
+            'recorder_cancel_service_name',
+            default_value=hil_cfg.get(
+                'recorder_cancel_service_name',
+                '/episode_recorder/cancel_recording',
+            ),
+            description='Service name to cancel recording when use_recorder_services is true'
+        ),
 
         # --- Reward classifier (defaults from rosetta_hil_manager.yaml reward_classifier section) ---
         DeclareLaunchArgument(
@@ -392,6 +413,9 @@ def generate_launch_description():
                 'policy_action_name': hil_cfg['policy_action_name'],
                 'reward_classifier_action_name': hil_cfg['reward_classifier_action_name'],
                 'recorder_action_name': hil_cfg['recorder_action_name'],
+                'use_recorder_services': LaunchConfiguration('use_recorder_services'),
+                'recorder_start_service_name': LaunchConfiguration('recorder_start_service_name'),
+                'recorder_cancel_service_name': LaunchConfiguration('recorder_cancel_service_name'),
             },
         ],
         arguments=['--ros-args', '--log-level', LaunchConfiguration('log_level')],

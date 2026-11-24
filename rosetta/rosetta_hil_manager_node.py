@@ -55,7 +55,7 @@ from rosetta.common.contract import load_contract
 from rosetta.common.ros2_utils import qos_profile_from_dict
 
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
-from rosetta_interfaces.srv import StartHILEpisode
+from rosetta_interfaces.srv import StartHILEpisode, StartRecording
 
 
 # ---------- Helpers ----------
@@ -132,6 +132,28 @@ class RosettaHilManagerNode(LifecycleNode):
             ParameterDescriptor(description="Action name for episode recorder client", read_only=True)
         )
         self.declare_parameter(
+            "use_recorder_services", False,
+            ParameterDescriptor(
+                description="Use StartRecording/Trigger services "
+                            "instead of RecordEpisode action",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
+            "recorder_start_service_name", "/episode_recorder/start_recording",
+            ParameterDescriptor(
+                description="Service name (StartRecording) to start recording when use_recorder_services is true",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
+            "recorder_cancel_service_name", "/episode_recorder/cancel_recording",
+            ParameterDescriptor(
+                description="Service name (Trigger) to stop/cancel recording when use_recorder_services is true",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
             "policy_remap_prefix", "/hil/policy",
             ParameterDescriptor(
                 description="Topic prefix for remapped policy output", read_only=True
@@ -171,6 +193,12 @@ class RosettaHilManagerNode(LifecycleNode):
         self._policy_client: ActionClient | None = None
         self._reward_client: ActionClient | None = None
         self._recorder_client: ActionClient | None = None
+
+        # Recorder service clients (used when use_recorder_services is True)
+        self._use_recorder_services: bool = False
+        self._recorder_start_srv_client = None
+        self._recorder_cancel_srv_client = None
+        self._recorder_service_active: bool = False
 
         # Action server
         self._action_server: ActionServer | None = None
@@ -304,10 +332,25 @@ class RosettaHilManagerNode(LifecycleNode):
             self, RunPolicy, policy_action, callback_group=self._action_cbg
         )
 
-        recorder_action = self.get_parameter("recorder_action_name").value
-        self._recorder_client = ActionClient(
-            self, RecordEpisode, recorder_action, callback_group=self._action_cbg
-        )
+        self._use_recorder_services = bool(self.get_parameter("use_recorder_services").value)
+        if self._use_recorder_services:
+            start_srv_name = self.get_parameter("recorder_start_service_name").value
+            cancel_srv_name = self.get_parameter("recorder_cancel_service_name").value
+            self._recorder_start_srv_client = self.create_client(
+                StartRecording, start_srv_name, callback_group=self._action_cbg
+            )
+            self._recorder_cancel_srv_client = self.create_client(
+                Trigger, cancel_srv_name, callback_group=self._action_cbg
+            )
+            self.get_logger().info(
+                f"Recorder mode: services (start={start_srv_name}, cancel={cancel_srv_name})"
+            )
+        else:
+            recorder_action = self.get_parameter("recorder_action_name").value
+            self._recorder_client = ActionClient(
+                self, RecordEpisode, recorder_action, callback_group=self._action_cbg
+            )
+            self.get_logger().info(f"Recorder mode: action ({recorder_action})")
 
         if enable_reward:
             reward_action = self.get_parameter("reward_classifier_action_name").value
@@ -531,6 +574,14 @@ class RosettaHilManagerNode(LifecycleNode):
         if self._recorder_client is not None:
             self._recorder_client.destroy()
             self._recorder_client = None
+
+        if self._recorder_start_srv_client is not None:
+            self.destroy_client(self._recorder_start_srv_client)
+            self._recorder_start_srv_client = None
+
+        if self._recorder_cancel_srv_client is not None:
+            self.destroy_client(self._recorder_cancel_srv_client)
+            self._recorder_cancel_srv_client = None
 
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
@@ -940,6 +991,7 @@ class RosettaHilManagerNode(LifecycleNode):
             self._policy_goal_handle = None
             self._reward_goal_handle = None
             self._recorder_goal_handle = None
+            self._recorder_service_active = False
 
         self.get_logger().info(f"Episode finished: {fields['message']}")
         return fields, cancelled
@@ -1031,7 +1083,37 @@ class RosettaHilManagerNode(LifecycleNode):
     # ====================================================================
 
     def _start_recorder(self, prompt: str):
-        """Send RecordEpisode goal and return the goal handle, or None on failure."""
+        """Start episode recording via service or action.
+
+        Returns the action goal handle (action mode), True (service mode),
+        or None on failure.
+        """
+        if self._use_recorder_services:
+            srv_name = self.get_parameter("recorder_start_service_name").value
+            if not self._recorder_start_srv_client.wait_for_service(
+                timeout_sec=ACTION_CLIENT_TIMEOUT_SEC
+            ):
+                self.get_logger().error(f"Recorder start service '{srv_name}' not available")
+                return None
+
+            req = StartRecording.Request()
+            req.prompt = prompt
+
+            future = self._recorder_start_srv_client.call_async(req)
+            if not _wait_for_future(future, RESULT_TIMEOUT_SEC):
+                self.get_logger().error(f"Recorder start service '{srv_name}' timed out")
+                return None
+
+            res = future.result()
+            if res is None or not res.accepted:
+                msg = res.message if res is not None else "returned None"
+                self.get_logger().error(f"Recorder start service rejected: {msg}")
+                return None
+
+            self._recorder_service_active = True
+            self.get_logger().info(f"Episode recorder started via service: {res.message}")
+            return True
+
         if not self._recorder_client.wait_for_server(timeout_sec=ACTION_CLIENT_TIMEOUT_SEC):
             self.get_logger().error("Episode recorder action server not available")
             return None
@@ -1097,7 +1179,19 @@ class RosettaHilManagerNode(LifecycleNode):
         return goal_handle
 
     def _cancel_recorder(self) -> None:
-        """Cancel the active recorder goal without waiting for its result."""
+        """Cancel the active recorder goal or service recording without waiting for result."""
+        if self._use_recorder_services:
+            if not self._recorder_service_active:
+                return
+            try:
+                cancel_future = self._recorder_cancel_srv_client.call_async(Trigger.Request())
+                _wait_for_future(cancel_future, CANCEL_TIMEOUT_SEC)
+                self._recorder_service_active = False
+                self.get_logger().info("Episode recorder cancelled via service")
+            except Exception as e:
+                self.get_logger().warning(f"Failed to cancel recorder via service: {e}")
+            return
+
         if self._recorder_goal_handle is None:
             return
         try:
@@ -1142,7 +1236,35 @@ class RosettaHilManagerNode(LifecycleNode):
             self.get_logger().warning(f"Failed to cancel reward classifier: {e}")
 
     def _stop_recorder(self):
-        """Cancel the recorder and wait for its result (which includes bag_path)."""
+        """Stop the recorder (via service or action cancel) and return result if available."""
+        if self._use_recorder_services:
+            if not self._recorder_service_active:
+                return None
+            srv_name = self.get_parameter("recorder_cancel_service_name").value
+            try:
+                if not self._recorder_cancel_srv_client.wait_for_service(
+                    timeout_sec=CANCEL_TIMEOUT_SEC
+                ):
+                    self.get_logger().warning(
+                        f"Recorder cancel service '{srv_name}' not available"
+                    )
+                    return None
+                cancel_future = self._recorder_cancel_srv_client.call_async(Trigger.Request())
+                if _wait_for_future(cancel_future, RESULT_TIMEOUT_SEC):
+                    res = cancel_future.result()
+                    if res is not None and res.success:
+                        self.get_logger().info(f"Recorder stopped via service: {res.message}")
+                    else:
+                        msg = res.message if res is not None else "returned None"
+                        self.get_logger().warning(f"Recorder cancel service failed: {msg}")
+                else:
+                    self.get_logger().warning(f"Recorder cancel service '{srv_name}' timed out")
+            except Exception as e:
+                self.get_logger().warning(f"Failed to stop recorder via service: {e}")
+            finally:
+                self._recorder_service_active = False
+            return None
+
         if self._recorder_goal_handle is None:
             return None
         try:
@@ -1170,12 +1292,7 @@ class RosettaHilManagerNode(LifecycleNode):
         """Best-effort cancel of all child action goals."""
         self._cancel_policy()
         self._cancel_reward_classifier()
-        try:
-            if self._recorder_goal_handle is not None:
-                cancel_future = self._recorder_goal_handle.cancel_goal_async()
-                _wait_for_future(cancel_future, CANCEL_TIMEOUT_SEC)
-        except Exception as e:
-            self.get_logger().warning(f"Failed to cancel recorder: {e}")
+        self._cancel_recorder()
 
 
 def main(args=None):

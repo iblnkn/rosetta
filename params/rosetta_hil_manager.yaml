@@ -33,6 +33,12 @@ hil_manager:
     reward_classifier_action_name: "/reward_classifier/run_policy"
     recorder_action_name: "/record_episode"
 
+    # Optional service-based recording
+    # When true, hil_manager calls start/cancel services instead of recorder_action_name
+    use_recorder_services: false
+    recorder_start_service_name: "/episode_recorder/start_recording"
+    recorder_cancel_service_name: "/episode_recorder/cancel_recording"
+
     # Topic prefix applied to remapped policy output
     # The robot policy rosetta_client_node publishes to {prefix}{original_topic}
     # The HIL manager subscribes there and forwards to the original topic
