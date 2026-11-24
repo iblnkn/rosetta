@@ -48,14 +48,14 @@ from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackRet
 from rcl_interfaces.msg import ParameterDescriptor
 from rosidl_runtime_py.utilities import get_message
 
-from std_msgs.msg import Float64, Int8, Int32
+from std_msgs.msg import Float64, Int8, Int32, String
 from std_srvs.srv import SetBool, Trigger
 
 from rosetta.common.contract import load_contract
 from rosetta.common.ros2_utils import qos_profile_from_dict
 
 from rosetta_interfaces.action import ManageEpisode, RecordEpisode, RunPolicy
-from rosetta_interfaces.srv import StartHILEpisode
+from rosetta_interfaces.srv import StartHILEpisode, StartRecording
 
 
 # ---------- Helpers ----------
@@ -132,6 +132,28 @@ class RosettaHilManagerNode(LifecycleNode):
             ParameterDescriptor(description="Action name for episode recorder client", read_only=True)
         )
         self.declare_parameter(
+            "use_recorder_services", False,
+            ParameterDescriptor(
+                description="Use StartRecording/Trigger services "
+                            "instead of RecordEpisode action",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
+            "recorder_start_service_name", "/episode_recorder/start_recording",
+            ParameterDescriptor(
+                description="Service name (StartRecording) to start recording when use_recorder_services is true",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
+            "recorder_cancel_service_name", "/episode_recorder/cancel_recording",
+            ParameterDescriptor(
+                description="Service name (Trigger) to stop/cancel recording when use_recorder_services is true",
+                read_only=True,
+            )
+        )
+        self.declare_parameter(
             "policy_remap_prefix", "/hil/policy",
             ParameterDescriptor(
                 description="Topic prefix for remapped policy output", read_only=True
@@ -162,6 +184,12 @@ class RosettaHilManagerNode(LifecycleNode):
                             "If exceeded, recorder starts anyway.",
             )
         )
+        self.declare_parameter(
+            "command_publish_rate_hz", 50.0,
+            ParameterDescriptor(
+                description="Rate (Hz) for command timer to blend and publish commands to real topics."
+            )
+        )
 
         # -------------------- State --------------------
         self._contract = None
@@ -172,16 +200,29 @@ class RosettaHilManagerNode(LifecycleNode):
         self._reward_client: ActionClient | None = None
         self._recorder_client: ActionClient | None = None
 
+        # Recorder service clients (used when use_recorder_services is True)
+        self._use_recorder_services: bool = False
+        self._recorder_start_srv_client = None
+        self._recorder_cancel_srv_client = None
+        self._recorder_service_active: bool = False
+
         # Action server
         self._action_server: ActionServer | None = None
 
         # Mux state (guarded by _mux_lock)
         self._mux_lock = threading.Lock()
-        self._control_source = "policy"  # "policy" or "teleop"
+        self._deadman_active = False  # Right bumper (is_intervention) deadman state
+        self._intervention_mode = "blend"  # "blend" or "teleop" (toggled by left bumper)
+        self._control_source = "policy"  # Effective: "policy", "blend", or "teleop"
+        self._prev_toggle_button_state = 0
         self._current_reward = 0.0
         self._human_reward_override = False
         self._stop_requested = False
         self._start_requested = False
+
+        # Cached latest commands for blending (guarded by _mux_lock)
+        self._latest_policy_msg: dict[str, object] = {}  # original_topic -> JointTrajectory
+        self._latest_teleop_msg: object | None = None   # JointTrajectory
 
         # Event set when the policy publishes its first output. Used to delay
         # recorder start until the policy is actually streaming commands.
@@ -192,11 +233,13 @@ class RosettaHilManagerNode(LifecycleNode):
         self._total_intervention_duration = 0.0
         self._current_intervention_start_time = None  # rclpy.time.Time or None
 
-        # Subscriptions and publishers for muxing
+        # Subscriptions, publishers, and timer for muxing
         self._mux_subs: list = []
         self._command_publishers: dict[str, tuple] = {}  # original_topic -> (msg_cls, publisher)
         self._reward_publishers: dict[str, tuple] = {}   # original_topic -> (msg_cls, publisher)
+        self._command_timer = None
         self._intervention_pub = None
+        self._intervention_mode_pub = None
         self._intervention_count_pub = None
         self._intervention_duration_pub = None
         self._recording_duration_pub = None
@@ -205,6 +248,7 @@ class RosettaHilManagerNode(LifecycleNode):
         self._episode_service = None
         self._stop_service = None
         self._intervention_service = None
+        self._intervention_mode_service = None
         self._reward_override_service = None
         self._clear_reward_service = None
 
@@ -234,17 +278,17 @@ class RosettaHilManagerNode(LifecycleNode):
         """
         old_source = self._control_source
         
-        # Switching from policy to teleop - intervention starts
-        if old_source == "policy" and new_control_source == "teleop":
+        # Switching from policy to an intervention mode (blend or teleop)
+        if old_source == "policy" and new_control_source in ("teleop", "blend"):
             self._intervention_count += 1
             self._current_intervention_start_time = self.get_clock().now()
             self.get_logger().debug(
-                f"Intervention started (count: {self._intervention_count})"
+                f"Intervention started ({new_control_source}, count: {self._intervention_count})"
             )
             self._publish_intervention_stats()
         
-        # Switching from teleop to policy - intervention ends
-        elif old_source == "teleop" and new_control_source == "policy":
+        # Switching from an intervention mode back to policy
+        elif old_source in ("teleop", "blend") and new_control_source == "policy":
             if self._current_intervention_start_time is not None:
                 duration = (self.get_clock().now() - self._current_intervention_start_time).nanoseconds / 1e9
                 self._total_intervention_duration += duration
@@ -304,10 +348,25 @@ class RosettaHilManagerNode(LifecycleNode):
             self, RunPolicy, policy_action, callback_group=self._action_cbg
         )
 
-        recorder_action = self.get_parameter("recorder_action_name").value
-        self._recorder_client = ActionClient(
-            self, RecordEpisode, recorder_action, callback_group=self._action_cbg
-        )
+        self._use_recorder_services = bool(self.get_parameter("use_recorder_services").value)
+        if self._use_recorder_services:
+            start_srv_name = self.get_parameter("recorder_start_service_name").value
+            cancel_srv_name = self.get_parameter("recorder_cancel_service_name").value
+            self._recorder_start_srv_client = self.create_client(
+                StartRecording, start_srv_name, callback_group=self._action_cbg
+            )
+            self._recorder_cancel_srv_client = self.create_client(
+                Trigger, cancel_srv_name, callback_group=self._action_cbg
+            )
+            self.get_logger().info(
+                f"Recorder mode: services (start={start_srv_name}, cancel={cancel_srv_name})"
+            )
+        else:
+            recorder_action = self.get_parameter("recorder_action_name").value
+            self._recorder_client = ActionClient(
+                self, RecordEpisode, recorder_action, callback_group=self._action_cbg
+            )
+            self.get_logger().info(f"Recorder mode: action ({recorder_action})")
 
         if enable_reward:
             reward_action = self.get_parameter("reward_classifier_action_name").value
@@ -404,6 +463,7 @@ class RosettaHilManagerNode(LifecycleNode):
 
         # --- HIL intervention publisher ---
         self._intervention_pub = self.create_publisher(Int8, "hil_intervention", 10)
+        self._intervention_mode_pub = self.create_publisher(String, "/hil_manager/intervention_mode", 10)
         
         # --- Intervention stats publishers ---
         self._intervention_count_pub = self.create_publisher(Int32, "/hil_manager/intervention_count", 10)
@@ -414,6 +474,14 @@ class RosettaHilManagerNode(LifecycleNode):
         
         # --- Autonomy ratio publisher (recording_duration / intervention_duration) ---
         self._autonomy_ratio_pub = self.create_publisher(Float64, "/hil_manager/autonomy_ratio", 10)
+
+        # --- Command timer for periodic command publishing / blending ---
+        publish_rate = max(1.0, float(self.get_parameter("command_publish_rate_hz").value))
+        self._command_timer = self.create_timer(
+            1.0 / publish_rate,
+            self._on_command_timer,
+            callback_group=self._action_cbg,
+        )
 
         # --- Service wrapper (for callers that don't support actions) ---
         self._episode_service = self.create_service(
@@ -426,6 +494,10 @@ class RosettaHilManagerNode(LifecycleNode):
         )
         self._intervention_service = self.create_service(
             SetBool, "set_intervention", self._handle_set_intervention,
+            callback_group=self._action_cbg,
+        )
+        self._intervention_mode_service = self.create_service(
+            Trigger, "toggle_intervention_mode", self._handle_toggle_intervention_mode,
             callback_group=self._action_cbg,
         )
         self._reward_override_service = self.create_service(
@@ -532,6 +604,14 @@ class RosettaHilManagerNode(LifecycleNode):
             self._recorder_client.destroy()
             self._recorder_client = None
 
+        if self._recorder_start_srv_client is not None:
+            self.destroy_client(self._recorder_start_srv_client)
+            self._recorder_start_srv_client = None
+
+        if self._recorder_cancel_srv_client is not None:
+            self.destroy_client(self._recorder_cancel_srv_client)
+            self._recorder_cancel_srv_client = None
+
         if self._action_server is not None:
             self.destroy_action_server(self._action_server)
             self._action_server = None
@@ -539,6 +619,10 @@ class RosettaHilManagerNode(LifecycleNode):
         if self._intervention_pub is not None:
             self.destroy_publisher(self._intervention_pub)
             self._intervention_pub = None
+
+        if self._intervention_mode_pub is not None:
+            self.destroy_publisher(self._intervention_mode_pub)
+            self._intervention_mode_pub = None
         
         if self._intervention_count_pub is not None:
             self.destroy_publisher(self._intervention_count_pub)
@@ -556,6 +640,10 @@ class RosettaHilManagerNode(LifecycleNode):
             self.destroy_publisher(self._autonomy_ratio_pub)
             self._autonomy_ratio_pub = None
 
+        if self._command_timer is not None:
+            self.destroy_timer(self._command_timer)
+            self._command_timer = None
+
         if self._episode_service is not None:
             self.destroy_service(self._episode_service)
             self._episode_service = None
@@ -567,6 +655,10 @@ class RosettaHilManagerNode(LifecycleNode):
         if self._intervention_service is not None:
             self.destroy_service(self._intervention_service)
             self._intervention_service = None
+
+        if self._intervention_mode_service is not None:
+            self.destroy_service(self._intervention_mode_service)
+            self._intervention_mode_service = None
 
         if self._reward_override_service is not None:
             self.destroy_service(self._reward_override_service)
@@ -582,15 +674,85 @@ class RosettaHilManagerNode(LifecycleNode):
     # Mux callbacks
     # ====================================================================
 
-    def _on_policy_output(self, msg, original_topic: str) -> None:
-        """Forward policy output to command topic when in policy mode."""
-        with self._mux_lock:
-            if self._control_source != "policy":
-                return
+    def _blend_commands(self, teleop_msg, policy_msg):
+        """Blend teleop input (x) with policy command (i) using:
+        clamp(x + i * (1 - x^4), -1.0, 1.0)
+        Matches joint names across messages and preserves points structure.
+        """
+        if not teleop_msg.points or not policy_msg.points:
+            return teleop_msg
 
-        if original_topic in self._command_publishers:
-            _, pub = self._command_publishers[original_topic]
-            pub.publish(msg)
+        # Validate joint names
+        if teleop_msg.joint_names != policy_msg.joint_names:
+            self.get_logger().warning(
+                f"Joint names mismatch between teleop ({teleop_msg.joint_names}) "
+                f"and policy ({policy_msg.joint_names})! Falling back to teleop."
+            )
+            return teleop_msg
+
+        teleop_pt = teleop_msg.points[0]
+        policy_pt = policy_msg.points[0]
+
+        # Clone teleop message structure
+        msg_cls = type(teleop_msg)
+        pt_cls = type(teleop_pt)
+        blended = msg_cls()
+        blended.header = teleop_msg.header
+        blended.joint_names = list(teleop_msg.joint_names)
+
+        pt = pt_cls()
+        pt.time_from_start = teleop_pt.time_from_start
+
+        if teleop_pt.effort and policy_pt.effort:
+            if len(teleop_pt.effort) != len(policy_pt.effort):
+                self.get_logger().warning(
+                    f"Effort dimension mismatch: teleop {len(teleop_pt.effort)} vs policy {len(policy_pt.effort)}"
+                )
+                return teleop_msg
+            blended_efforts = []
+            for x, i in zip(teleop_pt.effort, policy_pt.effort):
+                val = float(x) + float(i) * (1.0 - float(x) ** 4)
+                clamped = max(-1.0, min(1.0, val))
+                blended_efforts.append(clamped)
+            pt.effort = blended_efforts
+
+        if teleop_pt.positions:
+            pt.positions = list(teleop_pt.positions)
+        if teleop_pt.velocities:
+            pt.velocities = list(teleop_pt.velocities)
+        if teleop_pt.accelerations:
+            pt.accelerations = list(teleop_pt.accelerations)
+
+        blended.points = [pt]
+        return blended
+
+    def _on_command_timer(self) -> None:
+        """Periodic timer to publish commands (policy, blended, or full teleop) to real topics."""
+        with self._mux_lock:
+            source = self._control_source
+            latest_teleop = self._latest_teleop_msg
+            policy_msgs = dict(self._latest_policy_msg)
+
+        for original_topic, (_, pub) in self._command_publishers.items():
+            if source == "policy":
+                if original_topic in policy_msgs and policy_msgs[original_topic] is not None:
+                    pub.publish(policy_msgs[original_topic])
+            elif source == "teleop":
+                if latest_teleop is not None:
+                    pub.publish(latest_teleop)
+            elif source == "blend":
+                if latest_teleop is not None:
+                    pol_msg = policy_msgs.get(original_topic)
+                    if pol_msg is not None:
+                        out_msg = self._blend_commands(latest_teleop, pol_msg)
+                    else:
+                        out_msg = latest_teleop
+                    pub.publish(out_msg)
+
+    def _on_policy_output(self, msg, original_topic: str) -> None:
+        """Store policy output and forward if in policy mode."""
+        with self._mux_lock:
+            self._latest_policy_msg[original_topic] = msg
 
             # Signal that the policy has produced its first output. This is
             # used to delay recorder start until the policy is actually running.
@@ -598,14 +760,9 @@ class RosettaHilManagerNode(LifecycleNode):
                 self._policy_first_output_event.set()
 
     def _on_teleop_input(self, msg) -> None:
-        """Forward teleop input to all command topics when in teleop mode."""
+        """Store latest teleop input for command timer / blending."""
         with self._mux_lock:
-            if self._control_source != "teleop":
-                return
-
-        # Forward to all command publishers (teleop input maps to command output)
-        for _, pub in self._command_publishers.values():
-            pub.publish(msg)
+            self._latest_teleop_msg = msg
 
     def _on_reward_classifier_output(self, msg, original_topic: str) -> None:
         """Forward reward classifier output when no human override is active."""
@@ -619,17 +776,42 @@ class RosettaHilManagerNode(LifecycleNode):
             pub.publish(msg)
 
     def _on_teleop_events(self, msg, events_spec) -> None:
-        """Handle teleop event buttons (intervention, stop, reward override).
+        """Handle teleop event buttons (intervention deadman, mode toggle, stop, reward override).
 
         Event names follow the LeRobot TeleopEvents convention:
-          is_intervention  - toggle between policy and teleop control
-          terminate_episode - stop the current episode
-          rerecord_episode  - request episode restart
-          success           - human positive reward override
-          failure           - human negative reward override
+          is_intervention        - deadman: switches control between policy and (blend or teleop)
+          toggle_control_mode    - toggles between 'blend' and 'teleop' modes (left bumper)
+          terminate_episode      - stop the current episode
+          rerecord_episode       - request episode restart
+          success                - human positive reward override
+          failure                - human negative reward override
         """
         self.get_logger().debug(f"Joy received: buttons={list(msg.buttons)}")
+
+        # Check toggle_control_mode first (falling or rising edge detection)
+        toggle_selector = events_spec.mappings.get("toggle_control_mode")
+        if toggle_selector is not None:
+            try:
+                toggle_val = int(bool(_resolve_selector(msg, toggle_selector)))
+                if toggle_val == 1 and self._prev_toggle_button_state == 0:
+                    with self._mux_lock:
+                        if self._intervention_mode == "blend":
+                            self._intervention_mode = "teleop"
+                        else:
+                            self._intervention_mode = "blend"
+                        self.get_logger().info(f"Intervention mode toggled to: {self._intervention_mode}")
+                        # If deadman is currently held, immediately update effective control source
+                        if self._deadman_active:
+                            new_source = self._intervention_mode
+                            self._update_intervention_stats(new_source)
+                            self._control_source = new_source
+                self._prev_toggle_button_state = toggle_val
+            except (AttributeError, IndexError, ValueError) as e:
+                self.get_logger().warning(f"Selector '{toggle_selector}' for toggle_control_mode failed: {e}")
+
         for event_name, selector in events_spec.mappings.items():
+            if event_name == "toggle_control_mode":
+                continue
             try:
                 value = _resolve_selector(msg, selector)
             except (AttributeError, IndexError, ValueError) as e:
@@ -640,10 +822,11 @@ class RosettaHilManagerNode(LifecycleNode):
                 # Button not pressed - check for release events
                 if event_name == "is_intervention":
                     with self._mux_lock:
-                        if self._control_source == "teleop":
+                        if self._deadman_active:
+                            self._deadman_active = False
                             self._update_intervention_stats("policy")
                             self._control_source = "policy"
-                            self.get_logger().info("Mux: teleop -> policy (intervention released)")
+                            self.get_logger().info("Deadman released: control -> policy")
                 elif event_name in ("success", "failure"):
                     with self._mux_lock:
                         if self._human_reward_override:
@@ -654,10 +837,12 @@ class RosettaHilManagerNode(LifecycleNode):
             # Button pressed
             if event_name == "is_intervention":
                 with self._mux_lock:
-                    if self._control_source != "teleop":
-                        self._update_intervention_stats("teleop")
-                        self._control_source = "teleop"
-                        self.get_logger().info("Mux: policy -> teleop (human intervention)")
+                    if not self._deadman_active:
+                        self._deadman_active = True
+                        new_source = self._intervention_mode
+                        self._update_intervention_stats(new_source)
+                        self._control_source = new_source
+                        self.get_logger().info(f"Deadman pressed: control -> {new_source}")
 
             elif event_name == "terminate_episode":
                 with self._mux_lock:
@@ -778,13 +963,33 @@ class RosettaHilManagerNode(LifecycleNode):
     def _handle_set_intervention(
         self, request: SetBool.Request, response: SetBool.Response
     ) -> SetBool.Response:
-        """Service: switch mux between policy (False) and teleop (True)."""
-        new_source = "teleop" if request.data else "policy"
+        """Service: switch mux between policy (False) and intervention (True)."""
         with self._mux_lock:
+            self._deadman_active = request.data
+            new_source = self._intervention_mode if request.data else "policy"
             self._update_intervention_stats(new_source)
             self._control_source = new_source
         response.success = True
-        response.message = f"Control source: {new_source}"
+        response.message = f"Control source: {new_source} (mode: {self._intervention_mode})"
+        self.get_logger().info(response.message)
+        return response
+
+    def _handle_toggle_intervention_mode(
+        self, _request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Service: toggle intervention mode between 'blend' and 'teleop'."""
+        with self._mux_lock:
+            if self._intervention_mode == "blend":
+                self._intervention_mode = "teleop"
+            else:
+                self._intervention_mode = "blend"
+            if self._deadman_active:
+                new_source = self._intervention_mode
+                self._update_intervention_stats(new_source)
+                self._control_source = new_source
+            current_mode = self._intervention_mode
+        response.success = True
+        response.message = f"Intervention mode: {current_mode}"
         self.get_logger().info(response.message)
         return response
 
@@ -834,11 +1039,16 @@ class RosettaHilManagerNode(LifecycleNode):
         )
 
         with self._mux_lock:
+            self._deadman_active = False
+            self._intervention_mode = "blend"
             self._control_source = "policy"
+            self._prev_toggle_button_state = 0
             self._current_reward = 0.0
             self._human_reward_override = False
             self._stop_requested = False
             self._start_requested = False
+            self._latest_policy_msg.clear()
+            self._latest_teleop_msg = None
             self._reset_intervention_stats()
         self._policy_first_output_event.clear()
         self._recording_start_time = None
@@ -940,6 +1150,7 @@ class RosettaHilManagerNode(LifecycleNode):
             self._policy_goal_handle = None
             self._reward_goal_handle = None
             self._recorder_goal_handle = None
+            self._recorder_service_active = False
 
         self.get_logger().info(f"Episode finished: {fields['message']}")
         return fields, cancelled
@@ -970,6 +1181,7 @@ class RosettaHilManagerNode(LifecycleNode):
                 stop = self._stop_requested
                 reward = self._current_reward
                 source = self._control_source
+                intervention_mode = self._intervention_mode
 
             if goal_handle is not None and goal_handle.is_cancel_requested:
                 return "cancelled"
@@ -983,11 +1195,22 @@ class RosettaHilManagerNode(LifecycleNode):
             if reward_threshold > 0.0 and reward >= reward_threshold:
                 return "reward_threshold"
 
-            # Publish HIL intervention state (0=policy, 1=human)
+            # Publish HIL intervention state (0=policy, 1=blend, 2=teleop)
             if self._intervention_pub is not None:
                 intervention_msg = Int8()
-                intervention_msg.data = 0 if source == "policy" else 1
+                if source == "policy":
+                    intervention_msg.data = 0
+                elif source == "blend":
+                    intervention_msg.data = 1
+                else:
+                    intervention_msg.data = 2
                 self._intervention_pub.publish(intervention_msg)
+
+            # Publish intervention mode status ("blend" or "teleop")
+            if self._intervention_mode_pub is not None:
+                mode_msg = String()
+                mode_msg.data = intervention_mode
+                self._intervention_mode_pub.publish(mode_msg)
 
             # Publish feedback (only available via action interface)
             if goal_handle is not None:
@@ -1031,7 +1254,37 @@ class RosettaHilManagerNode(LifecycleNode):
     # ====================================================================
 
     def _start_recorder(self, prompt: str):
-        """Send RecordEpisode goal and return the goal handle, or None on failure."""
+        """Start episode recording via service or action.
+
+        Returns the action goal handle (action mode), True (service mode),
+        or None on failure.
+        """
+        if self._use_recorder_services:
+            srv_name = self.get_parameter("recorder_start_service_name").value
+            if not self._recorder_start_srv_client.wait_for_service(
+                timeout_sec=ACTION_CLIENT_TIMEOUT_SEC
+            ):
+                self.get_logger().error(f"Recorder start service '{srv_name}' not available")
+                return None
+
+            req = StartRecording.Request()
+            req.prompt = prompt
+
+            future = self._recorder_start_srv_client.call_async(req)
+            if not _wait_for_future(future, RESULT_TIMEOUT_SEC):
+                self.get_logger().error(f"Recorder start service '{srv_name}' timed out")
+                return None
+
+            res = future.result()
+            if res is None or not res.accepted:
+                msg = res.message if res is not None else "returned None"
+                self.get_logger().error(f"Recorder start service rejected: {msg}")
+                return None
+
+            self._recorder_service_active = True
+            self.get_logger().info(f"Episode recorder started via service: {res.message}")
+            return True
+
         if not self._recorder_client.wait_for_server(timeout_sec=ACTION_CLIENT_TIMEOUT_SEC):
             self.get_logger().error("Episode recorder action server not available")
             return None
@@ -1097,7 +1350,19 @@ class RosettaHilManagerNode(LifecycleNode):
         return goal_handle
 
     def _cancel_recorder(self) -> None:
-        """Cancel the active recorder goal without waiting for its result."""
+        """Cancel the active recorder goal or service recording without waiting for result."""
+        if self._use_recorder_services:
+            if not self._recorder_service_active:
+                return
+            try:
+                cancel_future = self._recorder_cancel_srv_client.call_async(Trigger.Request())
+                _wait_for_future(cancel_future, CANCEL_TIMEOUT_SEC)
+                self._recorder_service_active = False
+                self.get_logger().info("Episode recorder cancelled via service")
+            except Exception as e:
+                self.get_logger().warning(f"Failed to cancel recorder via service: {e}")
+            return
+
         if self._recorder_goal_handle is None:
             return
         try:
@@ -1142,7 +1407,35 @@ class RosettaHilManagerNode(LifecycleNode):
             self.get_logger().warning(f"Failed to cancel reward classifier: {e}")
 
     def _stop_recorder(self):
-        """Cancel the recorder and wait for its result (which includes bag_path)."""
+        """Stop the recorder (via service or action cancel) and return result if available."""
+        if self._use_recorder_services:
+            if not self._recorder_service_active:
+                return None
+            srv_name = self.get_parameter("recorder_cancel_service_name").value
+            try:
+                if not self._recorder_cancel_srv_client.wait_for_service(
+                    timeout_sec=CANCEL_TIMEOUT_SEC
+                ):
+                    self.get_logger().warning(
+                        f"Recorder cancel service '{srv_name}' not available"
+                    )
+                    return None
+                cancel_future = self._recorder_cancel_srv_client.call_async(Trigger.Request())
+                if _wait_for_future(cancel_future, RESULT_TIMEOUT_SEC):
+                    res = cancel_future.result()
+                    if res is not None and res.success:
+                        self.get_logger().info(f"Recorder stopped via service: {res.message}")
+                    else:
+                        msg = res.message if res is not None else "returned None"
+                        self.get_logger().warning(f"Recorder cancel service failed: {msg}")
+                else:
+                    self.get_logger().warning(f"Recorder cancel service '{srv_name}' timed out")
+            except Exception as e:
+                self.get_logger().warning(f"Failed to stop recorder via service: {e}")
+            finally:
+                self._recorder_service_active = False
+            return None
+
         if self._recorder_goal_handle is None:
             return None
         try:
@@ -1170,12 +1463,7 @@ class RosettaHilManagerNode(LifecycleNode):
         """Best-effort cancel of all child action goals."""
         self._cancel_policy()
         self._cancel_reward_classifier()
-        try:
-            if self._recorder_goal_handle is not None:
-                cancel_future = self._recorder_goal_handle.cancel_goal_async()
-                _wait_for_future(cancel_future, CANCEL_TIMEOUT_SEC)
-        except Exception as e:
-            self.get_logger().warning(f"Failed to cancel recorder: {e}")
+        self._cancel_recorder()
 
 
 def main(args=None):
